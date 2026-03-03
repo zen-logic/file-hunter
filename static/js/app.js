@@ -1369,6 +1369,13 @@ WS.on('settings_changed', async (msg) => {
     }
 });
 
+WS.on('agent_status', async (msg) => {
+    const label = msg.agentId ? `Agent #${msg.agentId}` : 'Agent';
+    ActivityLog.add(`${label} ${msg.status}`);
+    await Tree.reload();
+    await StatusBar.loadStats();
+});
+
 WS.connect();
 
 // Load pro extension if active
