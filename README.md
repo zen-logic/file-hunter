@@ -8,6 +8,8 @@ Tested on production catalogs with over ten million files. The UI stays responsi
 
 ![File Hunter](docs/img/app-screenshot.png)
 
+This application was developed with the assistance of AI tools (Claude Opus, Kimi K2.5 and Qwen3-Coder-Next). These tools were used for code linting, syntax checking, testing, performance optimisation (particularly the SQLite queries), the theme engine and code refactoring. All generated code is manually reviewed and heavily tested in real use.
+
 ## Features
 
 - **Offline catalog** — scan any folder and the full file tree persists in a local SQLite database. Unplug the drive, unmount the share — keep browsing, searching, and planning as if it were still there.
