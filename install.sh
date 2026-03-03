@@ -86,5 +86,6 @@ esac
 info "File Hunter installed successfully!"
 echo ""
 echo "  Run:  filehunter"
-echo "  Then open http://localhost:8642 in your browser."
+echo "  Then open http://localhost:8000 in your browser."
+echo "  To change port, edit ~/$HOME/.filehunter/config.json"
 echo ""
