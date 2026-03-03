@@ -141,6 +141,8 @@ async def get_db() -> aiosqlite.Connection:
     if _db is None:
         config = load_config()
         db_path = Path(config.get("database", "file_hunter.db"))
+        if not db_path.is_absolute():
+            db_path = Path(__file__).resolve().parent.parent / db_path
         _db = await aiosqlite.connect(db_path)
         _db.row_factory = aiosqlite.Row
         await _db.execute("PRAGMA foreign_keys=ON")
@@ -193,6 +195,8 @@ async def open_connection() -> aiosqlite.Connection:
     """Open a standalone database connection (caller must close it)."""
     config = load_config()
     db_path = Path(config.get("database", "file_hunter.db"))
+    if not db_path.is_absolute():
+        db_path = Path(__file__).resolve().parent.parent / db_path
     conn = await aiosqlite.connect(db_path)
     conn.row_factory = aiosqlite.Row
     await conn.execute("PRAGMA foreign_keys=ON")
