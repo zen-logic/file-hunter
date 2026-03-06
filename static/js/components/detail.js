@@ -147,6 +147,13 @@ const Detail = {
             }).catch(() => {
                 m.content.querySelector('pre').textContent = '(Preview not available)';
             });
+        } else {
+            m.content.innerHTML = `<pre>Loading...</pre>`;
+            fetch(url, { headers: _authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
+                m.content.querySelector('pre').textContent = text;
+            }).catch(() => {
+                m.content.querySelector('pre').textContent = '(Preview not available)';
+            });
         }
         m.downloadBtn.classList.remove('hidden');
         m.fullscreenBtn.classList.remove('hidden');
@@ -735,6 +742,8 @@ const Detail = {
         this._wireShowInFolder(detail);
         this._loadTextPreview(detail);
         this._wirePreviewZoom(detail);
+        const textPreviewBtn = document.getElementById('detail-preview-text');
+        if (textPreviewBtn) textPreviewBtn.addEventListener('click', () => this._openPreviewModal(detail));
         this._checkIgnored(detail, gen);
 
         return {
@@ -765,7 +774,7 @@ const Detail = {
         if (type === 'text') {
             return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div>`;
         }
-        return '';
+        return `<div class="detail-preview"><button class="btn btn-sm" id="detail-preview-text">Preview as text</button></div>`;
     },
 
     async _loadTextPreview(detail) {
