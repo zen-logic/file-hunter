@@ -358,12 +358,12 @@ async def run_scan(
                 await asyncio.sleep(0.2)
 
         # --- Hashing phase (with optimization gates) ---
-        existing_files = await _load_existing_files(db, location_id)
-        batch_size_counts = _build_batch_size_counts(discovered_files)
-        catalog_sizes = await _load_catalog_size_set(db, location_id)
-        batch_partials: dict[tuple[int, str], int] = {}  # (size, hash_partial) → count
-
         cancelled = location_id in _cancel_requested
+        if not cancelled:
+            existing_files = await _load_existing_files(db, location_id)
+            batch_size_counts = _build_batch_size_counts(discovered_files)
+            catalog_sizes = await _load_catalog_size_set(db, location_id)
+        batch_partials: dict[tuple[int, str], int] = {}  # (size, hash_partial) → count
         for finfo in discovered_files:
             if location_id in _cancel_requested:
                 cancelled = True

@@ -151,7 +151,12 @@ const StatusBar = {
 
     async _cancelScan() {
         if (!this._scanningLocationId) return;
-        await API.post('/api/scan/cancel', { location_id: this._scanningLocationId });
+        const res = await API.post('/api/scan/cancel', { location_id: this._scanningLocationId });
+        if (res.ok) {
+            this.activityEl.innerHTML = `
+                <span class="status-activity-text scanning">Cancelling\u2026</span>
+            `;
+        }
     },
 
     renderConnection(connected) {
