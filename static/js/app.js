@@ -1075,6 +1075,8 @@ WS.on('backfill_progress', (msg) => {
     StatusBar.renderActivity('scanning', `${msg.location} — backfilling hashes (${msg.filesHashed.toLocaleString()}/${msg.totalFiles.toLocaleString()})`);
     ActivityLog.add(`Hash backfill: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} / ${msg.totalFiles.toLocaleString()} files`);
     Tree.setBackfillingLocation(msg.locationId);
+    FileList.refreshDupCounts();
+    StatusBar.loadStats();
 });
 
 WS.on('backfill_completed', async (msg) => {

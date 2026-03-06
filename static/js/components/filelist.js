@@ -781,6 +781,70 @@ const FileList = {
 
         this._scrollSelectedIntoView();
     },
+
+    async refreshDupCounts() {
+        if (!this.currentItems || this.currentItems.length === 0) return;
+        const hashes = [...new Set(
+            this.currentItems
+                .filter(f => f.hashStrong)
+                .map(f => f.hashStrong)
+        )];
+        if (hashes.length === 0) return;
+
+        let res;
+        try {
+            res = await API.post('/api/files/dup-counts', { hashes });
+        } catch (_) {
+            return;
+        }
+        if (!res.ok) return;
+
+        const counts = res.data.counts;
+        let changed = false;
+
+        for (const item of this.currentItems) {
+            if (!item.hashStrong) continue;
+            const newDups = counts[item.hashStrong] || 0;
+            if (item.dups !== newDups) {
+                item.dups = newDups;
+                changed = true;
+            }
+        }
+
+        if (!changed) return;
+
+        // Update dup indicators in-place without re-rendering the table
+        const rows = this.el.querySelectorAll('tbody tr');
+        const folders = this.currentFolders ? this.currentFolders.length : 0;
+        for (let i = 0; i < this.currentItems.length; i++) {
+            const item = this.currentItems[i];
+            const row = rows[folders + i];
+            if (!row) continue;
+
+            const nameCell = row.querySelector('.file-name');
+            if (!nameCell) continue;
+            const existing = nameCell.querySelector('.dup-indicator');
+
+            if (item.dups > 0 && item.size > 0) {
+                const text = `${item.dups} dup${item.dups > 1 ? 's' : ''}`;
+                if (existing) {
+                    existing.textContent = text;
+                } else {
+                    const span = document.createElement('span');
+                    span.className = 'dup-indicator';
+                    span.dataset.dupFileId = item.id;
+                    span.textContent = text;
+                    span.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.showDuplicateGroup(item.hashStrong);
+                    });
+                    nameCell.appendChild(span);
+                }
+            } else if (existing) {
+                existing.remove();
+            }
+        }
+    },
 };
 
 export default FileList;

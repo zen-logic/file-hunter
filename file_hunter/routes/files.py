@@ -82,6 +82,19 @@ async def files_list(request: Request):
     return json_ok(data)
 
 
+async def file_dup_counts(request: Request):
+    """POST /api/files/dup-counts — live dup counts for a list of hashes."""
+    body = await request.json()
+    hashes = body.get("hashes")
+    if not hashes or not isinstance(hashes, list):
+        return json_error("hashes list is required.")
+    from file_hunter.services.dup_counts import batch_dup_counts
+
+    db = await get_db()
+    counts = await batch_dup_counts(db, hashes)
+    return json_ok({"counts": counts})
+
+
 async def file_detail(request: Request):
     db = await get_db()
     file_id = int(request.path_params["id"])
