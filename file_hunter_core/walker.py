@@ -5,6 +5,7 @@ The server's scanner calls this in a thread and handles DB upsert separately.
 """
 
 import os
+import stat
 from datetime import datetime, timezone
 
 from file_hunter_core.classify import classify_file
@@ -57,6 +58,10 @@ def scan_directory(dirpath: str, root_path: str, parent_hidden: bool = False):
         try:
             st = os.stat(full_path)
         except OSError:
+            continue
+
+        # Skip non-regular files (sockets, FIFOs, device nodes)
+        if not stat.S_ISREG(st.st_mode):
             continue
 
         rel_path = os.path.join(rel_dir, name) if rel_dir else name
