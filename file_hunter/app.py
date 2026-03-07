@@ -131,7 +131,7 @@ async def on_shutdown():
     from file_hunter.services.scanner import cancel_all_scans
     from file_hunter.services.scan_queue import clear_queue
 
-    clear_queue()
+    await clear_queue()
     await cancel_all_scans()
     await close_db()
 
