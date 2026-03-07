@@ -58,7 +58,6 @@ Or download the latest release manually from the [releases page](https://github.
 git clone https://github.com/zen-logic/file-hunter.git
 git clone https://github.com/zen-logic/file-hunter-agent.git
 cd file-hunter
-pip install -e ../file-hunter-agent
 ./filehunter
 ```
 
