@@ -966,7 +966,8 @@ WS.on('scan_progress', (msg) => {
     StatusBar.renderActivity('scanning', `${msg.location} — ${msg.filesHashed.toLocaleString()} hashed${skippedSuffix}`, msg.locationId);
     StatusBar.updateStatsFromProgress(msg);
     const skippedLog = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
-    ActivityLog.add(`${msg.location} — ${msg.filesFound.toLocaleString()} found, ${msg.filesHashed.toLocaleString()} hashed${skippedLog}, ${msg.duplicatesFound.toLocaleString()} dups`);
+    const matchesPart = msg.potentialMatches ? `, ${msg.potentialMatches.toLocaleString()} potential matches` : '';
+    ActivityLog.add(`${msg.location} — ${msg.filesFound.toLocaleString()} found, ${msg.filesHashed.toLocaleString()} hashed${skippedLog}${matchesPart}`);
     updateLocationOnline(msg.locationId, true);
     Tree.setScanningLocation(msg.locationId);
 });
