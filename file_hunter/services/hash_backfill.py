@@ -306,6 +306,8 @@ async def _backfill_agents(
     from file_hunter.services.agent_ops import dispatch
     from file_hunter.services.online_check import agent_online_check
 
+    logger.info("Cross-agent backfill: querying candidates for location %d", agent_location_id)
+
     rows = await db.execute_fetchall(
         """SELECT f.id, f.full_path, f.location_id
            FROM files f
@@ -327,7 +329,10 @@ async def _backfill_agents(
     )
 
     if not rows:
+        logger.info("Cross-agent backfill: no candidates found")
         return 0
+
+    logger.info("Cross-agent backfill: %d candidates across other agents", len(rows))
 
     candidate_loc_ids = {row["location_id"] for row in rows}
     online_loc_ids = set()
@@ -336,10 +341,11 @@ async def _backfill_agents(
         if status is True:
             online_loc_ids.add(loc_id)
         elif status is False:
-            logger.info("Backfill: skipping offline location %d", loc_id)
+            logger.info("Cross-agent backfill: skipping offline location %d", loc_id)
 
     hashed = 0
     pending: list[tuple] = []
+    total = sum(1 for r in rows if r["location_id"] in online_loc_ids)
 
     for row in rows:
         if row["location_id"] not in online_loc_ids:
@@ -353,9 +359,11 @@ async def _backfill_agents(
             pending.append((row["id"], result["hash_fast"], result["hash_strong"]))
             affected_hashes.add(result["hash_strong"])
             hashed += 1
+            if hashed % 100 == 0:
+                logger.info("Cross-agent backfill: %d/%d hashed", hashed, total)
         except Exception as e:
             logger.warning(
-                "Backfill agent: hash failed for %s: %r", row["full_path"], e
+                "Cross-agent backfill: hash failed for %s: %r", row["full_path"], e
             )
 
         if len(pending) >= 20:
@@ -365,6 +373,7 @@ async def _backfill_agents(
     if pending:
         await _flush_writes(db, pending)
 
+    logger.info("Cross-agent backfill: complete, %d files hashed", hashed)
     return hashed
 
 
