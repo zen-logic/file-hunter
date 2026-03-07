@@ -164,8 +164,8 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
                     )
             else:
                 cursor = await conn.execute(
-                    "INSERT INTO locations (name, root_path, agent_id, date_added) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT INTO locations (name, root_path, agent_id, date_added, total_size) "
+                    "VALUES (?, ?, ?, ?, 0)",
                     (name, path, aid, now),
                 )
                 loc_id = cursor.lastrowid

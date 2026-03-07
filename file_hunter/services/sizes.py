@@ -121,19 +121,18 @@ async def recalculate_location_sizes(db, location_id: int):
 
 
 async def populate_all_sizes_if_needed(db):
-    """One-time migration: populate sizes for all locations where total_size IS NULL."""
+    """One-time migration: populate sizes for locations where total_size IS NULL."""
     import time
 
-    row = await db.execute_fetchall(
-        "SELECT id FROM locations WHERE total_size IS NULL LIMIT 1"
+    null_locs = await db.execute_fetchall(
+        "SELECT id, name FROM locations WHERE total_size IS NULL"
     )
-    if not row:
+    if not null_locs:
         return
 
-    all_locs = await db.execute_fetchall("SELECT id, name FROM locations")
-    print(f"Calculating folder sizes for {len(all_locs)} locations (one-time)...")
+    print(f"Calculating folder sizes for {len(null_locs)} locations...")
     t0 = time.monotonic()
-    for loc in all_locs:
+    for loc in null_locs:
         t1 = time.monotonic()
         await recalculate_location_sizes(db, loc["id"])
         print(f"  {loc['name']} — {time.monotonic() - t1:.1f}s")
