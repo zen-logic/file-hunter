@@ -210,6 +210,7 @@ async def _drain_queue():
     finally:
         _draining = False
         await _persist_queue()
+        await broadcast({"type": "scan_queue_updated", "queue": get_queue_state()})
 
 
 async def _try_launch(entry: dict, executor: str) -> str:
