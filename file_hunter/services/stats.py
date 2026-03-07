@@ -1,41 +1,79 @@
 """Aggregate statistics queries with in-memory caching.
 
-Results are cached on first access and served from cache on subsequent requests.
-Any catalog mutation (scan, consolidate, merge, upload, delete, location change)
-calls invalidate_stats_cache() to clear everything — this is intentionally
-aggressive because duplicate counts are global.
+Results are cached on first access and refreshed in the background after any
+catalog mutation.  invalidate_stats_cache() schedules an async refresh rather
+than clearing the cache, so the UI always gets an instant response.
 """
 
 import asyncio
+import logging
 import os
 
 from file_hunter.core import format_size
 from file_hunter.extensions import is_agent_location, get_agent_status
 from file_hunter.services.locations import check_location_online, get_disk_stats
 
+logger = logging.getLogger(__name__)
+
 # Module-level cache: key → cached result dict
 _cache: dict[str, dict] = {}
 
+# Background refresh task handle (to avoid duplicate refreshes)
+_refresh_task: asyncio.Task | None = None
+
 
 def invalidate_stats_cache():
-    """Clear all cached stats. Called after any catalog mutation."""
-    _cache.clear()
+    """Schedule a background refresh of all cached stats.
+
+    Does NOT clear the cache — stale data is served until the refresh completes,
+    keeping the UI responsive even on multi-million-row catalogs.
+    """
+    global _refresh_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No event loop — just clear (e.g. called from a non-async context)
+        _cache.clear()
+        return
+
+    # If a refresh is already running, cancel and restart
+    if _refresh_task and not _refresh_task.done():
+        _refresh_task.cancel()
+    _refresh_task = loop.create_task(_refresh_all())
 
 
-async def get_stats(db):
-    """Return dashboard stats."""
-    cached = _cache.get("dashboard")
-    if cached is not None:
-        return cached
+async def warm_stats_cache():
+    """Warm the cache on startup. Called from on_startup as a background task."""
+    await _refresh_all()
 
-    # Run all independent queries concurrently (WAL mode supports concurrent reads)
+
+async def _refresh_all():
+    """Refresh dashboard and all location caches in the background."""
+    from file_hunter.db import open_connection
+
+    try:
+        conn = await open_connection()
+        try:
+            await _refresh_dashboard(conn)
+            await _refresh_all_locations(conn)
+        finally:
+            await conn.close()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Background stats refresh failed")
+
+
+async def _refresh_dashboard(db):
+    """Run the expensive dashboard queries and update the cache atomically."""
     loc_agg_rows, dup_rows, recent_scans_rows, type_rows = await asyncio.gather(
         db.execute_fetchall(
             "SELECT COUNT(*) as c, COALESCE(SUM(total_size), 0) as s, "
             "COALESCE(SUM(file_count), 0) as fc FROM locations"
         ),
         db.execute_fetchall(
-            "SELECT COUNT(*) as c FROM files WHERE dup_count > 0 AND stale = 0 AND hidden = 0 AND dup_exclude = 0"
+            "SELECT COUNT(*) as c FROM files "
+            "WHERE dup_count > 0 AND stale = 0 AND hidden = 0 AND dup_exclude = 0"
         ),
         db.execute_fetchall(
             """SELECT s.id, l.name as location_name, s.status, s.started_at,
@@ -72,7 +110,7 @@ async def get_stats(db):
         for r in recent_scans_rows
     ]
 
-    result = {
+    _cache["dashboard"] = {
         "totalFiles": total_files,
         "totalLocations": total_locations,
         "duplicateFiles": dup_count,
@@ -81,8 +119,79 @@ async def get_stats(db):
         "typeBreakdown": type_breakdown,
         "recentScans": recent_scans,
     }
-    _cache["dashboard"] = result
-    return result
+
+
+async def _refresh_all_locations(db):
+    """Refresh cached stats for all locations."""
+    loc_rows = await db.execute_fetchall(
+        "SELECT id, name, root_path, date_added, "
+        "total_size, file_count, "
+        "scan_schedule_enabled, scan_schedule_days, scan_schedule_time, "
+        "scan_schedule_last_run FROM locations"
+    )
+    for loc in loc_rows:
+        await _refresh_location(db, loc)
+
+
+async def _refresh_location(db, loc):
+    """Refresh cached stats for a single location."""
+    location_id = loc["id"]
+
+    dup_rows, folder_rows, type_rows = await asyncio.gather(
+        db.execute_fetchall(
+            "SELECT COUNT(*) as c FROM files "
+            "WHERE location_id = ? AND dup_count > 0 AND stale = 0 "
+            "AND hidden = 0 AND dup_exclude = 0",
+            (location_id,),
+        ),
+        db.execute_fetchall(
+            "SELECT COUNT(*) as c FROM folders WHERE location_id = ?",
+            (location_id,),
+        ),
+        db.execute_fetchall(
+            """SELECT file_type_high, COUNT(*) as c
+               FROM files WHERE location_id = ? AND stale = 0
+               GROUP BY file_type_high ORDER BY c DESC""",
+            (location_id,),
+        ),
+    )
+
+    file_count = loc["file_count"] or 0
+    total_size = loc["total_size"] or 0
+    dup_count = dup_rows[0]["c"]
+    folder_count = folder_rows[0]["c"]
+    type_breakdown = [{"type": r["file_type_high"], "count": r["c"]} for r in type_rows]
+
+    days_str = loc["scan_schedule_days"] or ""
+    schedule_days = [int(d) for d in days_str.split(",") if d.strip()]
+
+    _cache[f"loc:{location_id}"] = {
+        "name": loc["name"],
+        "rootPath": loc["root_path"],
+        "dateAdded": loc["date_added"],
+        "fileCount": file_count,
+        "folderCount": folder_count,
+        "totalSize": total_size,
+        "totalSizeFormatted": format_size(total_size),
+        "duplicateFiles": dup_count,
+        "typeBreakdown": type_breakdown,
+        "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
+        "scheduleDays": schedule_days,
+        "scheduleTime": loc["scan_schedule_time"] or "03:00",
+        "scheduleLastRun": loc["scan_schedule_last_run"],
+    }
+
+
+async def get_stats(db):
+    """Return dashboard stats. Serves from cache if available."""
+    cached = _cache.get("dashboard")
+    if cached is not None:
+        return cached
+
+    # Cache miss — first request before background warm completes.
+    # Run synchronously this one time.
+    await _refresh_dashboard(db)
+    return _cache.get("dashboard", {})
 
 
 async def get_location_stats(db, location_id: int):
@@ -130,8 +239,7 @@ async def get_location_stats(db, location_id: int):
             "dateLastScanned": None,
         }
 
-    # Location metadata must be fetched first (need root_path for online check,
-    # and must bail early if location doesn't exist)
+    # Cache miss — fetch location metadata and compute stats synchronously
     loc_row = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, date_last_scanned, "
         "total_size, file_count, "
@@ -146,7 +254,8 @@ async def get_location_stats(db, location_id: int):
     # Run remaining queries concurrently
     dup_rows, folder_rows, type_rows, online = await asyncio.gather(
         db.execute_fetchall(
-            "SELECT COUNT(*) as c FROM files WHERE location_id = ? AND dup_count > 0 AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+            "SELECT COUNT(*) as c FROM files WHERE location_id = ? AND dup_count > 0 "
+            "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
             (location_id,),
         ),
         db.execute_fetchall(

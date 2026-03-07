@@ -122,6 +122,10 @@ async def on_startup():
 
     asyncio.get_event_loop().create_task(backfill_dup_counts())
 
+    from file_hunter.services.stats import warm_stats_cache
+
+    asyncio.get_event_loop().create_task(warm_stats_cache())
+
 
 async def on_shutdown():
     from file_hunter.services.scanner import cancel_all_scans
