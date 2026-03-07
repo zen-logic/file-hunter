@@ -1149,6 +1149,11 @@ WS.on('location_changed', async (msg) => {
     await refreshDetailPanel();
 });
 
+WS.on('stats_updated', async () => {
+    await StatusBar.loadStats();
+    await refreshDetailPanel();
+});
+
 WS.on('file_deleted', async (msg) => {
     if (selectedFile && selectedFile.id === msg.fileId) {
         selectedFile = null;

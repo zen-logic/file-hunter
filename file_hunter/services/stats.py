@@ -58,6 +58,11 @@ async def _refresh_all():
             await _refresh_all_locations(conn)
         finally:
             await conn.close()
+
+        # Notify connected browsers that cached stats have been updated
+        from file_hunter.ws.scan import broadcast
+
+        await broadcast({"type": "stats_updated"})
     except asyncio.CancelledError:
         raise
     except Exception:
