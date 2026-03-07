@@ -373,7 +373,7 @@ const Search = {
                 const min = document.createElement('input');
                 min.type = 'text';
                 min.className = 'search-input search-input-sm';
-                min.placeholder = 'Min';
+                min.placeholder = 'e.g. 5MB';
                 min.dataset.role = 'min';
                 container.appendChild(min);
 
@@ -385,7 +385,7 @@ const Search = {
                 const max = document.createElement('input');
                 max.type = 'text';
                 max.className = 'search-input search-input-sm';
-                max.placeholder = 'Max';
+                max.placeholder = 'e.g. 1GB';
                 max.dataset.role = 'max';
                 container.appendChild(max);
                 bind();
