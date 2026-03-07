@@ -358,7 +358,7 @@ async def restore_queue():
         if _queue:
             logger.info("Restored %d queued scan(s) from previous session", len(_queue))
 
-    # Recover scans that were running when the server stopped.
+    # Recover scans that were running or interrupted when the server stopped.
     # Agent scans survive server restarts (the agent keeps scanning), so
     # we only re-queue scans for locations whose agent is not currently
     # scanning. The agent WS handler will finalize ongoing scans when
@@ -366,7 +366,7 @@ async def restore_queue():
     interrupted = await db.execute_fetchall(
         "SELECT s.id, s.location_id, l.name, l.root_path, l.agent_id "
         "FROM scans s JOIN locations l ON l.id = s.location_id "
-        "WHERE s.status = 'running'"
+        "WHERE s.status IN ('running', 'interrupted')"
     )
 
     if interrupted:

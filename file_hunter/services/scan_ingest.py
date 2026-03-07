@@ -316,7 +316,7 @@ async def complete_session(
 
 
 async def cancel_session(agent_id: int):
-    """Clean up a cancelled agent scan session."""
+    """Clean up a cancelled agent scan session (user-initiated cancel)."""
     session = _active_sessions.pop(agent_id, None)
     if not session:
         return
@@ -331,6 +331,30 @@ async def cancel_session(agent_id: int):
         await db.commit()
         invalidate_stats_cache()
         logger.info("Agent #%d scan cancelled", agent_id)
+    finally:
+        await db.close()
+
+
+async def interrupt_session(agent_id: int):
+    """Clean up an interrupted agent scan session (agent disconnect/restart).
+
+    Unlike cancel_session, this marks the scan as 'interrupted' so it can
+    be distinguished from user-initiated cancellations.
+    """
+    session = _active_sessions.pop(agent_id, None)
+    if not session:
+        return
+
+    db = session.db
+    try:
+        completed_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        await db.execute(
+            "UPDATE scans SET status='interrupted', completed_at=? WHERE id=?",
+            (completed_iso, session.scan_id),
+        )
+        await db.commit()
+        invalidate_stats_cache()
+        logger.info("Agent #%d scan interrupted (agent disconnected)", agent_id)
     finally:
         await db.close()
 
