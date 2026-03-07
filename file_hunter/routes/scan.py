@@ -7,6 +7,7 @@ from file_hunter.db import get_db
 from file_hunter.services.scan_queue import enqueue, dequeue, get_queue_state
 from file_hunter.services.scan_ingest import is_location_scanning
 from file_hunter.services.scan_trigger import agent_scan_cancel
+from file_hunter.services.hash_backfill import cancel_backfill_by_location
 
 logger = logging.getLogger("file_hunter")
 
@@ -87,9 +88,16 @@ async def cancel_scan(request: Request):
             return json_ok({"message": f"Dequeued scan for '{removed['name']}'."})
         return json_error("Queue item not found.", 400)
 
-    # Cancel a running scan by location_id
+    # Cancel a running scan or backfill by location_id
     raw_id = body.get("location_id", "")
     loc_id = int(str(raw_id).replace("loc-", ""))
+
+    cancel_type = body.get("type", "scan")
+
+    if cancel_type == "backfill":
+        if cancel_backfill_by_location(loc_id):
+            return json_ok({"message": "Backfill cancellation requested."})
+        return json_error("No backfill running for this location.", 400)
 
     handled = await agent_scan_cancel(loc_id)
     if handled:
