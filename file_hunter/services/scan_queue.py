@@ -236,7 +236,6 @@ async def _try_launch(entry: dict, executor: str) -> str:
         return "deferred"
 
     _running[executor] = location_id
-    await broadcast({"type": "scan_queue_updated", "queue": get_queue_state()})
     asyncio.create_task(_run_queued_agent_scan(entry, executor))
     return "started"
 
