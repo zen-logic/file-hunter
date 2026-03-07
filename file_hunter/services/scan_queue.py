@@ -298,9 +298,11 @@ async def retry_queue():
         await _drain_queue()
 
 
-def clear_queue():
-    """Drop all pending items (used during shutdown)."""
+async def clear_queue():
+    """Persist pending items then drop them (used during shutdown)."""
     global _shutting_down
+    # Persist before clearing so the queue survives restarts
+    await _persist_queue()
     _shutting_down = True
     _queue.clear()
 
@@ -394,13 +396,6 @@ async def restore_queue():
             logger.info(
                 "Re-queued %d interrupted scan(s) from previous session", requeued
             )
-
-    # Clear persisted settings data — it's now in memory
-    async def _clear(conn):
-        await conn.execute("DELETE FROM settings WHERE key = ?", ("scan_queue",))
-        await conn.commit()
-
-    await execute_write(_clear)
 
     if _queue:
         asyncio.ensure_future(_drain_queue())
