@@ -186,8 +186,6 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
             if len(pending_writes) >= batch_size:
                 await _flush_writes(db, pending_writes)
                 pending_writes.clear()
-                if agent_hashed % 20 == 0:
-                    invalidate_stats_cache()
                 await broadcast(
                     {
                         "type": "backfill_progress",
