@@ -89,6 +89,7 @@
                     <div class="search-actions">
                         <button class="btn btn-primary" id="search-go">Search</button>
                         <button class="btn" id="search-clear">Clear</button>
+                        <button class="btn" id="search-save">Save</button>
                     </div>
                 </div>
             </div>
@@ -104,9 +105,11 @@
                     <div class="search-actions">
                         <button class="btn btn-primary" id="search-adv-go">Search</button>
                         <button class="btn" id="search-adv-clear">Clear</button>
+                        <button class="btn" id="search-adv-save">Save</button>
                     </div>
                 </div>
             </div>
+            <div id="saved-searches" class="saved-searches"></div>
         </div>
         <main id="panels">
             <nav id="tree-panel">
@@ -140,6 +143,17 @@
             <div id="status-activity"></div>
             <div id="status-connection"></div>
         </footer>
+        <div id="prompt-modal" class="modal-overlay hidden">
+            <div class="modal-dialog">
+                <h2 class="modal-title" id="prompt-modal-title">Input</h2>
+                <p id="prompt-modal-text" class="modal-text"></p>
+                <input type="text" class="modal-input" id="prompt-modal-input">
+                <div class="modal-actions">
+                    <button class="btn" id="prompt-modal-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="prompt-modal-submit">Save</button>
+                </div>
+            </div>
+        </div>
         <div id="confirm-modal" class="modal-overlay hidden">
             <div class="modal-dialog">
                 <h2 class="modal-title" id="confirm-modal-title">Confirm</h2>

@@ -31,7 +31,12 @@ from file_hunter.routes.files import (
     folder_delete,
     folder_dup_exclude,
 )
-from file_hunter.routes.search import search
+from file_hunter.routes.search import (
+    search,
+    list_saved_searches,
+    create_saved_search,
+    delete_saved_search,
+)
 from file_hunter.routes.slideshow import slideshow_ids
 from file_hunter.routes.scan import start_scan, cancel_scan, get_scan_queue
 from file_hunter.routes.consolidate import consolidate, batch_consolidate
@@ -170,6 +175,9 @@ app = Starlette(
         ),
         Route("/api/folders/{id:int}", folder_delete, methods=["DELETE"]),
         Route("/api/search", search, methods=["GET"]),
+        Route("/api/searches", list_saved_searches, methods=["GET"]),
+        Route("/api/searches", create_saved_search, methods=["POST"]),
+        Route("/api/searches/{id:int}", delete_saved_search, methods=["DELETE"]),
         Route("/api/slideshow-ids", slideshow_ids, methods=["GET"]),
         Route("/api/scan", start_scan, methods=["POST"]),
         Route("/api/scan/cancel", cancel_scan, methods=["POST"]),
