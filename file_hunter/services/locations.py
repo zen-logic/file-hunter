@@ -473,11 +473,11 @@ async def create_folder(db, parent_id: str, name: str) -> dict:
     }
 
 
-async def create_location(db, name: str, root_path: str) -> dict:
+async def create_location(db, name: str, root_path: str, agent_id: int = None) -> dict:
     now = datetime.now().isoformat(timespec="seconds")
     cursor = await db.execute(
-        "INSERT INTO locations (name, root_path, date_added) VALUES (?, ?, ?)",
-        (name, root_path, now),
+        "INSERT INTO locations (name, root_path, agent_id, date_added) VALUES (?, ?, ?, ?)",
+        (name, root_path, agent_id, now),
     )
     await db.commit()
     loc_id = cursor.lastrowid

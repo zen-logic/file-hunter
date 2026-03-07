@@ -34,12 +34,39 @@ async def add_location(request: Request):
         return json_error("Name and path are required.")
     if not await asyncio.to_thread(os.path.isdir, path):
         return json_error(f"Path does not exist or is not a directory: {path}", 400)
+
+    # Find the local agent to assign this location to
+    db = await get_db()
+    cursor = await db.execute("SELECT id FROM agents WHERE name = 'Local Agent'")
+    local_agent = await cursor.fetchone()
+    agent_id = local_agent["id"] if local_agent else None
+
     try:
-        loc = await execute_write(create_location, name, path)
+        loc = await execute_write(create_location, name, path, agent_id)
     except Exception as e:
         if "UNIQUE" in str(e):
             return json_error("A location with that path already exists.", 409)
         raise
+
+    # Push location to agent config so it knows about the new path
+    if agent_id:
+        try:
+            from file_hunter.services.agent_ops import _resolve_agent, _post
+
+            resolved = _resolve_agent(agent_id)
+            if resolved:
+                host, port, token = resolved
+                await _post(
+                    host, port, token, "/locations/add",
+                    {"name": name, "path": path},
+                )
+        except Exception as e:
+            import logging
+
+            logging.getLogger("file_hunter").warning(
+                "Failed to push new location to agent: %s", e
+            )
+
     # Notify all connected browsers so they reload the tree
     await broadcast({"type": "location_changed", "action": "added", "location": loc})
     invalidate_stats_cache()

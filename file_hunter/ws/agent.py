@@ -66,6 +66,75 @@ async def send_to_agent(agent_id: int, msg: dict) -> bool:
         return False
 
 
+async def _adopt_orphaned_locations(agent_id: int):
+    """Find locations with agent_id IS NULL, assign them to this agent, and push to agent config.
+
+    This handles existing local locations that predate the agent-only scanning model.
+    Only the file data (files, folders) is preserved — no rescanning needed.
+    """
+    from file_hunter.services.agent_ops import _resolve_agent
+
+    db = await get_db()
+    orphans = await db.execute_fetchall(
+        "SELECT id, name, root_path FROM locations WHERE agent_id IS NULL"
+    )
+    if not orphans:
+        return
+
+    logger.info(
+        "Agent #%d: adopting %d orphaned locations", agent_id, len(orphans)
+    )
+
+    # Update DB: set agent_id on all orphaned locations
+    async def _assign(conn, aid, ids):
+        placeholders = ",".join("?" * len(ids))
+        await conn.execute(
+            f"UPDATE locations SET agent_id = ? WHERE id IN ({placeholders})",
+            [aid] + ids,
+        )
+        await conn.commit()
+
+    orphan_ids = [o["id"] for o in orphans]
+    await execute_write(_assign, agent_id, orphan_ids)
+
+    # Push each path to the agent's config via HTTP /locations/add
+    resolved = _resolve_agent(agent_id)
+    if not resolved:
+        logger.warning(
+            "Agent #%d not reachable via HTTP — orphaned locations assigned in DB "
+            "but not pushed to agent config. They will sync on next connect.",
+            agent_id,
+        )
+        return
+
+    host, port, token = resolved
+    for o in orphans:
+        try:
+            from file_hunter.services.agent_ops import _post
+
+            await _post(
+                host, port, token, "/locations/add",
+                {"name": o["name"], "path": o["root_path"]},
+            )
+            logger.info(
+                "Agent #%d: pushed orphaned location '%s' (%s) to agent config",
+                agent_id, o["name"], o["root_path"],
+            )
+        except Exception as e:
+            logger.warning(
+                "Agent #%d: failed to push location '%s' to agent: %s",
+                agent_id, o["name"], e,
+            )
+
+    # Add orphan location IDs to the in-memory set
+    if agent_id in _agent_location_ids:
+        _agent_location_ids[agent_id].update(orphan_ids)
+    else:
+        _agent_location_ids[agent_id] = set(orphan_ids)
+
+    invalidate_stats_cache()
+
+
 async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     """Create or update location records for an agent's configured locations."""
     location_ids = set()
@@ -261,6 +330,14 @@ async def agent_ws_endpoint(websocket: WebSocket):
         )
 
         refresh_agent_location_ids_from_memory(agent_name, agent_id)
+
+    # Adopt any existing local locations that have no agent assigned
+    await _adopt_orphaned_locations(agent_id)
+
+    # Refresh again after adoption (new location IDs may have been added)
+    from file_hunter.services.online_check import load_agent_location_ids
+
+    await load_agent_location_ids()
 
     # Send registration confirmation
     await websocket.send_text(json.dumps({"type": "registered", "agentId": agent_id}))
