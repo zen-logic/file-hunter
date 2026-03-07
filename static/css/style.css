@@ -859,6 +859,17 @@ body::after {
     word-break: break-all;
 }
 
+.detail-preview-btns {
+    padding: 0 0.75rem 0.5rem;
+}
+
+.hex-dump {
+    white-space: pre !important;
+    word-break: normal !important;
+    font-size: var(--font-size-xs) !important;
+    tab-size: 4;
+}
+
 /* ── Detail panel ── */
 
 .detail-section {

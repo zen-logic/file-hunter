@@ -755,6 +755,8 @@ const Detail = {
         this._wirePreviewZoom(detail);
         const textPreviewBtn = document.getElementById('detail-preview-text');
         if (textPreviewBtn) textPreviewBtn.addEventListener('click', () => this._openPreviewModal(detail));
+        const hexPreviewBtn = document.getElementById('detail-preview-hex');
+        if (hexPreviewBtn) hexPreviewBtn.addEventListener('click', () => this._openHexPreview(detail));
         this._checkIgnored(detail, gen);
 
         return {
@@ -770,22 +772,23 @@ const Detail = {
         const url = _authUrl(`/api/files/${detail.id}/content`);
         const zoom = `<button class="preview-zoom-btn" id="preview-zoom-btn" title="Enlarge">${zoomIcon}</button>`;
 
+        const hexBtn = `<button class="btn btn-sm" id="detail-preview-hex">Preview as Hex</button>`;
         if (type === 'image') {
-            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"></div>`;
+            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'video') {
-            return `<div class="detail-preview">${zoom}<video src="${url}" controls></video></div>`;
+            return `<div class="detail-preview">${zoom}<video src="${url}" controls></video></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'audio') {
-            return `<div class="detail-preview">${zoom}<audio src="${url}" controls></audio></div>`;
+            return `<div class="detail-preview">${zoom}<audio src="${url}" controls></audio></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'document' && (detail.typeLow || '').toLowerCase() === 'pdf') {
-            return `<div class="detail-preview detail-preview-pdf">${zoom}<iframe src="${url}" title="${detail.name}"></iframe></div>`;
+            return `<div class="detail-preview detail-preview-pdf">${zoom}<iframe src="${url}" title="${detail.name}"></iframe></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'text') {
-            return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div>`;
+            return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
-        return `<div class="detail-preview"><button class="btn btn-sm" id="detail-preview-text">Preview as text</button></div>`;
+        return `<div class="detail-preview"><button class="btn btn-sm" id="detail-preview-text">Preview as text</button> ${hexBtn}</div>`;
     },
 
     async _loadTextPreview(detail) {
@@ -806,6 +809,60 @@ const Detail = {
         } catch {
             pre.textContent = '(Preview not available)';
         }
+    },
+
+    _openHexPreview(detail) {
+        const m = this._previewModal;
+        m.title.textContent = `${detail.name} — Hex`;
+        m._fileId = detail.id;
+        m._fileName = detail.name;
+        m.content.innerHTML = `<pre class="hex-dump">Loading...</pre>`;
+        m.downloadBtn.classList.remove('hidden');
+        m.fullscreenBtn.classList.remove('hidden');
+        m.overlay.classList.remove('hidden');
+
+        const url = `/api/files/${detail.id}/content`;
+        fetch(url, { headers: _authHeaders() })
+            .then(r => {
+                if (!r.ok) throw new Error('not available');
+                return r.arrayBuffer();
+            })
+            .then(buf => {
+                const bytes = new Uint8Array(buf);
+                const limit = 4096;
+                const truncated = bytes.length > limit;
+                const view = truncated ? bytes.slice(0, limit) : bytes;
+                const pre = m.content.querySelector('pre');
+                if (pre) {
+                    pre.textContent = this._formatHexDump(view)
+                        + (truncated ? `\n\n— Showing first ${limit.toLocaleString()} of ${bytes.length.toLocaleString()} bytes —` : '');
+                }
+            })
+            .catch(() => {
+                const pre = m.content.querySelector('pre');
+                if (pre) pre.textContent = '(Preview not available)';
+            });
+    },
+
+    _formatHexDump(bytes) {
+        const lines = [];
+        for (let offset = 0; offset < bytes.length; offset += 16) {
+            const row = bytes.slice(offset, offset + 16);
+            const hex = [];
+            const chars = [];
+            for (let i = 0; i < 16; i++) {
+                if (i < row.length) {
+                    hex.push(row[i].toString(16).padStart(2, '0'));
+                    chars.push(row[i] >= 0x20 && row[i] <= 0x7e ? String.fromCharCode(row[i]) : '.');
+                } else {
+                    hex.push('  ');
+                    chars.push(' ');
+                }
+            }
+            const hexStr = hex.slice(0, 8).join(' ') + '  ' + hex.slice(8).join(' ');
+            lines.push(offset.toString(16).padStart(8, '0') + '  ' + hexStr + '  |' + chars.join('') + '|');
+        }
+        return lines.join('\n');
     },
 
     _wirePreviewZoom(detail) {
