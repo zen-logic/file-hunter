@@ -142,12 +142,7 @@ async def list_files(
     elif folders:
         root_path = folders[0]["root_path"]
     if root_path and location_id:
-        from file_hunter.extensions import is_agent_location
-
-        if is_agent_location(location_id):
-            loc_online = False  # skip local disk checks for agent locations
-        else:
-            loc_online = await asyncio.to_thread(os.path.isdir, root_path)
+        loc_online = False  # online status handled by agent check
     unstale_set = set()
     if loc_online:
         all_paths = [f["full_path"] for f in files] + [
@@ -308,8 +303,6 @@ async def get_file_detail(db, file_id: int):
     tags = [t.strip() for t in f["tags"].split(",") if t.strip()] if f["tags"] else []
 
     from file_hunter.services.locations import check_location_online
-    from file_hunter.extensions import is_agent_location as _is_agent
-
     location_online = await asyncio.to_thread(
         check_location_online, f["location_id"], f["location_root_path"]
     )
@@ -355,12 +348,7 @@ async def get_file_detail(db, file_id: int):
         "locationOnline": location_online,
         "locationName": f["location_name"],
         "path": f"/{f['location_name']}/{f['rel_path']}",
-        "online": not stale
-        and location_online
-        and (
-            _is_agent(f["location_id"])
-            or await asyncio.to_thread(os.path.isfile, f["full_path"])
-        ),
+        "online": not stale and location_online,
         "typeHigh": f["file_type_high"],
         "typeLow": f["file_type_low"],
         "size": f["file_size"],

@@ -1,11 +1,10 @@
 import asyncio
 import io
 import logging
-import os
 import zipfile
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, StreamingResponse
+from starlette.responses import StreamingResponse
 
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import get_db, execute_write
@@ -23,40 +22,6 @@ from file_hunter.services.delete import (
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
-
-MIME_MAP = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "gif": "image/gif",
-    "webp": "image/webp",
-    "svg": "image/svg+xml",
-    "bmp": "image/bmp",
-    "mp4": "video/mp4",
-    "webm": "video/webm",
-    "mov": "video/quicktime",
-    "avi": "video/x-msvideo",
-    "mkv": "video/x-matroska",
-    "mp3": "audio/mpeg",
-    "wav": "audio/wav",
-    "flac": "audio/flac",
-    "ogg": "audio/ogg",
-    "aac": "audio/aac",
-    "m4a": "audio/mp4",
-    "txt": "text/plain",
-    "md": "text/plain",
-    "csv": "text/plain",
-    "json": "text/plain",
-    "xml": "text/plain",
-    "log": "text/plain",
-    "py": "text/plain",
-    "js": "text/plain",
-    "html": "text/plain",
-    "css": "text/plain",
-    "pdf": "application/pdf",
-    "moved": "text/plain",
-    "sources": "text/plain",
-}
 
 
 async def files_list(request: Request):
@@ -118,37 +83,16 @@ async def file_content(request: Request):
     filename = row["filename"]
     location_id = row["location_id"]
 
-    # Agent locations — always proxy, never serve from local disk
-    from file_hunter.extensions import is_agent_location, get_content_proxy
+    from file_hunter.extensions import get_content_proxy
 
-    if is_agent_location(location_id):
-        logger.info(
-            "Content request for agent file #%d (%s), location #%d",
-            file_id,
-            filename,
-            location_id,
+    content_proxy = get_content_proxy()
+    if content_proxy:
+        response = await content_proxy(
+            file_id, full_path, filename, request_headers=dict(request.headers)
         )
-        content_proxy = get_content_proxy()
-        if content_proxy:
-            response = await content_proxy(
-                file_id, full_path, filename, request_headers=dict(request.headers)
-            )
-            if response is not None:
-                return response
-            logger.warning(
-                "Content proxy returned None for file #%d (%s)", file_id, full_path
-            )
-        else:
-            logger.warning("No content_proxy hook registered")
-        return json_error("File not available (agent offline).", 404)
-
-    if not await asyncio.to_thread(os.path.isfile, full_path):
-        return json_error("File not available (offline or missing).", 404)
-
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    media_type = MIME_MAP.get(ext, "application/octet-stream")
-
-    return FileResponse(full_path, media_type=media_type)
+        if response is not None:
+            return response
+    return json_error("File not available (agent offline).", 404)
 
 
 async def file_bytes(request: Request):
@@ -168,45 +112,20 @@ async def file_bytes(request: Request):
     location_id = row["location_id"]
     file_size = row["file_size"] or 0
 
-    from file_hunter.extensions import is_agent_location, get_fetch_bytes
+    from file_hunter.extensions import get_fetch_bytes
 
-    if is_agent_location(location_id):
-        fetch_bytes = get_fetch_bytes()
-        if not fetch_bytes:
-            return json_error("File not available (agent offline).", 404)
+    fetch_bytes = get_fetch_bytes()
+    if not fetch_bytes:
+        return json_error("File not available (agent offline).", 404)
 
-        body = await fetch_bytes(full_path, location_id)
-        if body is None:
-            return json_error("File not available (agent offline).", 404)
-
-        offset = int(request.query_params.get("offset", 0))
-        limit = min(int(request.query_params.get("limit", 4096)), 65536)
-        actual_size = len(body)
-        data = body[offset : offset + limit]
-
-        return Response(
-            content=data,
-            media_type="application/octet-stream",
-            headers={
-                "X-File-Size": str(actual_size),
-                "X-Offset": str(offset),
-            },
-        )
-
-    if not await asyncio.to_thread(os.path.isfile, full_path):
-        return json_error("File not available (offline or missing).", 404)
+    body = await fetch_bytes(full_path, location_id)
+    if body is None:
+        return json_error("File not available (agent offline).", 404)
 
     offset = int(request.query_params.get("offset", 0))
     limit = min(int(request.query_params.get("limit", 4096)), 65536)
-
-    def _read_slice():
-        with open(full_path, "rb") as f:
-            f.seek(offset)
-            return f.read(limit)
-
-    data = await asyncio.to_thread(_read_slice)
-    # Use actual file size from disk if DB value is stale
-    actual_size = await asyncio.to_thread(os.path.getsize, full_path)
+    actual_size = len(body)
+    data = body[offset : offset + limit]
 
     return Response(
         content=data,
@@ -272,23 +191,13 @@ async def file_delete(request: Request):
     return json_ok(result)
 
 
-def _read_file_bytes(path):
-    """Read entire file contents. Called via asyncio.to_thread()."""
-    with open(path, "rb") as f:
-        return f.read()
-
-
 async def _fetch_file_data(full_path, location_id):
-    """Read file bytes — agent locations always proxy, local reads from disk."""
-    from file_hunter.extensions import is_agent_location, get_fetch_bytes
+    """Read file bytes via agent proxy."""
+    from file_hunter.extensions import get_fetch_bytes
 
-    if is_agent_location(location_id):
-        fetch_bytes = get_fetch_bytes()
-        if fetch_bytes:
-            return await fetch_bytes(full_path, location_id)
-        return None
-    if await asyncio.to_thread(os.path.isfile, full_path):
-        return await asyncio.to_thread(_read_file_bytes, full_path)
+    fetch_bytes = get_fetch_bytes()
+    if fetch_bytes:
+        return await fetch_bytes(full_path, location_id)
     return None
 
 

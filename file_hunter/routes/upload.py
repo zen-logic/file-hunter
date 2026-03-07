@@ -2,11 +2,9 @@
 
 import asyncio
 import os
-import shutil
 
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import get_db, open_connection
-from file_hunter.extensions import is_agent_location
 from file_hunter.services import fs
 from file_hunter.services.upload import run_upload
 from file_hunter.ws.scan import broadcast
@@ -69,8 +67,6 @@ async def upload_files(request):
     if not files:
         return json_error("No files provided.", 400)
 
-    agent_upload = is_agent_location(location_id)
-
     total_files = sum(1 for f in files if hasattr(f, "filename") and f.filename)
 
     saved_files = []
@@ -91,43 +87,35 @@ async def upload_files(request):
         file_size = upload_file.file.tell()
         upload_file.file.seek(0)
 
-        if agent_upload:
-            from file_hunter.services.fs import agent_upload_file
+        from file_hunter.services.fs import agent_upload_file
 
-            file_size_mb = file_size / 1048576
+        file_size_mb = file_size / 1048576
 
-            async def _progress(sent, total):
-                pct = round((sent / total) * 100) if total else 100
-                sent_mb = sent / 1048576
-                await broadcast(
-                    {
-                        "type": "upload_transfer",
-                        "locationId": location_id,
-                        "location": location_name,
-                        "current": file_num,
-                        "total": total_files,
-                        "filename": upload_file.filename,
-                        "pct": pct,
-                        "sentMB": round(sent_mb, 1),
-                        "totalMB": round(file_size_mb, 1),
-                    }
-                )
-
-            await agent_upload_file(
-                dest_dir,
-                upload_file.filename,
-                upload_file.file,
-                file_size,
-                location_id,
-                on_progress=_progress,
+        async def _progress(sent, total):
+            pct = round((sent / total) * 100) if total else 100
+            sent_mb = sent / 1048576
+            await broadcast(
+                {
+                    "type": "upload_transfer",
+                    "locationId": location_id,
+                    "location": location_name,
+                    "current": file_num,
+                    "total": total_files,
+                    "filename": upload_file.filename,
+                    "pct": pct,
+                    "sentMB": round(sent_mb, 1),
+                    "totalMB": round(file_size_mb, 1),
+                }
             )
-        else:
-            # Stream to local disk
-            def _stream_local(src_file, dst_path):
-                with open(dst_path, "wb") as f:
-                    shutil.copyfileobj(src_file, f)
 
-            await asyncio.to_thread(_stream_local, upload_file.file, dest_path)
+        await agent_upload_file(
+            dest_dir,
+            upload_file.filename,
+            upload_file.file,
+            file_size,
+            location_id,
+            on_progress=_progress,
+        )
 
         rel_path = (
             os.path.join(rel_prefix, upload_file.filename)
