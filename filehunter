@@ -1,32 +1,125 @@
-#!/usr/bin/env python3
-"""File Hunter launcher — equivalent to: python -m file_hunter"""
+#!/usr/bin/env bash
+set -euo pipefail
 
-if __name__ == "__main__":
-    import sys
+# ── Resolve install directory (where this script lives) ──────────────
 
-    REQUIRED_PACKAGES = {
-        "starlette": "starlette",
-        "uvicorn": "uvicorn[standard]",
-        "aiosqlite": "aiosqlite",
-        "xxhash": "xxhash",
-        "multipart": "python-multipart",
-    }
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
-    missing = []
-    for module, pkg in REQUIRED_PACKAGES.items():
-        try:
-            __import__(module)
-        except ImportError:
-            missing.append(pkg)
+VENV_DIR="$SCRIPT_DIR/venv"
+DATA_DIR="$SCRIPT_DIR/data"
+CONFIG_FILE="$SCRIPT_DIR/config.json"
+AGENT_CONFIG="$DATA_DIR/agent_config.json"
 
-    if missing:
-        print("Error: Missing required packages:")
-        for pkg in missing:
-            print(f"  - {pkg}")
-        print()
-        print("Install them with:")
-        print(f"  pip install {' '.join(missing)}")
-        sys.exit(1)
+# ── Helpers ──────────────────────────────────────────────────────────
 
-    import runpy
-    runpy.run_module("file_hunter", run_name="__main__")
+info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+warn()  { printf '\033[1;33mWarning:\033[0m %s\n' "$*"; }
+error() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
+
+prompt() {
+    local label="$1" default="$2" var="$3"
+    printf '  %s [%s]: ' "$label" "$default"
+    read -r input
+    eval "$var=\"\${input:-$default}\""
+}
+
+# ── Find Python 3.10+ ───────────────────────────────────────────────
+
+find_python() {
+    for cmd in python3 python; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            version=$("$cmd" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
+            major=${version%%.*}
+            minor=${version#*.}
+            if [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; then
+                echo "$cmd"
+                return
+            fi
+        fi
+    done
+    return 1
+}
+
+PYTHON=$(find_python) || error "Python 3.10+ is required but not found."
+
+# ── First-run setup ─────────────────────────────────────────────────
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo ""
+    echo "  File Hunter — first run setup"
+    echo ""
+
+    prompt "Server host" "127.0.0.1" FH_HOST
+    prompt "Server port" "8000" FH_PORT
+    prompt "Agent port"  "8001" FH_AGENT_PORT
+
+    echo ""
+
+    mkdir -p "$DATA_DIR"
+
+    cat > "$CONFIG_FILE" <<EOF
+{
+    "host": "$FH_HOST",
+    "port": $FH_PORT,
+    "agent_port": $FH_AGENT_PORT,
+    "database": "data/file_hunter.db"
+}
+EOF
+
+    info "Saved to config.json"
+fi
+
+# ── Virtual environment ─────────────────────────────────────────────
+
+if [ ! -d "$VENV_DIR" ]; then
+    info "Creating virtual environment..."
+    "$PYTHON" -m venv "$VENV_DIR"
+fi
+
+VENV_PYTHON="$VENV_DIR/bin/python"
+
+# Install/update deps if needed (check stamp vs requirements.txt)
+STAMP="$VENV_DIR/.deps-installed"
+if [ ! -f "$STAMP" ] || [ "$SCRIPT_DIR/requirements.txt" -nt "$STAMP" ]; then
+    info "Installing dependencies..."
+    "$VENV_PYTHON" -m pip install --quiet --upgrade pip
+    "$VENV_PYTHON" -m pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
+    touch "$STAMP"
+fi
+
+# ── Pre-flight (DB init + local agent config) ───────────────────────
+
+"$VENV_PYTHON" -m file_hunter.preflight || error "Pre-flight setup failed."
+
+# ── Read config for ports ───────────────────────────────────────────
+
+FH_HOST=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('host','127.0.0.1'))")
+FH_PORT=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('port',8000))")
+FH_AGENT_PORT=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('agent_port',8001))")
+
+# ── Start agent (if bundled) ─────────────────────────────────────────
+
+AGENT_PID=""
+if [ -f "$AGENT_CONFIG" ] && "$VENV_PYTHON" -c "import file_hunter_agent" 2>/dev/null; then
+    "$VENV_PYTHON" -m file_hunter_agent \
+        --host "$FH_HOST" \
+        --port "$FH_AGENT_PORT" \
+        --server "http://${FH_HOST}:${FH_PORT}" \
+        --config "$AGENT_CONFIG" &
+    AGENT_PID=$!
+fi
+
+cleanup() {
+    if [ -n "$AGENT_PID" ] && kill -0 "$AGENT_PID" 2>/dev/null; then
+        kill "$AGENT_PID" 2>/dev/null
+        wait "$AGENT_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+# ── Start server ────────────────────────────────────────────────────
+
+echo "File Hunter starting on http://${FH_HOST}:${FH_PORT}"
+
+exec "$VENV_PYTHON" -m file_hunter --host "$FH_HOST" --port "$FH_PORT"

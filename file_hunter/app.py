@@ -114,21 +114,16 @@ async def on_startup():
     db = await get_db()
     _elapsed("db ready")
 
-    # Auto-create local agent on first run
+    # Local agent is created by preflight.py before the server starts.
+    # If somehow missed (e.g. manual startup), create it now.
     from file_hunter.services.agents import ensure_local_agent
 
     token = await ensure_local_agent(db)
     if token:
-        logger.info(
-            "\n"
-            "╔══════════════════════════════════════════════════════════╗\n"
-            "║  LOCAL AGENT PAIRING TOKEN (shown once — save it now):  ║\n"
-            "║                                                        ║\n"
-            "║  %s  ║\n"
-            "║                                                        ║\n"
-            "║  Configure your file-hunter-agent with this token.     ║\n"
-            "╚══════════════════════════════════════════════════════════╝",
-            token,
+        logger.warning(
+            "Local agent created during startup (preflight was skipped). "
+            "Token prefix: %s — check data/agent_config.json",
+            token[:8],
         )
 
     from file_hunter.services.online_check import load_agent_location_ids
