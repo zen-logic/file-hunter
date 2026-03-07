@@ -1095,8 +1095,7 @@ WS.on('backfill_completed', async (msg) => {
     Tree.clearBackfillingLocation(msg.locationId);
     StatusBar.renderActivity('idle');
     const parts = [];
-    if (msg.agentFilesHashed) parts.push(`${msg.agentFilesHashed.toLocaleString()} agent files hashed`);
-    if (msg.localFilesHashed) parts.push(`${msg.localFilesHashed.toLocaleString()} local files hashed`);
+    if (msg.agentFilesHashed) parts.push(`${msg.agentFilesHashed.toLocaleString()} files hashed`);
     if (msg.duplicatesFound) parts.push(`${msg.duplicatesFound.toLocaleString()} duplicates`);
     const summary = parts.length ? parts.join(', ') : 'no matches found';
     const label = msg.cancelled ? 'Hash backfill cancelled' : 'Hash backfill completed';

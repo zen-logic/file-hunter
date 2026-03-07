@@ -12,7 +12,6 @@ import logging
 from datetime import datetime, timezone
 
 from file_hunter.db import get_db, execute_write, open_connection
-from file_hunter.services.hasher import hash_file
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
 
@@ -213,14 +212,7 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
 
         cancelled = _active_backfills.get(agent_id, False)
 
-        # Local backfill: find local files that match by (size, partial)
-        # against the newly-hashed agent files, but still lack hash_strong
-        local_hashed = 0
-        if not cancelled:
-            local_hashed = await _backfill_local(db, location_id, affected_hashes)
-
         # Cross-agent backfill: hash files on other connected agents
-        cancelled = _active_backfills.get(agent_id, False)
         cross_agent_hashed = 0
         if not cancelled:
             cross_agent_hashed = await _backfill_agents(
@@ -235,7 +227,7 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
             )
 
         dup_count = 0
-        if agent_hashed > 0 or local_hashed > 0 or cross_agent_hashed > 0:
+        if agent_hashed > 0 or cross_agent_hashed > 0:
             invalidate_stats_cache()
             dup_rows = await db.execute_fetchall(
                 """SELECT COUNT(*) as c FROM files f
@@ -259,7 +251,6 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
                 "location": location_name,
                 "agentFilesHashed": agent_hashed,
                 "agentErrors": agent_errors,
-                "localFilesHashed": local_hashed,
                 "crossAgentFilesHashed": cross_agent_hashed,
                 "duplicatesFound": dup_count,
                 "cancelled": cancelled,
@@ -267,12 +258,11 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
         )
 
         logger.info(
-            "Backfill %s for %s: %d agent, %d errors, %d local, %d cross-agent, %d dups",
+            "Backfill %s for %s: %d agent, %d errors, %d cross-agent, %d dups",
             "cancelled" if cancelled else "completed",
             location_name,
             agent_hashed,
             agent_errors,
-            local_hashed,
             cross_agent_hashed,
             dup_count,
         )
@@ -378,50 +368,3 @@ async def _backfill_agents(
     return hashed
 
 
-async def _backfill_local(db, agent_location_id: int, affected_hashes: set[str]) -> int:
-    """Hash local files that match agent files by (size, partial) but lack hash_strong."""
-    rows = await db.execute_fetchall(
-        """SELECT f.id, f.full_path
-           FROM files f
-           WHERE f.hash_strong IS NULL
-             AND f.hash_partial IS NOT NULL
-             AND f.stale = 0
-             AND f.location_id != ?
-             AND EXISTS (
-                 SELECT 1 FROM files f2
-                 WHERE f2.location_id = ?
-                   AND f2.file_size = f.file_size
-                   AND f2.hash_partial = f.hash_partial
-                   AND f2.hash_strong IS NOT NULL
-             )
-             AND f.location_id NOT IN (
-                 SELECT id FROM locations WHERE agent_id IS NOT NULL
-             )""",
-        (agent_location_id, agent_location_id),
-    )
-
-    if not rows:
-        return 0
-
-    hashed = 0
-    pending: list[tuple] = []
-
-    for row in rows:
-        try:
-            hash_fast, hash_strong = await hash_file(row["full_path"])
-            pending.append((row["id"], hash_fast, hash_strong))
-            affected_hashes.add(hash_strong)
-            hashed += 1
-        except Exception as e:
-            logger.warning(
-                "Backfill local: hash failed for %s: %r", row["full_path"], e
-            )
-
-        if len(pending) >= 20:
-            await _flush_writes(db, pending)
-            pending.clear()
-
-    if pending:
-        await _flush_writes(db, pending)
-
-    return hashed
