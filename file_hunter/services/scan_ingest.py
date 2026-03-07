@@ -215,7 +215,9 @@ async def ingest_batch(agent_id: int, files: list[dict]):
             session.potential_matches += new_matches
 
 
-async def complete_session(agent_id: int, path: str) -> int:
+async def complete_session(
+    agent_id: int, path: str, incremental: bool = False, deleted: list[str] | None = None
+) -> int:
     """Finalize a completed agent scan. Returns files ingested count."""
     session = _active_sessions.pop(agent_id, None)
     if not session:
@@ -225,25 +227,47 @@ async def complete_session(agent_id: int, path: str) -> int:
         return 0
 
     logger.info(
-        "complete_session: agent #%d (scan_id=%d, location=#%d '%s', files=%d)",
+        "complete_session: agent #%d (scan_id=%d, location=#%d '%s', files=%d, incremental=%s)",
         agent_id,
         session.scan_id,
         session.location_id,
         session.location_name,
         session.files_ingested,
+        incremental,
     )
 
     db = session.db
     try:
-        import posixpath
+        if incremental and deleted is not None:
+            # Incremental: mark specific deleted files as stale
+            stale_count = 0
+            if deleted:
+                for i in range(0, len(deleted), 500):
+                    batch = deleted[i : i + 500]
+                    placeholders = ",".join("?" * len(batch))
+                    cursor = await db.execute(
+                        f"""UPDATE files SET stale=1
+                            WHERE location_id=? AND stale=0
+                            AND rel_path IN ({placeholders})""",
+                        [session.location_id] + batch,
+                    )
+                    stale_count += cursor.rowcount
+                await db.commit()
+            logger.info(
+                "Incremental stale: %d files marked stale from deleted list",
+                stale_count,
+            )
+        else:
+            # Full scan: mark anything not seen in this scan as stale
+            import posixpath
 
-        scan_prefix = None
-        if session.scan_path:
-            scan_prefix = posixpath.relpath(session.scan_path, session.root_path)
+            scan_prefix = None
+            if session.scan_path:
+                scan_prefix = posixpath.relpath(session.scan_path, session.root_path)
 
-        stale_count = await mark_stale_files(
-            db, session.location_id, session.scan_id, scan_prefix
-        )
+            stale_count = await mark_stale_files(
+                db, session.location_id, session.scan_id, scan_prefix
+            )
 
         completed_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
         await db.execute(

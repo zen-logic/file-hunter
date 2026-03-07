@@ -208,8 +208,13 @@ async def _finalize_scan(
 ):
     """Background task: run complete_session, broadcast, and launch backfill."""
     try:
-        files_ingested = await scan_ingest.complete_session(agent_id, scan_path)
+        incremental = msg.get("incremental", False)
+        deleted = msg.get("deleted", None)
+        files_ingested = await scan_ingest.complete_session(
+            agent_id, scan_path, incremental=incremental, deleted=deleted
+        )
 
+        msg.pop("deleted", None)  # Don't broadcast large delete lists to UI
         msg["agentId"] = agent_id
         if loc_info:
             msg["locationId"] = loc_info[0]
