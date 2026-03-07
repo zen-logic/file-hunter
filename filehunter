@@ -88,6 +88,13 @@ if [ ! -f "$STAMP" ] || [ "$SCRIPT_DIR/requirements.txt" -nt "$STAMP" ]; then
     touch "$STAMP"
 fi
 
+# If agent is a sibling repo (source install), install it into the venv
+AGENT_SIBLING="$SCRIPT_DIR/../file-hunter-agent"
+if [ -d "$AGENT_SIBLING/file_hunter_agent" ] && ! "$VENV_PYTHON" -c "import file_hunter_agent" 2>/dev/null; then
+    info "Installing agent from sibling repo..."
+    "$VENV_PYTHON" -m pip install --quiet -e "$AGENT_SIBLING"
+fi
+
 # ── Pre-flight (DB init + local agent config) ───────────────────────
 
 "$VENV_PYTHON" -m file_hunter.preflight || error "Pre-flight setup failed."
