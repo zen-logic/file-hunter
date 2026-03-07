@@ -172,20 +172,26 @@ async def file_bytes(request: Request):
 
     if is_agent_location(location_id):
         fetch_bytes = get_fetch_bytes()
-        if fetch_bytes:
-            offset = int(request.query_params.get("offset", 0))
-            limit = min(int(request.query_params.get("limit", 4096)), 65536)
-            data = await fetch_bytes(file_id, full_path, offset, limit)
-            if data is not None:
-                return Response(
-                    content=data,
-                    media_type="application/octet-stream",
-                    headers={
-                        "X-File-Size": str(file_size),
-                        "X-Offset": str(offset),
-                    },
-                )
-        return json_error("File not available (agent offline).", 404)
+        if not fetch_bytes:
+            return json_error("File not available (agent offline).", 404)
+
+        body = await fetch_bytes(full_path, location_id)
+        if body is None:
+            return json_error("File not available (agent offline).", 404)
+
+        offset = int(request.query_params.get("offset", 0))
+        limit = min(int(request.query_params.get("limit", 4096)), 65536)
+        actual_size = len(body)
+        data = body[offset : offset + limit]
+
+        return Response(
+            content=data,
+            media_type="application/octet-stream",
+            headers={
+                "X-File-Size": str(actual_size),
+                "X-Offset": str(offset),
+            },
+        )
 
     if not await asyncio.to_thread(os.path.isfile, full_path):
         return json_error("File not available (offline or missing).", 404)
