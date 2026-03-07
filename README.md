@@ -41,7 +41,6 @@ This application was developed with the assistance of AI tools (Claude Opus, Kim
 ## Requirements
 
 - Python 3.10+
-- git
 
 ## Installation
 
@@ -49,41 +48,18 @@ This application was developed with the assistance of AI tools (Claude Opus, Kim
 curl -fsSL https://filehunter.zenlogic.uk/install | bash
 ```
 
-This clones the repo to `~/.filehunter`, creates a virtual environment, installs dependencies, and adds a `filehunter` command to `~/.local/bin`. Re-run to update. Works on macOS and Linux.
+Downloads the latest release, extracts it, and you're ready to go. Works on macOS, Linux, and WSL.
 
-### Manual install
-
-```bash
-git clone https://github.com/zen-logic/file-hunter.git
-cd file-hunter
-python -m venv venv
-source venv/bin/activate   # on Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
+Or download the latest release manually from the [releases page](https://github.com/zen-logic/file-hunter/releases/latest), extract it wherever you like, and run `./filehunter`.
 
 ## Usage
 
-Start the application:
-
 ```bash
+cd filehunter-x.x.x
 ./filehunter
-# or
-python -m file_hunter
 ```
 
-Then open http://127.0.0.1:8000 in your browser.
-
-To bind to all interfaces (for access from other devices on the network):
-
-```bash
-./filehunter --host 0.0.0.0 --port 9000
-```
-
-To try File Hunter with sample data (three test locations with duplicate files):
-
-```bash
-./filehunter --demo
-```
+On first run, the launcher prompts for host and port, creates a virtual environment, and installs dependencies. Then open the URL shown in your browser.
 
 ### Getting started
 
@@ -92,17 +68,7 @@ To try File Hunter with sample data (three test locations with duplicate files):
 3. A scan starts automatically — file metadata and hashes are computed and stored in the catalog
 4. Browse the location tree, search files, review duplicates, and consolidate when ready
 
-### Configuration
-
-Settings are in `config.json`:
-
-```json
-{
-    "host": "127.0.0.1",
-    "port": 8000,
-    "database": "file_hunter.db"
-}
-```
+Everything is self-contained in the install directory — database, config, and virtual environment. Move the folder and it still works. Delete it and it's completely gone.
 
 ## Tech stack
 
