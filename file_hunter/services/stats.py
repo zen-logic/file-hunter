@@ -29,7 +29,7 @@ async def get_stats(db):
         return cached
 
     # Run all independent queries concurrently (WAL mode supports concurrent reads)
-    loc_agg_rows, dup_rows, recent_scans_rows = await asyncio.gather(
+    loc_agg_rows, dup_rows, recent_scans_rows, type_rows = await asyncio.gather(
         db.execute_fetchall(
             "SELECT COUNT(*) as c, COALESCE(SUM(total_size), 0) as s, "
             "COALESCE(SUM(file_count), 0) as fc FROM locations"
@@ -45,12 +45,18 @@ async def get_stats(db):
                ORDER BY s.started_at DESC
                LIMIT 5"""
         ),
+        db.execute_fetchall(
+            """SELECT file_type_high, COUNT(*) as c
+               FROM files WHERE stale = 0
+               GROUP BY file_type_high ORDER BY c DESC"""
+        ),
     )
 
     total_locations = loc_agg_rows[0]["c"]
     total_size = loc_agg_rows[0]["s"]
     total_files = loc_agg_rows[0]["fc"]
     dup_count = dup_rows[0]["c"]
+    type_breakdown = [{"type": r["file_type_high"], "count": r["c"]} for r in type_rows]
 
     recent_scans = [
         {
@@ -72,6 +78,7 @@ async def get_stats(db):
         "duplicateFiles": dup_count,
         "totalSize": total_size,
         "totalSizeFormatted": format_size(total_size),
+        "typeBreakdown": type_breakdown,
         "recentScans": recent_scans,
     }
     _cache["dashboard"] = result

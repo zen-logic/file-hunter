@@ -578,6 +578,16 @@ const Detail = {
             }).join('');
         }
 
+        let typeHtml = '';
+        if (s.typeBreakdown && s.typeBreakdown.length > 0) {
+            typeHtml = s.typeBreakdown.map(t =>
+                `<div class="detail-field">
+                    <span class="label">${t.type || 'other'}</span>
+                    <span class="value">${t.count.toLocaleString()}</span>
+                </div>`
+            ).join('');
+        }
+
         this.el.innerHTML = `
             <div class="dashboard-stats">
                 <div class="stat-card">
@@ -597,6 +607,7 @@ const Detail = {
                     <div class="stat-label">Total Cataloged</div>
                 </div>
             </div>
+            ${typeHtml ? `<div class="detail-section"><h3>Files by Type</h3>${typeHtml}</div>` : ''}
             <div class="detail-section">
                 <h3>Recent Scans</h3>
                 ${scansHtml || '<div class="detail-field"><span class="value">No scans yet.</span></div>'}
