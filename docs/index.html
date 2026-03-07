@@ -409,8 +409,15 @@
       including on headless servers with no desktop at all.
     </p>
 
+    <div class="install-snippet" style="margin-top: 1.5rem; max-width: 540px;">
+      <div class="install-box">
+        <code id="install-cmd">curl -fsSL https://filehunter.zenlogic.uk/install | bash</code>
+        <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('install-cmd').textContent).then(function(){var b=event.target;b.textContent='Copied!';setTimeout(function(){b.textContent='Copy'},2000)})">Copy</button>
+      </div>
+    </div>
+
     <div class="hero-cta" style="justify-content: center; margin-top: 1.5rem;">
-      <a href="https://github.com/zen-logic/file-hunter" class="btn-cta"><span class="cta-prompt">&gt; </span>./get-filehunter</a>
+      <a href="https://github.com/zen-logic/file-hunter/releases/latest" class="btn-cta"><span class="cta-prompt">&gt; </span>./get-filehunter</a>
     </div>
   </section>
 
