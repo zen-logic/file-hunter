@@ -80,6 +80,13 @@ body::after {
     display: none;
 }
 
+#search-basic,
+#search-advanced {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
 #search-basic.hidden,
 #search-advanced.hidden {
     display: none;
