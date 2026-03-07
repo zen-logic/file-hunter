@@ -36,6 +36,7 @@ const Detail = {
     _lastDetail: null,
     _renderGen: 0,
     _ac: null,
+    _locationActivityFn: null,
     _previewModal: null,
     _slideshowTotal: 0,
     _slideshowOffset: 0,
@@ -1214,10 +1215,13 @@ const Detail = {
                     <span class="label">Status</span>
                     <span class="value${statusClass}">${statusLabel}</span>
                 </div>
-                ${s.agentStatus && s.agentStatus.status !== 'idle' ? `<div class="detail-field">
-                    <span class="label">Agent</span>
-                    <span class="value detail-agent-status ${s.agentStatus.status}">${agentStatusLabel(s.agentStatus)}</span>
-                </div>` : ''}
+                ${(() => {
+                    const activity = locationActivityLabel(node.id, this._locationActivityFn);
+                    return activity ? `<div class="detail-field">
+                    <span class="label">Activity</span>
+                    <span class="value detail-agent-status ${activity.toLowerCase()}">${activity}</span>
+                </div>` : '';
+                })()}
                 ${s.diskStats && s.diskStats.mount ? `
                 <div class="detail-field">
                     <span class="label">Capacity</span>
@@ -1550,10 +1554,11 @@ const Detail = {
     },
 };
 
-function agentStatusLabel(as) {
-    if (as.status === 'scanning') return 'Scanning';
-    if (as.status === 'hashing') return `Hashing (${as.count})`;
-    return 'Idle';
+function locationActivityLabel(nodeId, activityFn) {
+    if (!activityFn) return null;
+    const activity = activityFn(nodeId);
+    if (!activity) return null;
+    return activity;
 }
 
 function _timeAgo(isoStr) {

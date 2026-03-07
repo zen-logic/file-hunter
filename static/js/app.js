@@ -335,6 +335,12 @@ function wireBatchActions(items) {
 
 function startApp(user) {
     currentUser = user;
+    Detail._locationActivityFn = (nodeId) => {
+        if (Tree._scanningLocations.has(nodeId)) return 'Scanning';
+        if (Tree._queuedLocations.has(nodeId)) return 'Queued';
+        if (Tree._backfillingLocations.has(nodeId)) return 'Backfilling';
+        return null;
+    };
     StatusBar.init();
     ActivityLog.init();
     Upload.init(() => selectedNode || null);

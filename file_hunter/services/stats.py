@@ -10,7 +10,7 @@ import logging
 import os
 
 from file_hunter.core import format_size
-from file_hunter.extensions import is_agent_location, get_agent_status
+from file_hunter.extensions import is_agent_location
 from file_hunter.services.locations import check_location_online, get_disk_stats
 
 logger = logging.getLogger(__name__)
@@ -256,10 +256,6 @@ async def get_location_stats(db, location_id: int):
             "FROM locations WHERE id = ?",
             (location_id,),
         )
-        agent_status = None
-        if online and is_agent_location(location_id):
-            agent_status = await get_agent_status(location_id)
-
         if live_row:
             lr = live_row[0]
             days_str = lr["scan_schedule_days"] or ""
@@ -268,7 +264,6 @@ async def get_location_stats(db, location_id: int):
                 **cached,
                 "online": online,
                 "diskStats": disk_stats,
-                "agentStatus": agent_status,
                 "dateLastScanned": lr["date_last_scanned"],
                 "scheduleEnabled": bool(lr["scan_schedule_enabled"]),
                 "scheduleDays": sched_days,
@@ -279,7 +274,6 @@ async def get_location_stats(db, location_id: int):
             **cached,
             "online": online,
             "diskStats": disk_stats,
-            "agentStatus": agent_status,
             "dateLastScanned": None,
         }
 
@@ -309,10 +303,6 @@ async def get_location_stats(db, location_id: int):
     days_str = loc["scan_schedule_days"] or ""
     schedule_days = [int(d) for d in days_str.split(",") if d.strip()]
 
-    agent_status = None
-    if online and is_agent_location(location_id):
-        agent_status = await get_agent_status(location_id)
-
     return {
         "name": loc["name"],
         "rootPath": loc["root_path"],
@@ -329,7 +319,6 @@ async def get_location_stats(db, location_id: int):
         "scheduleLastRun": loc["scan_schedule_last_run"],
         "online": online,
         "diskStats": disk_stats,
-        "agentStatus": agent_status,
         "dateLastScanned": loc["date_last_scanned"],
     }
 

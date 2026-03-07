@@ -971,7 +971,8 @@ body::after {
 }
 
 .detail-agent-status.scanning { color: var(--color-warning, #da0); }
-.detail-agent-status.hashing { color: var(--color-warning, #da0); }
+.detail-agent-status.backfilling { color: var(--color-warning, #da0); }
+.detail-agent-status.queued { color: var(--color-text-muted, #888); }
 
 .detail-filename {
     display: flex;
