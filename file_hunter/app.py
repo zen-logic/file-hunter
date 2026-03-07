@@ -102,10 +102,17 @@ except Exception:
 
 async def on_startup():
     import logging
+    import time
 
     logger = logging.getLogger("file_hunter")
 
+    t0 = time.monotonic()
+
+    def _elapsed(label):
+        logger.info("startup: %s (%.1fs)", label, time.monotonic() - t0)
+
     db = await get_db()
+    _elapsed("db ready")
 
     # Auto-create local agent on first run
     from file_hunter.services.agents import ensure_local_agent
@@ -127,19 +134,26 @@ async def on_startup():
     from file_hunter.services.online_check import load_agent_location_ids
 
     await load_agent_location_ids()
+    _elapsed("agent location ids loaded")
 
     from file_hunter.services.sizes import populate_all_sizes_if_needed
 
     await populate_all_sizes_if_needed(db)
+    _elapsed("sizes checked")
+
     from file_hunter.services.scheduler import start_scheduler
 
     await start_scheduler()
+    _elapsed("scheduler started")
+
     for hook in extensions.get_startup_hooks():
         await hook()
+    _elapsed("extension hooks done")
 
     from file_hunter.services.scan_queue import restore_queue
 
     await restore_queue()
+    _elapsed("scan queue restored")
 
     from file_hunter.services.dup_exclude import restore_pending as restore_dup_exclude
 
@@ -148,6 +162,7 @@ async def on_startup():
     from file_hunter.services.hash_backfill import restore_backfills
 
     await restore_backfills()
+    _elapsed("backfills restored")
 
     from file_hunter.services.dup_counts import backfill_dup_counts
 
@@ -156,6 +171,7 @@ async def on_startup():
     from file_hunter.services.stats import warm_stats_cache
 
     asyncio.get_event_loop().create_task(warm_stats_cache())
+    _elapsed("startup complete")
 
 
 async def on_shutdown():
