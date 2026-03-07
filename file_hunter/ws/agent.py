@@ -371,14 +371,14 @@ async def agent_ws_endpoint(websocket: WebSocket):
     if scan_ingest.has_session(agent_id):
         if not agent_scanning:
             loc_info = scan_ingest.get_session_location(agent_id)
-            await scan_ingest.cancel_session(agent_id)
+            await scan_ingest.interrupt_session(agent_id)
             if loc_info:
                 from file_hunter.services.scan_queue import notify_agent_scan_complete
 
                 notify_agent_scan_complete(loc_info[0])
                 await broadcast(
                     {
-                        "type": "scan_cancelled",
+                        "type": "scan_interrupted",
                         "locationId": loc_info[0],
                         "location": loc_info[1],
                     }
@@ -536,15 +536,44 @@ async def agent_ws_endpoint(websocket: WebSocket):
         interrupted_backfill = get_active_backfill_info(agent_id)
         cancel_backfill(agent_id)
 
-        # Clean up any active ingest session
+        # Clean up any active ingest session — interrupt, notify UI, re-queue
+        interrupted_scan_loc = None
         if scan_ingest.has_session(agent_id):
-            await scan_ingest.cancel_session(agent_id)
+            interrupted_scan_loc = scan_ingest.get_session_location(agent_id)
+            await scan_ingest.interrupt_session(agent_id)
+            if interrupted_scan_loc:
+                await broadcast(
+                    {
+                        "type": "scan_interrupted",
+                        "locationId": interrupted_scan_loc[0],
+                        "location": interrupted_scan_loc[1],
+                    }
+                )
 
         # Notify scan queue for any locations this agent owns
         from file_hunter.services.scan_queue import notify_agent_scan_complete
 
         for loc_id in _agent_location_ids.get(agent_id, set()):
             notify_agent_scan_complete(loc_id)
+
+        # Re-queue the interrupted scan so it resumes when the agent reconnects
+        if interrupted_scan_loc:
+            from file_hunter.services.scan_queue import enqueue
+
+            loc_id, loc_name = interrupted_scan_loc
+            db = await get_db()
+            row = await db.execute_fetchall(
+                "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
+            )
+            if row:
+                try:
+                    await enqueue(loc_id, loc_name, row[0]["root_path"])
+                    logger.info(
+                        "Re-queued interrupted scan for location #%d (%s)",
+                        loc_id, loc_name,
+                    )
+                except ValueError:
+                    pass  # Already queued or running
 
         # Only clean up if this websocket is still the registered one
         replaced = _agent_connections.get(agent_id) is not websocket

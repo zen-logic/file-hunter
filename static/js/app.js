@@ -1016,6 +1016,12 @@ WS.on('scan_cancelled', async (msg) => {
     await refreshDetailPanel();
 });
 
+WS.on('scan_interrupted', async (msg) => {
+    ActivityLog.add(`Scan interrupted: <b>${msg.location}</b> — agent disconnected, will resume automatically`);
+    Toast.info(`Scan interrupted: ${msg.location} — will resume when agent reconnects`);
+    Tree.clearScanningLocation(msg.locationId);
+});
+
 WS.on('scan_error', (msg) => {
     const queuePending = StatusBar.getQueue().length > 0;
     if (queuePending) {
