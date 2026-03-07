@@ -963,10 +963,11 @@ WS.on('scan_started', (msg) => {
 
 WS.on('scan_progress', (msg) => {
     const skippedSuffix = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
-    StatusBar.renderActivity('scanning', `${msg.location} — ${msg.filesHashed.toLocaleString()} hashed${skippedSuffix}`, msg.locationId);
+    const matchesSuffix = msg.potentialMatches ? `, ${msg.potentialMatches.toLocaleString()} matches` : '';
+    StatusBar.renderActivity('scanning', `${msg.location} — ${msg.filesHashed.toLocaleString()} hashed${skippedSuffix}${matchesSuffix}`, msg.locationId);
     StatusBar.updateStatsFromProgress(msg);
     const skippedLog = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
-    const matchesPart = msg.potentialMatches ? `, ${msg.potentialMatches.toLocaleString()} potential matches` : '';
+    const matchesPart = msg.potentialMatches ? `, ${msg.potentialMatches.toLocaleString()} matches` : '';
     ActivityLog.add(`${msg.location} — ${msg.filesFound.toLocaleString()} found, ${msg.filesHashed.toLocaleString()} hashed${skippedLog}${matchesPart}`);
     updateLocationOnline(msg.locationId, true);
     Tree.setScanningLocation(msg.locationId);
