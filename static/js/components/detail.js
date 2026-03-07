@@ -823,18 +823,20 @@ const Detail = {
         m._fileName = detail.name;
 
         m.content.innerHTML = `
-            <div class="hex-toolbar">
-                <button class="btn btn-sm" id="hex-top" title="Top">Top</button>
-                <button class="btn btn-sm" id="hex-prev" title="Previous page">Prev</button>
-                <button class="btn btn-sm" id="hex-next" title="Next page">Next</button>
-                <button class="btn btn-sm" id="hex-end" title="End">End</button>
-                <span class="hex-separator"></span>
-                <input type="text" class="hex-find-input" id="hex-find" placeholder="Find text or hex (0x...)">
-                <button class="btn btn-sm btn-primary" id="hex-find-go">Find</button>
-                <button class="btn btn-sm" id="hex-find-next">Next match</button>
-                <span class="hex-status" id="hex-status"></span>
-            </div>
-            <pre class="hex-dump" id="hex-output">Loading...</pre>`;
+            <div class="hex-viewer">
+                <div class="hex-toolbar">
+                    <button class="btn btn-sm" id="hex-top" title="Top">Top</button>
+                    <button class="btn btn-sm" id="hex-prev" title="Previous page">Prev</button>
+                    <button class="btn btn-sm" id="hex-next" title="Next page">Next</button>
+                    <button class="btn btn-sm" id="hex-end" title="End">End</button>
+                    <span class="hex-separator"></span>
+                    <input type="text" class="hex-find-input" id="hex-find" placeholder="Find text or hex (0x...)">
+                    <button class="btn btn-sm btn-primary" id="hex-find-go">Find</button>
+                    <button class="btn btn-sm" id="hex-find-next">Next match</button>
+                    <span class="hex-status" id="hex-status"></span>
+                </div>
+                <pre class="hex-dump" id="hex-output">Loading...</pre>
+            </div>`;
 
         m.downloadBtn.classList.remove('hidden');
         m.fullscreenBtn.classList.remove('hidden');
