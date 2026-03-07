@@ -56,6 +56,8 @@ def get_public_ws_paths():
 # Extension hooks — Pro can override; defaults fall back to core
 # ---------------------------------------------------------------------------
 
+_scan_trigger_fn = None
+_scan_cancel_fn = None
 _online_check_fn = None
 _content_proxy_fn = None
 _fetch_bytes_fn = None
@@ -66,6 +68,26 @@ _agent_scanning_fn = None
 _disk_stats_fn = None
 _location_changed_fn = None
 _agent_status_fn = None
+
+
+def set_scan_trigger(fn):
+    """No-op — kept for backward compatibility with old Pro packages."""
+    global _scan_trigger_fn
+    _scan_trigger_fn = fn
+
+
+def get_scan_trigger():
+    return _scan_trigger_fn
+
+
+def set_scan_cancel(fn):
+    """No-op — kept for backward compatibility with old Pro packages."""
+    global _scan_cancel_fn
+    _scan_cancel_fn = fn
+
+
+def get_scan_cancel():
+    return _scan_cancel_fn
 
 
 def set_online_check(fn):
