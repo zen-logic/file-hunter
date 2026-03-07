@@ -190,23 +190,28 @@ async def _drain_queue():
     try:
         await asyncio.sleep(0.05)
 
-        # Single pass: try to start items whose executor is free
-        items = list(_queue)
-        _queue.clear()
-        deferred = deque()
+        # Single pass: try to start items whose executor is free.
+        # Items stay in _queue until launched — never temporarily empty.
+        launched = []
+        skipped = []
 
-        for entry in items:
+        for entry in list(_queue):
             executor = await _get_executor_key(entry["location_id"])
 
             if executor in _running or executor == "unassigned":
-                deferred.append(entry)
                 continue
 
             result = await _try_launch(entry, executor)
-            if result == "deferred":
-                deferred.append(entry)
+            if result == "started":
+                launched.append(entry)
+            elif result == "skipped":
+                skipped.append(entry)
 
-        _queue.extend(deferred)
+        for entry in launched + skipped:
+            try:
+                _queue.remove(entry)
+            except ValueError:
+                pass
     finally:
         _draining = False
         await _persist_queue()
@@ -296,7 +301,12 @@ async def retry_queue():
 
 async def clear_queue():
     """Persist pending items then drop them (used during shutdown)."""
-    global _shutting_down
+    global _shutting_down, _draining
+    # Wait for any active drain to finish so _queue is complete
+    for _ in range(50):
+        if not _draining:
+            break
+        await asyncio.sleep(0.1)
     await _persist_queue()
     _shutting_down = True
     _queue.clear()
