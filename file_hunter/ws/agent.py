@@ -429,7 +429,7 @@ async def agent_ws_endpoint(websocket: WebSocket):
                 msg.setdefault("filesFound", 0)
                 msg.setdefault("filesHashed", 0)
                 msg.setdefault("filesSkipped", 0)
-                msg.setdefault("duplicatesFound", 0)
+                msg["potentialMatches"] = scan_ingest.get_potential_matches(agent_id)
                 await broadcast(msg)
 
             elif msg_type == "scan_files":

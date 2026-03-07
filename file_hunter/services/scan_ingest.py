@@ -38,6 +38,7 @@ class AgentScanSession:
         self.scan_path = scan_path
         self.folder_cache: dict[str, tuple] = {}
         self.files_ingested = 0
+        self.potential_matches = 0
         self.affected_hashes: set[str] = set()
         self.db = None
 
@@ -56,6 +57,12 @@ def get_session_location(agent_id: int) -> tuple[int, str] | None:
     if session:
         return session.location_id, session.location_name
     return None
+
+
+def get_potential_matches(agent_id: int) -> int:
+    """Return running count of potential cross-location matches for this scan."""
+    session = _active_sessions.get(agent_id)
+    return session.potential_matches if session else 0
 
 
 def is_location_scanning(location_id: int) -> bool:
@@ -178,6 +185,34 @@ async def ingest_batch(agent_id: int, files: list[dict]):
             session.affected_hashes.add(hs)
 
     await db.commit()
+
+    # Check for potential cross-location matches by (file_size, hash_partial)
+    candidates = [
+        (f.get("file_size", 0), f.get("hash_partial"))
+        for f in files
+        if f.get("hash_partial")
+    ]
+    if candidates:
+        conditions = " OR ".join(
+            "(file_size = ? AND hash_partial = ?)" for _ in candidates
+        )
+        params = []
+        for size, hp in candidates:
+            params.extend([size, hp])
+        params.append(session.location_id)
+        rows = await db.execute_fetchall(
+            f"""SELECT DISTINCT file_size, hash_partial FROM files
+                WHERE ({conditions})
+                  AND location_id != ?
+                  AND stale = 0""",
+            params,
+        )
+        if rows:
+            matched_pairs = {(r["file_size"], r["hash_partial"]) for r in rows}
+            new_matches = sum(
+                1 for size, hp in candidates if (size, hp) in matched_pairs
+            )
+            session.potential_matches += new_matches
 
 
 async def complete_session(agent_id: int, path: str) -> int:
