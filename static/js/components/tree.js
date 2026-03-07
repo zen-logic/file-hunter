@@ -484,13 +484,32 @@ const Tree = {
                 sb.className = 'tree-badge scanning';
                 sb.textContent = 'scanning';
                 item.appendChild(sb);
+                const cb = document.createElement('span');
+                cb.className = 'tree-badge cancel tree-badge-clickable';
+                cb.textContent = 'cancel';
+                cb.title = 'Cancel scan';
+                cb.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const ok = await ConfirmModal.open({
+                        title: 'Cancel Scan',
+                        message: `Stop scanning "${node.label}"? Files already cataloged will be kept.`,
+                        confirmLabel: 'Cancel Scan',
+                    });
+                    if (!ok) return;
+                    await API.post('/api/scan/cancel', { location_id: node.id });
+                });
+                item.appendChild(cb);
             } else if (this._queuedLocations.has(node.id)) {
                 const qb = document.createElement('span');
-                qb.className = 'tree-badge queued tree-badge-clickable';
+                qb.className = 'tree-badge queued';
                 qb.textContent = 'queued';
-                qb.title = 'Click to remove from queue';
+                item.appendChild(qb);
+                const cb = document.createElement('span');
+                cb.className = 'tree-badge cancel tree-badge-clickable';
+                cb.textContent = 'cancel';
+                cb.title = 'Remove from queue';
                 const queueId = this._queuedLocations.get(node.id);
-                qb.addEventListener('click', async (e) => {
+                cb.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     const ok = await ConfirmModal.open({
                         title: 'Remove from Queue',
@@ -500,12 +519,27 @@ const Tree = {
                     if (!ok) return;
                     await API.post('/api/scan/cancel', { queue_id: queueId });
                 });
-                item.appendChild(qb);
+                item.appendChild(cb);
             } else if (this._backfillingLocations.has(node.id)) {
                 const bb = document.createElement('span');
                 bb.className = 'tree-badge backfilling';
                 bb.textContent = 'backfilling';
                 item.appendChild(bb);
+                const cb = document.createElement('span');
+                cb.className = 'tree-badge cancel tree-badge-clickable';
+                cb.textContent = 'cancel';
+                cb.title = 'Cancel backfill';
+                cb.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const ok = await ConfirmModal.open({
+                        title: 'Cancel Backfill',
+                        message: `Stop backfilling hashes on "${node.label}"? Hashes already computed will be kept.`,
+                        confirmLabel: 'Cancel Backfill',
+                    });
+                    if (!ok) return;
+                    await API.post('/api/scan/cancel', { location_id: node.id, type: 'backfill' });
+                });
+                item.appendChild(cb);
             }
         }
 

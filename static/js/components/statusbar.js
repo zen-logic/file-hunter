@@ -82,11 +82,9 @@ const StatusBar = {
             this.activityEl.innerHTML = `
                 <span class="status-activity-text scanning">
                     Scanning: ${detail || '...'}
-                    <button class="status-cancel-btn" id="status-cancel-scan">Cancel</button>
                     ${this._renderQueueBadge()}
                 </span>
             `;
-            document.getElementById('status-cancel-scan').addEventListener('click', () => this._cancelScan());
         } else if (state === 'consolidating') {
             this._scanningLocationId = null;
             this.activityEl.innerHTML = `
@@ -106,11 +104,8 @@ const StatusBar = {
             this.activityEl.innerHTML = `
                 <span class="status-activity-text scanning">
                     Merging: ${detail || '...'}
-                    <button class="status-cancel-btn" id="status-cancel-merge">Cancel</button>
                 </span>
             `;
-            document.getElementById('status-cancel-merge')
-                .addEventListener('click', async () => { await API.post('/api/merge/cancel'); });
         } else {
             this._scanningLocationId = null;
             this.activityEl.innerHTML = `
@@ -147,16 +142,6 @@ const StatusBar = {
 
     getQueue() {
         return this._pendingQueue;
-    },
-
-    async _cancelScan() {
-        if (!this._scanningLocationId) return;
-        const res = await API.post('/api/scan/cancel', { location_id: this._scanningLocationId });
-        if (res.ok) {
-            this.activityEl.innerHTML = `
-                <span class="status-activity-text scanning">Cancelling\u2026</span>
-            `;
-        }
     },
 
     renderConnection(connected) {

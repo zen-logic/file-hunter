@@ -535,6 +535,15 @@ body::after {
     color: var(--color-backfill-text);
 }
 
+.tree-badge.cancel {
+    border: 1px solid var(--color-status-error);
+    color: var(--color-status-error);
+}
+.tree-badge.cancel:hover {
+    background: var(--color-status-error);
+    color: #fff;
+}
+
 .tree-badge.readonly {
     background: var(--color-surface-active);
     color: var(--color-text-muted);

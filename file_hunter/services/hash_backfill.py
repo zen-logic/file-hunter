@@ -32,6 +32,15 @@ def cancel_backfill(agent_id: int):
         _active_backfills[agent_id] = True
 
 
+def cancel_backfill_by_location(location_id: int) -> bool:
+    """Request cancellation of a running backfill by location_id. Returns True if found."""
+    for aid, (loc_id, _) in _backfill_info.items():
+        if loc_id == location_id:
+            cancel_backfill(aid)
+            return True
+    return False
+
+
 def get_active_backfill_info(agent_id: int) -> tuple[int, str] | None:
     """Return (location_id, location_name) if a backfill is running for this agent."""
     return _backfill_info.get(agent_id)
