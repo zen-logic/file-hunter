@@ -1,6 +1,8 @@
+import json
+
 from starlette.requests import Request
-from file_hunter.db import get_db
-from file_hunter.core import json_ok
+from file_hunter.db import get_db, execute_write
+from file_hunter.core import json_ok, json_error
 from file_hunter.services.search import (
     search_files,
     search_files_advanced,
@@ -58,3 +60,41 @@ async def search(request: Request):
             sort_dir=sort_dir,
         )
     return json_ok(results)
+
+
+async def list_saved_searches(request: Request):
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id, name, params, created_at FROM saved_searches ORDER BY created_at DESC"
+    )
+    return json_ok([dict(r) for r in rows])
+
+
+async def create_saved_search(request: Request):
+    data = await request.json()
+    name = data.get("name", "").strip()
+    params = data.get("params")
+    if not name or not params:
+        return json_error("name and params required")
+
+    async def _insert(conn, n, p):
+        cursor = await conn.execute(
+            "INSERT INTO saved_searches (name, params) VALUES (?, ?)",
+            (n, json.dumps(p) if isinstance(p, dict) else str(p)),
+        )
+        await conn.commit()
+        return cursor.lastrowid
+
+    row_id = await execute_write(_insert, name, params)
+    return json_ok({"id": row_id})
+
+
+async def delete_saved_search(request: Request):
+    search_id = request.path_params["id"]
+
+    async def _delete(conn, sid):
+        await conn.execute("DELETE FROM saved_searches WHERE id = ?", (sid,))
+        await conn.commit()
+
+    await execute_write(_delete, search_id)
+    return json_ok({})

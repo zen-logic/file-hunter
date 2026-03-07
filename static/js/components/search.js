@@ -1,3 +1,8 @@
+import API from '../api.js';
+import PromptModal from './prompt.js';
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
 const FIELD_OPTIONS = [
     { value: 'name', label: 'Name' },
     { value: 'type', label: 'Type' },
@@ -65,6 +70,7 @@ const Search = {
 
         this._updateSearchBtn();
         this._initAdvanced();
+        this._initSavedSearches();
     },
 
     toggle() {
@@ -501,6 +507,150 @@ const Search = {
         document.getElementById('search-adv-files').checked = true;
         document.getElementById('search-adv-folders').checked = false;
         this._addCondition('include');
+    },
+
+    // ── Saved searches ──
+
+    _savedParams: {},
+
+    _initSavedSearches() {
+        PromptModal.init();
+        document.getElementById('search-save').addEventListener('click', () => this._saveSearch());
+        document.getElementById('search-adv-save').addEventListener('click', () => this._saveSearch());
+        this.loadSavedSearches();
+    },
+
+    async _saveSearch() {
+        if (!this._hasFilters()) return;
+        const values = this._getValues();
+        const name = await PromptModal.open({
+            title: 'Save Search',
+            message: 'Save current search as:',
+            placeholder: 'Search name...',
+        });
+        if (!name) return;
+        const res = await API.post('/api/searches', { name, params: values });
+        if (res.ok) this.loadSavedSearches();
+    },
+
+    async loadSavedSearches() {
+        const res = await API.get('/api/searches');
+        if (!res.ok) return;
+        this._renderSavedSearches(res.data);
+    },
+
+    _renderSavedSearches(searches) {
+        const container = document.getElementById('saved-searches');
+        if (!searches.length) { container.innerHTML = ''; return; }
+
+        this._savedParams = {};
+        for (const s of searches) {
+            this._savedParams[s.id] = typeof s.params === 'string' ? JSON.parse(s.params) : s.params;
+        }
+
+        container.innerHTML = searches.map(s =>
+            `<span class="saved-search-item" data-id="${s.id}">` +
+            `<span class="saved-search-name">${esc(s.name)}</span>` +
+            `<span class="saved-search-delete" data-id="${s.id}">&times;</span>` +
+            `</span>`
+        ).join('');
+
+        container.querySelectorAll('.saved-search-name').forEach(el => {
+            el.addEventListener('click', () => {
+                const item = el.closest('.saved-search-item');
+                const params = this._savedParams[item.dataset.id];
+                if (params) this._applySavedSearch(params);
+            });
+        });
+
+        container.querySelectorAll('.saved-search-delete').forEach(el => {
+            el.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await API.delete(`/api/searches/${el.dataset.id}`);
+                this.loadSavedSearches();
+            });
+        });
+    },
+
+    _applySavedSearch(params) {
+        if (params.mode === 'advanced') {
+            // Switch to advanced mode if not already
+            if (this.mode !== 'advanced') this._toggleMode();
+            this._clearAdvanced();
+            // Rebuild conditions from saved params
+            if (params.conditions && params.conditions.length) {
+                // Remove the default condition added by _clearAdvanced
+                document.getElementById('search-conditions').innerHTML = '';
+                this.conditions = [];
+                this.nextCondId = 0;
+                for (const c of params.conditions) {
+                    const cond = this._addCondition(c.op || 'include');
+                    // Set field
+                    const row = document.querySelector(`.search-condition-row[data-cond-id="${cond.id}"]`);
+                    const fieldSel = row.querySelector('select.search-select');
+                    fieldSel.value = c.field;
+                    cond.field = c.field;
+                    const inputsDiv = row.querySelector('.search-condition-inputs');
+                    this._renderConditionInputs(inputsDiv, c.field);
+                    // Set values
+                    switch (c.field) {
+                        case 'size': {
+                            const minEl = inputsDiv.querySelector('[data-role="min"]');
+                            const maxEl = inputsDiv.querySelector('[data-role="max"]');
+                            if (minEl && c.min) minEl.value = c.min;
+                            if (maxEl && c.max) maxEl.value = c.max;
+                            break;
+                        }
+                        case 'date': {
+                            const fromEl = inputsDiv.querySelector('[data-role="from"]');
+                            const toEl = inputsDiv.querySelector('[data-role="to"]');
+                            if (fromEl && c.from) fromEl.value = c.from;
+                            if (toEl && c.to) toEl.value = c.to;
+                            break;
+                        }
+                        default: {
+                            const valEl = inputsDiv.querySelector('[data-role="value"]');
+                            const matchEl = inputsDiv.querySelector('[data-role="match"]');
+                            if (valEl && c.value) valEl.value = c.value;
+                            if (matchEl && c.match) matchEl.value = c.match;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (params.folders) document.getElementById('search-adv-folders').checked = true;
+            if (params.files === false) document.getElementById('search-adv-files').checked = false;
+        } else {
+            // Switch to basic mode if not already
+            if (this.mode !== 'basic') this._toggleMode();
+            // Clear all fields
+            document.getElementById('search-basic').querySelectorAll('input[type="text"], input[type="date"], input[type="number"]').forEach(el => el.value = '');
+            document.getElementById('search-basic').querySelectorAll('select').forEach(el => el.selectedIndex = 0);
+            document.getElementById('search-files').checked = true;
+            document.getElementById('search-folders').checked = false;
+            document.getElementById('search-dupes').checked = false;
+
+            if (params.name) document.getElementById('search-name').value = params.name;
+            if (params.nameMatch) document.getElementById('search-name-match').value = params.nameMatch;
+            if (params.type) document.getElementById('search-type').value = params.type;
+            if (params.description) document.getElementById('search-desc').value = params.description;
+            if (params.tags) document.getElementById('search-tags').value = params.tags;
+            if (params.sizeMin) document.getElementById('search-size-min').value = params.sizeMin;
+            if (params.sizeMax) document.getElementById('search-size-max').value = params.sizeMax;
+            if (params.minDups) document.getElementById('search-min-dups').value = params.minDups;
+            if (params.dateFrom) document.getElementById('search-date-from').value = params.dateFrom;
+            if (params.dateTo) document.getElementById('search-date-to').value = params.dateTo;
+            if (params.files === false) document.getElementById('search-files').checked = false;
+            if (params.folders) document.getElementById('search-folders').checked = true;
+            if (params.dupes) document.getElementById('search-dupes').checked = true;
+        }
+
+        // Show search panel and run
+        this.visible = true;
+        this.panelEl.classList.remove('hidden');
+        this.toggleBtn.classList.add('btn-active');
+        this._updateSearchBtn();
+        this._doSearch();
     },
 };
 

@@ -92,6 +92,48 @@ body::after {
     display: none;
 }
 
+.saved-searches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    padding: 0 1rem 0.4rem;
+}
+
+.saved-searches:empty {
+    display: none;
+}
+
+.saved-search-item {
+    font-size: var(--font-size-sm);
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    background: var(--color-surface-alt, var(--color-bg));
+    border: 1px solid var(--color-border);
+    color: var(--color-text-dim);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    cursor: pointer;
+}
+
+.saved-search-item:hover {
+    filter: brightness(1.2);
+}
+
+.saved-search-name {
+    cursor: pointer;
+}
+
+.saved-search-delete {
+    cursor: pointer;
+    opacity: 0.6;
+    font-size: var(--font-size-xs);
+}
+
+.saved-search-delete:hover {
+    opacity: 1;
+}
+
 .search-row {
     display: flex;
     align-items: center;
