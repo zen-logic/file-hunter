@@ -811,56 +811,213 @@ const Detail = {
         }
     },
 
+    // ── Hex viewer with paging and search ──
+
+    _hexPageSize: 4096,
+    _hexState: null,
+
     _openHexPreview(detail) {
         const m = this._previewModal;
         m.title.textContent = `${detail.name} — Hex`;
         m._fileId = detail.id;
         m._fileName = detail.name;
-        m.content.innerHTML = `<pre class="hex-dump">Loading...</pre>`;
+
+        m.content.innerHTML = `
+            <div class="hex-toolbar">
+                <button class="btn btn-sm" id="hex-top" title="Top">Top</button>
+                <button class="btn btn-sm" id="hex-prev" title="Previous page">Prev</button>
+                <button class="btn btn-sm" id="hex-next" title="Next page">Next</button>
+                <button class="btn btn-sm" id="hex-end" title="End">End</button>
+                <span class="hex-separator"></span>
+                <input type="text" class="hex-find-input" id="hex-find" placeholder="Find text or hex (0x...)">
+                <button class="btn btn-sm btn-primary" id="hex-find-go">Find</button>
+                <button class="btn btn-sm" id="hex-find-next">Next match</button>
+                <span class="hex-status" id="hex-status"></span>
+            </div>
+            <pre class="hex-dump" id="hex-output">Loading...</pre>`;
+
         m.downloadBtn.classList.remove('hidden');
         m.fullscreenBtn.classList.remove('hidden');
         m.overlay.classList.remove('hidden');
 
-        const url = `/api/files/${detail.id}/content`;
-        fetch(url, { headers: _authHeaders() })
-            .then(r => {
-                if (!r.ok) throw new Error('not available');
-                return r.arrayBuffer();
-            })
-            .then(buf => {
-                const bytes = new Uint8Array(buf);
-                const limit = 4096;
-                const truncated = bytes.length > limit;
-                const view = truncated ? bytes.slice(0, limit) : bytes;
-                const pre = m.content.querySelector('pre');
-                if (pre) {
-                    pre.textContent = this._formatHexDump(view)
-                        + (truncated ? `\n\n— Showing first ${limit.toLocaleString()} of ${bytes.length.toLocaleString()} bytes —` : '');
-                }
-            })
-            .catch(() => {
-                const pre = m.content.querySelector('pre');
-                if (pre) pre.textContent = '(Preview not available)';
-            });
+        this._hexState = {
+            fileId: detail.id,
+            offset: 0,
+            fileSize: 0,
+            searchBytes: null,
+            searchOffset: 0,
+        };
+
+        this._hexWireButtons();
+        this._hexLoadPage(0);
     },
 
-    _formatHexDump(bytes) {
+    _hexWireButtons() {
+        document.getElementById('hex-top').addEventListener('click', () => this._hexLoadPage(0));
+        document.getElementById('hex-prev').addEventListener('click', () => {
+            const s = this._hexState;
+            this._hexLoadPage(Math.max(0, s.offset - this._hexPageSize));
+        });
+        document.getElementById('hex-next').addEventListener('click', () => {
+            const s = this._hexState;
+            const next = s.offset + this._hexPageSize;
+            if (next < s.fileSize) this._hexLoadPage(next);
+        });
+        document.getElementById('hex-end').addEventListener('click', () => {
+            const s = this._hexState;
+            const last = Math.max(0, Math.floor((s.fileSize - 1) / this._hexPageSize) * this._hexPageSize);
+            this._hexLoadPage(last);
+        });
+
+        const findInput = document.getElementById('hex-find');
+        const findGo = document.getElementById('hex-find-go');
+        const findNext = document.getElementById('hex-find-next');
+
+        const doFind = () => this._hexFind(findInput.value.trim(), 0);
+        findGo.addEventListener('click', doFind);
+        findInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doFind(); });
+        findNext.addEventListener('click', () => {
+            const s = this._hexState;
+            if (s.searchBytes) this._hexFind(null, s.searchOffset + 1);
+        });
+    },
+
+    async _hexLoadPage(offset) {
+        const s = this._hexState;
+        const pre = document.getElementById('hex-output');
+        const status = document.getElementById('hex-status');
+        if (!pre) return;
+
+        pre.textContent = 'Loading...';
+
+        try {
+            const resp = await fetch(
+                `/api/files/${s.fileId}/bytes?offset=${offset}&limit=${this._hexPageSize}`,
+                { headers: _authHeaders() }
+            );
+            if (!resp.ok) { pre.textContent = '(Preview not available)'; return; }
+
+            s.fileSize = parseInt(resp.headers.get('X-File-Size') || '0', 10);
+            s.offset = offset;
+
+            const buf = await resp.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            pre.textContent = this._formatHexDump(bytes, offset);
+
+            const endByte = Math.min(offset + bytes.length, s.fileSize);
+            status.textContent = `${offset.toLocaleString()}–${endByte.toLocaleString()} of ${s.fileSize.toLocaleString()} bytes`;
+
+            // Update button states
+            document.getElementById('hex-prev').disabled = offset === 0;
+            document.getElementById('hex-top').disabled = offset === 0;
+            document.getElementById('hex-next').disabled = endByte >= s.fileSize;
+            document.getElementById('hex-end').disabled = endByte >= s.fileSize;
+        } catch {
+            pre.textContent = '(Preview not available)';
+        }
+    },
+
+    async _hexFind(query, startFrom) {
+        const s = this._hexState;
+        const status = document.getElementById('hex-status');
+
+        // Parse query into bytes to search for
+        if (query !== null) {
+            if (query.startsWith('0x') || query.startsWith('0X')) {
+                // Hex string: "0x48656c6c6f"
+                const hexStr = query.slice(2).replace(/\s/g, '');
+                if (!/^[0-9a-fA-F]*$/.test(hexStr) || hexStr.length % 2 !== 0) {
+                    status.textContent = 'Invalid hex string';
+                    return;
+                }
+                const bytes = [];
+                for (let i = 0; i < hexStr.length; i += 2) {
+                    bytes.push(parseInt(hexStr.slice(i, i + 2), 16));
+                }
+                s.searchBytes = new Uint8Array(bytes);
+            } else {
+                // Text string — encode as UTF-8
+                s.searchBytes = new TextEncoder().encode(query);
+            }
+            s.searchOffset = startFrom;
+        } else {
+            s.searchOffset = startFrom;
+        }
+
+        if (!s.searchBytes || s.searchBytes.length === 0) return;
+
+        status.textContent = 'Searching...';
+
+        // Search in chunks from the server
+        const needle = s.searchBytes;
+        const chunkSize = 65536;
+        let pos = s.searchOffset;
+
+        while (pos < s.fileSize) {
+            try {
+                // Fetch enough to find needle spanning chunk boundary
+                const fetchSize = chunkSize + needle.length - 1;
+                const resp = await fetch(
+                    `/api/files/${s.fileId}/bytes?offset=${pos}&limit=${fetchSize}`,
+                    { headers: _authHeaders() }
+                );
+                if (!resp.ok) { status.textContent = 'Search failed'; return; }
+
+                const buf = await resp.arrayBuffer();
+                const haystack = new Uint8Array(buf);
+                if (haystack.length === 0) break;
+
+                // Search within this chunk
+                const idx = this._findBytes(haystack, needle);
+                if (idx !== -1) {
+                    const foundAt = pos + idx;
+                    s.searchOffset = foundAt;
+                    // Load the page containing the match
+                    const pageStart = Math.floor(foundAt / this._hexPageSize) * this._hexPageSize;
+                    await this._hexLoadPage(pageStart);
+                    status.textContent = `Found at offset 0x${foundAt.toString(16)} (${foundAt.toLocaleString()})`;
+                    return;
+                }
+
+                // Advance past the chunk (minus needle overlap)
+                pos += chunkSize;
+            } catch {
+                status.textContent = 'Search failed';
+                return;
+            }
+        }
+
+        status.textContent = s.searchOffset > 0 ? 'No more matches' : 'Not found';
+    },
+
+    _findBytes(haystack, needle) {
+        outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+            for (let j = 0; j < needle.length; j++) {
+                if (haystack[i + j] !== needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
+    },
+
+    _formatHexDump(bytes, baseOffset) {
+        baseOffset = baseOffset || 0;
         const lines = [];
-        for (let offset = 0; offset < bytes.length; offset += 16) {
-            const row = bytes.slice(offset, offset + 16);
+        for (let i = 0; i < bytes.length; i += 16) {
+            const row = bytes.slice(i, i + 16);
             const hex = [];
             const chars = [];
-            for (let i = 0; i < 16; i++) {
-                if (i < row.length) {
-                    hex.push(row[i].toString(16).padStart(2, '0'));
-                    chars.push(row[i] >= 0x20 && row[i] <= 0x7e ? String.fromCharCode(row[i]) : '.');
+            for (let j = 0; j < 16; j++) {
+                if (j < row.length) {
+                    hex.push(row[j].toString(16).padStart(2, '0'));
+                    chars.push(row[j] >= 0x20 && row[j] <= 0x7e ? String.fromCharCode(row[j]) : '.');
                 } else {
                     hex.push('  ');
                     chars.push(' ');
                 }
             }
             const hexStr = hex.slice(0, 8).join(' ') + '  ' + hex.slice(8).join(' ');
-            lines.push(offset.toString(16).padStart(8, '0') + '  ' + hexStr + '  |' + chars.join('') + '|');
+            lines.push((baseOffset + i).toString(16).padStart(8, '0') + '  ' + hexStr + '  |' + chars.join('') + '|');
         }
         return lines.join('\n');
     },

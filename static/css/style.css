@@ -863,6 +863,44 @@ body::after {
     padding: 0 0.75rem 0.5rem;
 }
 
+.hex-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+    flex-shrink: 0;
+}
+
+.hex-separator {
+    width: 1px;
+    height: 1.2rem;
+    background: var(--color-border);
+    margin: 0 0.2rem;
+}
+
+.hex-find-input {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    color: var(--color-text);
+    font-size: var(--font-size-sm);
+    padding: 0.2rem 0.4rem;
+    width: 14rem;
+}
+
+.hex-find-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.hex-status {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    margin-left: auto;
+}
+
 .hex-dump {
     white-space: pre !important;
     word-break: normal !important;

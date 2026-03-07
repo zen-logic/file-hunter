@@ -151,6 +151,67 @@ async def file_content(request: Request):
     return FileResponse(full_path, media_type=media_type)
 
 
+async def file_bytes(request: Request):
+    """Return a slice of raw bytes from a file. For hex viewer paging."""
+    from starlette.responses import Response
+
+    db = await get_db()
+    file_id = int(request.path_params["id"])
+    row = await db.execute(
+        "SELECT full_path, location_id, file_size FROM files WHERE id = ?", (file_id,)
+    )
+    row = await row.fetchone()
+    if not row:
+        return json_error("File not found.", 404)
+
+    full_path = row["full_path"]
+    location_id = row["location_id"]
+    file_size = row["file_size"] or 0
+
+    from file_hunter.extensions import is_agent_location, get_fetch_bytes
+
+    if is_agent_location(location_id):
+        fetch_bytes = get_fetch_bytes()
+        if fetch_bytes:
+            offset = int(request.query_params.get("offset", 0))
+            limit = min(int(request.query_params.get("limit", 4096)), 65536)
+            data = await fetch_bytes(file_id, full_path, offset, limit)
+            if data is not None:
+                return Response(
+                    content=data,
+                    media_type="application/octet-stream",
+                    headers={
+                        "X-File-Size": str(file_size),
+                        "X-Offset": str(offset),
+                    },
+                )
+        return json_error("File not available (agent offline).", 404)
+
+    if not await asyncio.to_thread(os.path.isfile, full_path):
+        return json_error("File not available (offline or missing).", 404)
+
+    offset = int(request.query_params.get("offset", 0))
+    limit = min(int(request.query_params.get("limit", 4096)), 65536)
+
+    def _read_slice():
+        with open(full_path, "rb") as f:
+            f.seek(offset)
+            return f.read(limit)
+
+    data = await asyncio.to_thread(_read_slice)
+    # Use actual file size from disk if DB value is stale
+    actual_size = await asyncio.to_thread(os.path.getsize, full_path)
+
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={
+            "X-File-Size": str(actual_size),
+            "X-Offset": str(offset),
+        },
+    )
+
+
 async def file_update(request: Request):
     file_id = int(request.path_params["id"])
     body = await request.json()
