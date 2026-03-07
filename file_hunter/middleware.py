@@ -64,9 +64,9 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
 
         elif scope["type"] == "websocket":
-            # Extension-registered WS paths handle their own auth
+            # Agent WS and extension-registered WS paths handle their own auth
             ws_path = scope.get("path", "")
-            if ws_path in get_public_ws_paths():
+            if ws_path == "/ws/agent" or ws_path in get_public_ws_paths():
                 await self.app(scope, receive, send)
                 return
 

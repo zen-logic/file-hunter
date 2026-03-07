@@ -91,6 +91,28 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    token_prefix TEXT NOT NULL,
+    hostname TEXT DEFAULT '',
+    os TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'offline',
+    date_created TEXT NOT NULL,
+    date_last_seen TEXT,
+    http_host TEXT DEFAULT '',
+    http_port TEXT DEFAULT '8001'
+);
+
+CREATE TABLE IF NOT EXISTS pending_backfills (
+    agent_id INTEGER NOT NULL,
+    location_id INTEGER NOT NULL,
+    location_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (agent_id, location_id)
+);
+
 CREATE TABLE IF NOT EXISTS ignored_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT NOT NULL,
@@ -140,6 +162,7 @@ _MIGRATIONS = [
     "ALTER TABLE folders ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE files ADD COLUMN dup_exclude INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE folders ADD COLUMN dup_exclude INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE locations ADD COLUMN agent_id INTEGER REFERENCES agents(id)",
 ]
 
 
@@ -193,6 +216,9 @@ async def init_db(db: aiosqlite.Connection):
         "CREATE INDEX IF NOT EXISTS idx_files_dup_count ON files(dup_count)"
     )
     await db.execute("DROP INDEX IF EXISTS idx_files_hidden")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_locations_agent_id ON locations(agent_id)"
+    )
     await db.commit()
 
     return not exists

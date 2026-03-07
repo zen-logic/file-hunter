@@ -1,0 +1,421 @@
+"""Post-scan hash backfill for agent locations.
+
+After an agent scan completes, most files lack hash_strong because the agent
+only computes SHA-256 when duplicate sizes exist within its 50-file batches.
+This service identifies files needing full hashes (via size + hash_partial
+matches across locations) and requests them from the agent via HTTP, then
+backfills matching local files too.
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timezone
+
+from file_hunter.db import get_db, execute_write, open_connection
+from file_hunter.services.hasher import hash_file
+from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.ws.scan import broadcast
+
+logger = logging.getLogger("file_hunter")
+
+# agent_id -> cancel flag (True = cancel requested)
+_active_backfills: dict[int, bool] = {}
+# agent_id -> (location_id, location_name) for running backfills
+_backfill_info: dict[int, tuple[int, str]] = {}
+# agent_id -> (location_id, location_name) for backfills to resume on reconnect
+_pending_backfills: dict[int, tuple[int, str]] = {}
+
+
+def cancel_backfill(agent_id: int):
+    """Request cancellation of a running backfill for this agent."""
+    if agent_id in _active_backfills:
+        _active_backfills[agent_id] = True
+
+
+def get_active_backfill_info(agent_id: int) -> tuple[int, str] | None:
+    """Return (location_id, location_name) if a backfill is running for this agent."""
+    return _backfill_info.get(agent_id)
+
+
+async def queue_pending_backfill(agent_id: int, location_id: int, location_name: str):
+    """Store a backfill to resume when the agent reconnects."""
+    _pending_backfills[agent_id] = (location_id, location_name)
+    await persist_backfill(agent_id, location_id, location_name)
+
+
+async def pop_pending_backfill(agent_id: int) -> tuple[int, str] | None:
+    """Pop and return a pending backfill for this agent, or None."""
+    result = _pending_backfills.pop(agent_id, None)
+    if result is not None:
+        await clear_persisted_backfill(agent_id, result[0])
+    return result
+
+
+async def persist_backfill(agent_id: int, location_id: int, location_name: str):
+    """Persist a pending backfill to the database."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    async def _write(conn, aid, lid, lname, ts):
+        await conn.execute(
+            "INSERT OR REPLACE INTO pending_backfills "
+            "(agent_id, location_id, location_name, created_at) VALUES (?, ?, ?, ?)",
+            (aid, lid, lname, ts),
+        )
+        await conn.commit()
+
+    await execute_write(_write, agent_id, location_id, location_name, now)
+
+
+async def clear_persisted_backfill(agent_id: int, location_id: int):
+    """Remove a persisted backfill from the database."""
+
+    async def _delete(conn, aid, lid):
+        await conn.execute(
+            "DELETE FROM pending_backfills WHERE agent_id = ? AND location_id = ?",
+            (aid, lid),
+        )
+        await conn.commit()
+
+    await execute_write(_delete, agent_id, location_id)
+
+
+async def load_persisted_backfills() -> list[tuple[int, int, str]]:
+    """Load all persisted backfills from the database."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT agent_id, location_id, location_name FROM pending_backfills"
+    )
+    return [(r["agent_id"], r["location_id"], r["location_name"]) for r in rows]
+
+
+async def restore_backfills():
+    """Reload pending backfills from DB into memory on startup."""
+    rows = await load_persisted_backfills()
+    for agent_id, location_id, location_name in rows:
+        _pending_backfills[agent_id] = (location_id, location_name)
+    if rows:
+        logger.info("Restored %d pending backfill(s) from previous session", len(rows))
+
+
+async def run_backfill(agent_id: int, location_id: int, location_name: str):
+    """Find files missing hash_strong that have cross-location size+partial
+    matches, request full hashes from the agent, then backfill local matches.
+    """
+    from file_hunter.services.agent_ops import dispatch
+
+    _active_backfills[agent_id] = False
+    _backfill_info[agent_id] = (location_id, location_name)
+    await persist_backfill(agent_id, location_id, location_name)
+    db = None
+
+    try:
+        db = await open_connection()
+
+        candidates = await db.execute_fetchall(
+            """SELECT f.id, f.full_path, f.file_size, f.hash_partial
+               FROM files f
+               WHERE f.location_id = ?
+                 AND f.hash_strong IS NULL
+                 AND f.hash_partial IS NOT NULL
+                 AND f.stale = 0
+                 AND EXISTS (
+                     SELECT 1 FROM files f2
+                     WHERE f2.file_size = f.file_size
+                       AND f2.hash_partial = f.hash_partial
+                       AND f2.location_id != f.location_id
+                 )""",
+            (location_id,),
+        )
+
+        if not candidates:
+            logger.info(
+                "Backfill: no candidates for %s (location %d)",
+                location_name,
+                location_id,
+            )
+            return
+
+        total = len(candidates)
+        logger.info(
+            "Backfill: %d candidates for %s (location %d)",
+            total,
+            location_name,
+            location_id,
+        )
+
+        await broadcast(
+            {
+                "type": "backfill_started",
+                "locationId": location_id,
+                "location": location_name,
+                "totalFiles": total,
+            }
+        )
+
+        sem = asyncio.Semaphore(3)
+        agent_hashed = 0
+        agent_errors = 0
+        pending_writes: list[tuple] = []
+        affected_hashes: set[str] = set()
+        batch_size = 20
+
+        async def _hash_one(file_id: int, full_path: str):
+            nonlocal agent_hashed, agent_errors
+            if _active_backfills.get(agent_id):
+                return
+            async with sem:
+                if _active_backfills.get(agent_id):
+                    return
+                try:
+                    result = await dispatch("file_hash", location_id, path=full_path)
+                    pending_writes.append(
+                        (file_id, result["hash_fast"], result["hash_strong"])
+                    )
+                    affected_hashes.add(result["hash_strong"])
+                    agent_hashed += 1
+                except Exception as e:
+                    agent_errors += 1
+                    logger.warning("Backfill: hash failed for %s: %r", full_path, e)
+
+        for i, row in enumerate(candidates):
+            if _active_backfills.get(agent_id):
+                break
+
+            await _hash_one(row["id"], row["full_path"])
+
+            if len(pending_writes) >= batch_size:
+                await _flush_writes(db, pending_writes)
+                pending_writes.clear()
+                invalidate_stats_cache()
+                await broadcast(
+                    {
+                        "type": "backfill_progress",
+                        "locationId": location_id,
+                        "location": location_name,
+                        "filesHashed": agent_hashed,
+                        "totalFiles": total,
+                    }
+                )
+
+        if pending_writes:
+            await _flush_writes(db, pending_writes)
+            pending_writes.clear()
+
+        cancelled = _active_backfills.get(agent_id, False)
+
+        # Local backfill: find local files that match by (size, partial)
+        # against the newly-hashed agent files, but still lack hash_strong
+        local_hashed = 0
+        if not cancelled:
+            local_hashed = await _backfill_local(db, location_id, affected_hashes)
+
+        # Cross-agent backfill: hash files on other connected agents
+        cancelled = _active_backfills.get(agent_id, False)
+        cross_agent_hashed = 0
+        if not cancelled:
+            cross_agent_hashed = await _backfill_agents(
+                db, agent_id, location_id, affected_hashes
+            )
+
+        if affected_hashes:
+            from file_hunter.services.dup_counts import recalculate_dup_counts
+
+            await recalculate_dup_counts(
+                db, affected_hashes, source=f"backfill {location_name}"
+            )
+
+        dup_count = 0
+        if agent_hashed > 0 or local_hashed > 0 or cross_agent_hashed > 0:
+            invalidate_stats_cache()
+            dup_rows = await db.execute_fetchall(
+                """SELECT COUNT(*) as c FROM files f
+                   WHERE f.location_id = ?
+                     AND f.hash_strong IS NOT NULL
+                     AND f.hash_strong != ''
+                     AND EXISTS (
+                         SELECT 1 FROM files f2
+                         WHERE f2.hash_strong = f.hash_strong
+                           AND f2.id != f.id
+                           AND f2.location_id != f.location_id
+                     )""",
+                (location_id,),
+            )
+            dup_count = dup_rows[0]["c"] if dup_rows else 0
+
+        await broadcast(
+            {
+                "type": "backfill_completed",
+                "locationId": location_id,
+                "location": location_name,
+                "agentFilesHashed": agent_hashed,
+                "agentErrors": agent_errors,
+                "localFilesHashed": local_hashed,
+                "crossAgentFilesHashed": cross_agent_hashed,
+                "duplicatesFound": dup_count,
+                "cancelled": cancelled,
+            }
+        )
+
+        logger.info(
+            "Backfill %s for %s: %d agent, %d errors, %d local, %d cross-agent, %d dups",
+            "cancelled" if cancelled else "completed",
+            location_name,
+            agent_hashed,
+            agent_errors,
+            local_hashed,
+            cross_agent_hashed,
+            dup_count,
+        )
+
+    except Exception as e:
+        logger.error("Backfill error for %s: %s", location_name, e)
+        await broadcast(
+            {
+                "type": "backfill_completed",
+                "locationId": location_id,
+                "location": location_name,
+                "agentFilesHashed": 0,
+                "localFilesHashed": 0,
+                "duplicatesFound": 0,
+                "cancelled": True,
+                "error": str(e),
+            }
+        )
+    finally:
+        _active_backfills.pop(agent_id, None)
+        _backfill_info.pop(agent_id, None)
+        await clear_persisted_backfill(agent_id, location_id)
+        if db:
+            await db.close()
+
+
+async def _flush_writes(db, writes: list[tuple[int, str, str]]):
+    """Batch-update hash_fast and hash_strong for a list of file IDs."""
+    for file_id, hash_fast, hash_strong in writes:
+        await db.execute(
+            "UPDATE files SET hash_fast = ?, hash_strong = ? WHERE id = ?",
+            (hash_fast, hash_strong, file_id),
+        )
+    await db.commit()
+
+
+async def _backfill_agents(
+    db, agent_id: int, agent_location_id: int, affected_hashes: set[str]
+) -> int:
+    """Hash files on OTHER agent locations that match by (size, partial)."""
+    from file_hunter.services.agent_ops import dispatch
+    from file_hunter.services.online_check import agent_online_check
+
+    rows = await db.execute_fetchall(
+        """SELECT f.id, f.full_path, f.location_id
+           FROM files f
+           WHERE f.hash_strong IS NULL
+             AND f.hash_partial IS NOT NULL
+             AND f.stale = 0
+             AND f.location_id != ?
+             AND EXISTS (
+                 SELECT 1 FROM files f2
+                 WHERE f2.location_id = ?
+                   AND f2.file_size = f.file_size
+                   AND f2.hash_partial = f.hash_partial
+                   AND f2.hash_strong IS NOT NULL
+             )
+             AND f.location_id IN (
+                 SELECT id FROM locations WHERE agent_id IS NOT NULL
+             )""",
+        (agent_location_id, agent_location_id),
+    )
+
+    if not rows:
+        return 0
+
+    candidate_loc_ids = {row["location_id"] for row in rows}
+    online_loc_ids = set()
+    for loc_id in candidate_loc_ids:
+        status = agent_online_check({"id": loc_id})
+        if status is True:
+            online_loc_ids.add(loc_id)
+        elif status is False:
+            logger.info("Backfill: skipping offline location %d", loc_id)
+
+    hashed = 0
+    pending: list[tuple] = []
+
+    for row in rows:
+        if row["location_id"] not in online_loc_ids:
+            continue
+        if _active_backfills.get(agent_id):
+            break
+        try:
+            result = await dispatch(
+                "file_hash", row["location_id"], path=row["full_path"]
+            )
+            pending.append((row["id"], result["hash_fast"], result["hash_strong"]))
+            affected_hashes.add(result["hash_strong"])
+            hashed += 1
+        except Exception as e:
+            logger.warning(
+                "Backfill agent: hash failed for %s: %r", row["full_path"], e
+            )
+
+        if len(pending) >= 20:
+            await _flush_writes(db, pending)
+            pending.clear()
+            invalidate_stats_cache()
+
+    if pending:
+        await _flush_writes(db, pending)
+        invalidate_stats_cache()
+
+    return hashed
+
+
+async def _backfill_local(db, agent_location_id: int, affected_hashes: set[str]) -> int:
+    """Hash local files that match agent files by (size, partial) but lack hash_strong."""
+    rows = await db.execute_fetchall(
+        """SELECT f.id, f.full_path
+           FROM files f
+           WHERE f.hash_strong IS NULL
+             AND f.hash_partial IS NOT NULL
+             AND f.stale = 0
+             AND f.location_id != ?
+             AND EXISTS (
+                 SELECT 1 FROM files f2
+                 WHERE f2.location_id = ?
+                   AND f2.file_size = f.file_size
+                   AND f2.hash_partial = f.hash_partial
+                   AND f2.hash_strong IS NOT NULL
+             )
+             AND f.location_id NOT IN (
+                 SELECT id FROM locations WHERE agent_id IS NOT NULL
+             )""",
+        (agent_location_id, agent_location_id),
+    )
+
+    if not rows:
+        return 0
+
+    hashed = 0
+    pending: list[tuple] = []
+
+    for row in rows:
+        try:
+            hash_fast, hash_strong = await hash_file(row["full_path"])
+            pending.append((row["id"], hash_fast, hash_strong))
+            affected_hashes.add(hash_strong)
+            hashed += 1
+        except Exception as e:
+            logger.warning(
+                "Backfill local: hash failed for %s: %r", row["full_path"], e
+            )
+
+        if len(pending) >= 20:
+            await _flush_writes(db, pending)
+            pending.clear()
+            invalidate_stats_cache()
+
+    if pending:
+        await _flush_writes(db, pending)
+        invalidate_stats_cache()
+
+    return hashed

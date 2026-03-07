@@ -1032,7 +1032,11 @@ function syncQueuedLocations(queue) {
     Tree._queuedLocations.clear();
     Tree._scanningLocations.clear();
     if (queue) {
-        if (queue.running_location_id) {
+        if (queue.running_location_ids) {
+            for (const locId of queue.running_location_ids) {
+                Tree._scanningLocations.add('loc-' + locId);
+            }
+        } else if (queue.running_location_id) {
             Tree._scanningLocations.add('loc-' + queue.running_location_id);
         }
         if (queue.pending) {

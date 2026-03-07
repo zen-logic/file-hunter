@@ -7,6 +7,7 @@ from pathlib import Path
 
 from file_hunter.db import get_db, close_db
 from file_hunter.ws.scan import ws_endpoint
+from file_hunter.ws.agent import agent_ws_endpoint
 from file_hunter.routes.locations import (
     list_locations,
     add_location,
@@ -100,7 +101,33 @@ except Exception:
 
 
 async def on_startup():
+    import logging
+
+    logger = logging.getLogger("file_hunter")
+
     db = await get_db()
+
+    # Auto-create local agent on first run
+    from file_hunter.services.agents import ensure_local_agent
+
+    token = await ensure_local_agent(db)
+    if token:
+        logger.info(
+            "\n"
+            "╔══════════════════════════════════════════════════════════╗\n"
+            "║  LOCAL AGENT PAIRING TOKEN (shown once — save it now):  ║\n"
+            "║                                                        ║\n"
+            "║  %s  ║\n"
+            "║                                                        ║\n"
+            "║  Configure your file-hunter-agent with this token.     ║\n"
+            "╚══════════════════════════════════════════════════════════╝",
+            token,
+        )
+
+    from file_hunter.services.online_check import load_agent_location_ids
+
+    await load_agent_location_ids()
+
     from file_hunter.services.sizes import populate_all_sizes_if_needed
 
     await populate_all_sizes_if_needed(db)
@@ -118,6 +145,10 @@ async def on_startup():
 
     await restore_dup_exclude()
 
+    from file_hunter.services.hash_backfill import restore_backfills
+
+    await restore_backfills()
+
     from file_hunter.services.dup_counts import backfill_dup_counts
 
     asyncio.get_event_loop().create_task(backfill_dup_counts())
@@ -128,11 +159,9 @@ async def on_startup():
 
 
 async def on_shutdown():
-    from file_hunter.services.scanner import cancel_all_scans
     from file_hunter.services.scan_queue import clear_queue
 
     await clear_queue()
-    await cancel_all_scans()
     await close_db()
 
 
@@ -207,6 +236,7 @@ app = Starlette(
         Route("/api/locations/{id:int}/stats", location_stats, methods=["GET"]),
         Route("/api/folders/{id:int}/stats", folder_stats, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),
+        WebSocketRoute("/ws/agent", agent_ws_endpoint),
         *extensions.get_routes(),
         *[
             Mount(path, app=StaticFiles(directory=d))

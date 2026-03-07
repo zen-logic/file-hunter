@@ -1,12 +1,14 @@
 """Per-location scheduled scan loop.
 
 Wakes every 60 seconds and checks if any location with an enabled schedule
-is due for a scan.  Uses the existing scan queue so scheduled scans are
+is due for a scan. Uses the existing scan queue so scheduled scans are
 indistinguishable from manual ones (full WebSocket progress, status bar, etc.).
+
+All scanning is agent-based — locations are enqueued and the queue handles
+triggering the appropriate agent.
 """
 
 import asyncio
-import os
 from datetime import datetime
 
 from file_hunter.db import get_db, execute_write
@@ -51,26 +53,7 @@ async def _check_schedules():
             continue
         if _already_ran_today(row["scan_schedule_last_run"], now):
             continue
-        # Agent-backed locations go through the scan trigger hook, not the queue
-        from file_hunter.extensions import is_agent_location, get_scan_trigger
 
-        if is_agent_location(row["id"]):
-            scan_trigger = get_scan_trigger()
-            if scan_trigger:
-                try:
-                    handled = await scan_trigger(
-                        row["id"], row["name"], row["root_path"], None
-                    )
-                    if handled:
-                        await _update_last_run(row["id"], now)
-                except Exception:
-                    pass
-            continue
-
-        # Check local location is online
-        if not await asyncio.to_thread(os.path.isdir, row["root_path"]):
-            continue
-        # Enqueue via the scan queue — ValueError if already queued/running
         try:
             await enqueue(row["id"], row["name"], row["root_path"])
             await _update_last_run(row["id"], now)

@@ -3,6 +3,11 @@
 The pro package (file_hunter_pro) calls these functions from its register()
 entry point to inject routes, static mounts, and startup hooks into the core
 app before Starlette is constructed.
+
+Agent infrastructure (WS handler, scan ingest, content proxy, backfill) lives
+in core. The extension hooks below allow Pro to override or extend behaviour
+(e.g. multi-agent support). When no override is set, the getters fall back to
+core implementations.
 """
 
 _extra_routes = []
@@ -48,21 +53,19 @@ def get_public_ws_paths():
 
 
 # ---------------------------------------------------------------------------
-# Extension hooks — allow pro/plugins to override core behaviour
+# Extension hooks — Pro can override; defaults fall back to core
 # ---------------------------------------------------------------------------
 
-_online_check_fn = None  # (location_dict) -> bool | None
-_scan_trigger_fn = None  # (location_id, name, root_path, scan_path) -> bool
-_scan_cancel_fn = None  # (location_id) -> bool
-_content_proxy_fn = None  # (file_id, full_path, filename) -> Response | None
-_fetch_bytes_fn = None  # (full_path, location_id) -> bytes | None
-_agent_proxy_fn = None  # async (op, location_id, **kw) -> Any
-_agent_location_ids_fn = None  # () -> set[int]
-_agent_label_prefixes_fn = None  # () -> dict[int, str]  (location_id -> agent_name)
-_agent_scanning_fn = None  # (location_id) -> bool
-_disk_stats_fn = None  # async (location_id, root_path) -> dict | None
-_location_changed_fn = None  # async (action, loc_id, **kwargs) -> None
-_agent_status_fn = None  # async (location_id) -> dict | None
+_online_check_fn = None
+_content_proxy_fn = None
+_fetch_bytes_fn = None
+_agent_proxy_fn = None
+_agent_location_ids_fn = None
+_agent_label_prefixes_fn = None
+_agent_scanning_fn = None
+_disk_stats_fn = None
+_location_changed_fn = None
+_agent_status_fn = None
 
 
 def set_online_check(fn):
@@ -71,25 +74,11 @@ def set_online_check(fn):
 
 
 def get_online_check():
-    return _online_check_fn
+    if _online_check_fn:
+        return _online_check_fn
+    from file_hunter.services.online_check import agent_online_check
 
-
-def set_scan_trigger(fn):
-    global _scan_trigger_fn
-    _scan_trigger_fn = fn
-
-
-def get_scan_trigger():
-    return _scan_trigger_fn
-
-
-def set_scan_cancel(fn):
-    global _scan_cancel_fn
-    _scan_cancel_fn = fn
-
-
-def get_scan_cancel():
-    return _scan_cancel_fn
+    return agent_online_check
 
 
 def set_content_proxy(fn):
@@ -98,7 +87,11 @@ def set_content_proxy(fn):
 
 
 def get_content_proxy():
-    return _content_proxy_fn
+    if _content_proxy_fn:
+        return _content_proxy_fn
+    from file_hunter.services.content_proxy import proxy_agent_content
+
+    return proxy_agent_content
 
 
 def set_fetch_bytes(fn):
@@ -107,7 +100,11 @@ def set_fetch_bytes(fn):
 
 
 def get_fetch_bytes():
-    return _fetch_bytes_fn
+    if _fetch_bytes_fn:
+        return _fetch_bytes_fn
+    from file_hunter.services.content_proxy import fetch_agent_bytes
+
+    return fetch_agent_bytes
 
 
 def set_agent_proxy(fn):
@@ -116,7 +113,11 @@ def set_agent_proxy(fn):
 
 
 def get_agent_proxy():
-    return _agent_proxy_fn
+    if _agent_proxy_fn:
+        return _agent_proxy_fn
+    from file_hunter.services.agent_ops import dispatch
+
+    return dispatch
 
 
 def set_agent_location_ids(fn):
@@ -125,10 +126,11 @@ def set_agent_location_ids(fn):
 
 
 def get_agent_location_ids():
-    fn = _agent_location_ids_fn
-    if fn:
-        return fn()
-    return set()
+    if _agent_location_ids_fn:
+        return _agent_location_ids_fn()
+    from file_hunter.services.online_check import all_agent_location_ids
+
+    return all_agent_location_ids()
 
 
 def is_agent_location(location_id: int) -> bool:
@@ -143,10 +145,11 @@ def set_agent_label_prefixes(fn):
 
 def get_agent_label_prefixes():
     """Return {location_id: agent_name} for agent-backed locations."""
-    fn = _agent_label_prefixes_fn
-    if fn:
-        return fn()
-    return {}
+    if _agent_label_prefixes_fn:
+        return _agent_label_prefixes_fn()
+    from file_hunter.services.online_check import agent_label_prefixes
+
+    return agent_label_prefixes()
 
 
 def set_agent_scanning(fn):
@@ -156,10 +159,11 @@ def set_agent_scanning(fn):
 
 def is_agent_scanning(location_id: int) -> bool:
     """Check if an agent is currently scanning this location."""
-    fn = _agent_scanning_fn
-    if fn:
-        return fn(location_id)
-    return False
+    if _agent_scanning_fn:
+        return _agent_scanning_fn(location_id)
+    from file_hunter.services.scan_ingest import is_location_scanning
+
+    return is_location_scanning(location_id)
 
 
 def set_disk_stats(fn):
@@ -168,7 +172,11 @@ def set_disk_stats(fn):
 
 
 def get_disk_stats():
-    return _disk_stats_fn
+    if _disk_stats_fn:
+        return _disk_stats_fn
+    from file_hunter.services.online_check import agent_disk_stats
+
+    return agent_disk_stats
 
 
 def set_location_changed(fn):
@@ -187,7 +195,11 @@ def set_agent_status(fn):
 
 async def get_agent_status(location_id: int):
     """Return agent activity status, or None if not available."""
-    fn = _agent_status_fn
-    if fn:
-        return await fn(location_id)
-    return None
+    if _agent_status_fn:
+        return await _agent_status_fn(location_id)
+    from file_hunter.services.agent_ops import dispatch
+
+    try:
+        return await dispatch("agent_status", location_id)
+    except Exception:
+        return None
