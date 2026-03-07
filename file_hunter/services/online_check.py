@@ -71,17 +71,36 @@ def agent_online_check(loc):
     Returns None if not an agent location (falls through to os.path.isdir).
     Called from a thread — uses only in-memory lookups, no async.
     """
+    import logging
+
     from file_hunter.ws.agent import get_agent_location_ids, get_online_agent_ids
 
     loc_id = loc["id"]
+    logger = logging.getLogger("file_hunter")
 
     if loc_id in _all_agent_loc_ids:
-        for agent_id, location_ids in get_agent_location_ids().items():
+        agent_locs = get_agent_location_ids()
+        online_agents = get_online_agent_ids()
+        for agent_id, location_ids in agent_locs.items():
             if loc_id in location_ids:
-                if agent_id not in get_online_agent_ids():
+                if agent_id not in online_agents:
+                    logger.info(
+                        "online_check: loc %d → agent #%d NOT online (online=%s)",
+                        loc_id, agent_id, online_agents,
+                    )
                     return False
                 path_status = _agent_location_path_status.get(agent_id, {})
-                return path_status.get(loc_id, True)
+                result = path_status.get(loc_id, True)
+                logger.info(
+                    "online_check: loc %d → agent #%d online, path_status=%s",
+                    loc_id, agent_id, result,
+                )
+                return result
+        logger.info(
+            "online_check: loc %d in _all_agent_loc_ids but not in any agent set "
+            "(agents=%s)",
+            loc_id, {k: len(v) for k, v in agent_locs.items()},
+        )
         return False
 
     return None
