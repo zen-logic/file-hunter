@@ -183,15 +183,54 @@ async def _refresh_location(db, loc):
 
 
 async def get_stats(db):
-    """Return dashboard stats. Serves from cache if available."""
+    """Return dashboard stats. Serves from cache if available.
+
+    On cache miss, returns fast partial data from the locations table
+    (which has stored counts) and skips the expensive files-table queries.
+    The background refresh will fill in complete data shortly.
+    """
     cached = _cache.get("dashboard")
     if cached is not None:
         return cached
 
-    # Cache miss — first request before background warm completes.
-    # Run synchronously this one time.
-    await _refresh_dashboard(db)
-    return _cache.get("dashboard", {})
+    # Cache miss — return fast partial data, don't block on expensive queries.
+    loc_agg_rows = await db.execute_fetchall(
+        "SELECT COUNT(*) as c, COALESCE(SUM(total_size), 0) as s, "
+        "COALESCE(SUM(file_count), 0) as fc FROM locations"
+    )
+    recent_scans_rows = await db.execute_fetchall(
+        """SELECT s.id, l.name as location_name, s.status, s.started_at,
+                  s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
+           FROM scans s
+           JOIN locations l ON l.id = s.location_id
+           ORDER BY s.started_at DESC
+           LIMIT 5"""
+    )
+    recent_scans = [
+        {
+            "id": r["id"],
+            "location": r["location_name"],
+            "status": r["status"],
+            "startedAt": r["started_at"],
+            "completedAt": r["completed_at"],
+            "filesFound": r["files_found"],
+            "filesHashed": r["files_hashed"],
+            "duplicatesFound": r["duplicates_found"],
+        }
+        for r in recent_scans_rows
+    ]
+
+    total_files = loc_agg_rows[0]["fc"]
+    total_size = loc_agg_rows[0]["s"]
+    return {
+        "totalFiles": total_files,
+        "totalLocations": loc_agg_rows[0]["c"],
+        "duplicateFiles": 0,  # filled by background refresh
+        "totalSize": total_size,
+        "totalSizeFormatted": format_size(total_size),
+        "typeBreakdown": [],  # filled by background refresh
+        "recentScans": recent_scans,
+    }
 
 
 async def get_location_stats(db, location_id: int):
@@ -239,7 +278,8 @@ async def get_location_stats(db, location_id: int):
             "dateLastScanned": None,
         }
 
-    # Cache miss — fetch location metadata and compute stats synchronously
+    # Cache miss — return fast partial data from locations/folders tables.
+    # Skip expensive files-table queries; background refresh fills those in.
     loc_row = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, date_last_scanned, "
         "total_size, file_count, "
@@ -251,65 +291,37 @@ async def get_location_stats(db, location_id: int):
         return None
     loc = loc_row[0]
 
-    # Run remaining queries concurrently
-    dup_rows, folder_rows, type_rows, online = await asyncio.gather(
-        db.execute_fetchall(
-            "SELECT COUNT(*) as c FROM files WHERE location_id = ? AND dup_count > 0 "
-            "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
-            (location_id,),
-        ),
+    folder_rows, online = await asyncio.gather(
         db.execute_fetchall(
             "SELECT COUNT(*) as c FROM folders WHERE location_id = ?",
-            (location_id,),
-        ),
-        db.execute_fetchall(
-            """SELECT file_type_high, COUNT(*) as c
-               FROM files WHERE location_id = ? AND stale = 0
-               GROUP BY file_type_high ORDER BY c DESC""",
             (location_id,),
         ),
         asyncio.to_thread(check_location_online, location_id, loc["root_path"]),
     )
 
-    # Fetch disk stats only when online
     disk_stats = await get_disk_stats(location_id, loc["root_path"]) if online else None
 
-    file_count = loc["file_count"] or 0
-    total_size = loc["total_size"] or 0
-    dup_count = dup_rows[0]["c"]
-    folder_count = folder_rows[0]["c"]
-    type_breakdown = [{"type": r["file_type_high"], "count": r["c"]} for r in type_rows]
-
-    # Parse schedule days into list of ints
     days_str = loc["scan_schedule_days"] or ""
     schedule_days = [int(d) for d in days_str.split(",") if d.strip()]
 
-    # Cache everything except live-computed fields
-    result = {
-        "name": loc["name"],
-        "rootPath": loc["root_path"],
-        "dateAdded": loc["date_added"],
-        "fileCount": file_count,
-        "folderCount": folder_count,
-        "totalSize": total_size,
-        "totalSizeFormatted": format_size(total_size),
-        "duplicateFiles": dup_count,
-        "typeBreakdown": type_breakdown,
-        "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
-        "scheduleDays": schedule_days,
-        "scheduleTime": loc["scan_schedule_time"] or "03:00",
-        "scheduleLastRun": loc["scan_schedule_last_run"],
-    }
-    _cache[cache_key] = result
-
-    # Agent status — live field, only for online agent-backed locations
     agent_status = None
     if online and is_agent_location(location_id):
         agent_status = await get_agent_status(location_id)
 
-    # Merge live fields into the returned result
     return {
-        **result,
+        "name": loc["name"],
+        "rootPath": loc["root_path"],
+        "dateAdded": loc["date_added"],
+        "fileCount": loc["file_count"] or 0,
+        "folderCount": folder_rows[0]["c"],
+        "totalSize": loc["total_size"] or 0,
+        "totalSizeFormatted": format_size(loc["total_size"] or 0),
+        "duplicateFiles": 0,  # filled by background refresh
+        "typeBreakdown": [],  # filled by background refresh
+        "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
+        "scheduleDays": schedule_days,
+        "scheduleTime": loc["scan_schedule_time"] or "03:00",
+        "scheduleLastRun": loc["scan_schedule_last_run"],
         "online": online,
         "diskStats": disk_stats,
         "agentStatus": agent_status,
