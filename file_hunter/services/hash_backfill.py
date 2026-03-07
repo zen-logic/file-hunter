@@ -157,7 +157,7 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
         agent_errors = 0
         pending_writes: list[tuple] = []
         affected_hashes: set[str] = set()
-        batch_size = 20
+        batch_size = 1
 
         async def _hash_one(file_id: int, full_path: str):
             nonlocal agent_hashed, agent_errors
