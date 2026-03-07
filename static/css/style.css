@@ -866,8 +866,6 @@ body::after {
 .hex-dump {
     white-space: pre !important;
     word-break: normal !important;
-    font-size: var(--font-size-xs) !important;
-    tab-size: 4;
 }
 
 /* ── Detail panel ── */
