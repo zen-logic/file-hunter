@@ -362,11 +362,9 @@ async def _backfill_agents(
         if len(pending) >= 20:
             await _flush_writes(db, pending)
             pending.clear()
-            invalidate_stats_cache()
 
     if pending:
         await _flush_writes(db, pending)
-        invalidate_stats_cache()
 
     return hashed
 
@@ -413,10 +411,8 @@ async def _backfill_local(db, agent_location_id: int, affected_hashes: set[str])
         if len(pending) >= 20:
             await _flush_writes(db, pending)
             pending.clear()
-            invalidate_stats_cache()
 
     if pending:
         await _flush_writes(db, pending)
-        invalidate_stats_cache()
 
     return hashed

@@ -247,7 +247,6 @@ async def backfill_dup_counts():
                         "totalHashes": total,
                     }
                 )
-            invalidate_stats_cache()
 
         updated = await _batched_recalc(conn, all_stale, on_progress=_on_progress)
 
