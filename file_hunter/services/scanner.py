@@ -35,34 +35,6 @@ async def _mark_stale_files(
         return cursor.rowcount
 
 
-async def _cleanup_orphan_folders(db, location_id: int) -> int:
-    """Delete folders that contain no non-stale files (recursively).
-
-    Keeps folders that are direct parents of non-stale files or ancestors
-    of such folders. Returns the number of folders deleted.
-    """
-    cursor = await db.execute(
-        """DELETE FROM folders
-           WHERE location_id = ?
-             AND id NOT IN (
-                 WITH RECURSIVE needed(id) AS (
-                     SELECT DISTINCT f.folder_id
-                     FROM files f
-                     WHERE f.location_id = ?
-                       AND f.stale = 0
-                       AND f.folder_id IS NOT NULL
-                     UNION
-                     SELECT fld.parent_id
-                     FROM folders fld
-                     JOIN needed n ON fld.id = n.id
-                     WHERE fld.parent_id IS NOT NULL
-                 )
-                 SELECT id FROM needed
-             )""",
-        (location_id, location_id),
-    )
-    return cursor.rowcount
-
 
 async def _ensure_folder_hierarchy(
     db, location_id: int, rel_dir_path: str, folder_cache: dict[str, tuple]
@@ -207,4 +179,3 @@ async def _upsert_file(
 ensure_folder_hierarchy = _ensure_folder_hierarchy
 upsert_file = _upsert_file
 mark_stale_files = _mark_stale_files
-cleanup_orphan_folders = _cleanup_orphan_folders
