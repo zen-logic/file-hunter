@@ -1107,8 +1107,10 @@ WS.on('backfill_started', (msg) => {
 
 WS.on('backfill_progress', (msg) => {
     let detail;
-    if (msg.phase === 'cross_agent') {
-        detail = `${msg.location} — checking other agents for matches`;
+    if (msg.phase === 'cross_location') {
+        detail = msg.filesHashed != null && msg.totalFiles
+            ? `${msg.location} — comparing across locations (${msg.filesHashed.toLocaleString()}/${msg.totalFiles.toLocaleString()})`
+            : `${msg.location} — comparing across locations...`;
     } else if (msg.phase === 'local') {
         detail = `${msg.location} — hashing local matches`;
     } else if (msg.phase === 'dup_counts') {

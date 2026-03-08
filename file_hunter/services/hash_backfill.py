@@ -273,11 +273,11 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
                     "location": location_name,
                     "filesHashed": agent_hashed,
                     "totalFiles": total,
-                    "phase": "cross_agent",
+                    "phase": "cross_location",
                 }
             )
             cross_agent_hashed = await _backfill_agents(
-                db, agent_id, location_id, affected_hashes
+                db, agent_id, location_id, location_name, affected_hashes
             )
 
         if affected_hashes:
@@ -389,7 +389,11 @@ async def _flush_writes(db, writes: list[tuple[int, str, str]]):
 
 
 async def _backfill_agents(
-    db, agent_id: int, agent_location_id: int, affected_hashes: set[str]
+    db,
+    agent_id: int,
+    agent_location_id: int,
+    location_name: str,
+    affected_hashes: set[str],
 ) -> int:
     """Hash files on OTHER agent locations that match by (size, partial)."""
     from file_hunter.services.agent_ops import dispatch
@@ -423,7 +427,7 @@ async def _backfill_agents(
         logger.info("Cross-agent backfill: no candidates found")
         return 0
 
-    logger.info("Cross-agent backfill: %d candidates across other agents", len(rows))
+    logger.info("Cross-agent backfill: %d candidates across other locations", len(rows))
 
     candidate_loc_ids = {row["location_id"] for row in rows}
     online_loc_ids = set()
@@ -435,8 +439,13 @@ async def _backfill_agents(
             logger.info("Cross-agent backfill: skipping offline location %d", loc_id)
 
     hashed = 0
+    errors = 0
     pending: list[tuple] = []
     total = sum(1 for r in rows if r["location_id"] in online_loc_ids)
+
+    if total == 0:
+        logger.info("Cross-agent backfill: no online candidates")
+        return 0
 
     for row in rows:
         if row["location_id"] not in online_loc_ids:
@@ -450,9 +459,8 @@ async def _backfill_agents(
             pending.append((row["id"], result["hash_fast"], result["hash_strong"]))
             affected_hashes.add(result["hash_strong"])
             hashed += 1
-            if hashed % 100 == 0:
-                logger.info("Cross-agent backfill: %d/%d hashed", hashed, total)
         except Exception as e:
+            errors += 1
             logger.warning(
                 "Cross-agent backfill: hash failed for %s: %r", row["full_path"], e
             )
@@ -460,6 +468,18 @@ async def _backfill_agents(
         if len(pending) >= 20:
             await _flush_writes(db, pending)
             pending.clear()
+
+        if (hashed + errors) % 10 == 0:
+            await broadcast(
+                {
+                    "type": "backfill_progress",
+                    "locationId": agent_location_id,
+                    "location": location_name,
+                    "filesHashed": hashed,
+                    "totalFiles": total,
+                    "phase": "cross_location",
+                }
+            )
 
     if pending:
         await _flush_writes(db, pending)
