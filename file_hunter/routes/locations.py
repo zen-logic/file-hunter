@@ -57,7 +57,10 @@ async def add_location(request: Request):
             if resolved:
                 host, port, token = resolved
                 await _post(
-                    host, port, token, "/locations/add",
+                    host,
+                    port,
+                    token,
+                    "/locations/add",
                     {"name": name, "path": path},
                 )
         except Exception as e:

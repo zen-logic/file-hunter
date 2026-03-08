@@ -10,7 +10,6 @@ import logging
 import os
 
 from file_hunter.core import format_size
-from file_hunter.extensions import is_agent_location
 from file_hunter.services.locations import check_location_online, get_disk_stats
 
 logger = logging.getLogger(__name__)

@@ -86,20 +86,25 @@ def agent_online_check(loc):
                 if agent_id not in online_agents:
                     logger.info(
                         "online_check: loc %d → agent #%d NOT online (online=%s)",
-                        loc_id, agent_id, online_agents,
+                        loc_id,
+                        agent_id,
+                        online_agents,
                     )
                     return False
                 path_status = _agent_location_path_status.get(agent_id, {})
                 result = path_status.get(loc_id, True)
                 logger.info(
                     "online_check: loc %d → agent #%d online, path_status=%s",
-                    loc_id, agent_id, result,
+                    loc_id,
+                    agent_id,
+                    result,
                 )
                 return result
         logger.info(
             "online_check: loc %d in _all_agent_loc_ids but not in any agent set "
             "(agents=%s)",
-            loc_id, {k: len(v) for k, v in agent_locs.items()},
+            loc_id,
+            {k: len(v) for k, v in agent_locs.items()},
         )
         return False
 

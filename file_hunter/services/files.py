@@ -303,6 +303,7 @@ async def get_file_detail(db, file_id: int):
     tags = [t.strip() for t in f["tags"].split(",") if t.strip()] if f["tags"] else []
 
     from file_hunter.services.locations import check_location_online
+
     location_online = await asyncio.to_thread(
         check_location_online, f["location_id"], f["location_root_path"]
     )

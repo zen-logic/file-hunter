@@ -216,7 +216,10 @@ async def ingest_batch(agent_id: int, files: list[dict]):
 
 
 async def complete_session(
-    agent_id: int, path: str, incremental: bool = False, deleted: list[str] | None = None
+    agent_id: int,
+    path: str,
+    incremental: bool = False,
+    deleted: list[str] | None = None,
 ) -> int:
     """Finalize a completed agent scan. Returns files ingested count."""
     session = _active_sessions.pop(agent_id, None)

@@ -105,17 +105,10 @@ FH_HOST=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); prin
 FH_PORT=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('port',8000))")
 FH_AGENT_PORT=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('agent_port',8001))")
 
-# ── Start agent (if bundled) ─────────────────────────────────────────
+# ── Process management ────────────────────────────────────────────────
 
 AGENT_PID=""
-if [ -f "$AGENT_CONFIG" ] && "$VENV_PYTHON" -c "import file_hunter_agent" 2>/dev/null; then
-    "$VENV_PYTHON" -m file_hunter_agent \
-        --host "$FH_HOST" \
-        --port "$FH_AGENT_PORT" \
-        --server "http://${FH_HOST}:${FH_PORT}" \
-        --config "$AGENT_CONFIG" &
-    AGENT_PID=$!
-fi
+RESTART_CODE=75
 
 cleanup() {
     if [ -n "$AGENT_PID" ] && kill -0 "$AGENT_PID" 2>/dev/null; then
@@ -125,8 +118,35 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# ── Start server ────────────────────────────────────────────────────
+# ── Main loop (restarts on exit code 75) ──────────────────────────────
 
-echo "File Hunter starting on http://${FH_HOST}:${FH_PORT}"
+while true; do
+    # Start agent (if bundled)
+    AGENT_PID=""
+    if [ -f "$AGENT_CONFIG" ] && "$VENV_PYTHON" -c "import file_hunter_agent" 2>/dev/null; then
+        "$VENV_PYTHON" -m file_hunter_agent \
+            --host "$FH_HOST" \
+            --port "$FH_AGENT_PORT" \
+            --server "http://${FH_HOST}:${FH_PORT}" \
+            --config "$AGENT_CONFIG" &
+        AGENT_PID=$!
+    fi
 
-exec "$VENV_PYTHON" -m file_hunter --host "$FH_HOST" --port "$FH_PORT"
+    echo "File Hunter starting on http://${FH_HOST}:${FH_PORT}"
+
+    set +e
+    "$VENV_PYTHON" -m file_hunter --host "$FH_HOST" --port "$FH_PORT"
+    SERVER_EXIT=$?
+    set -e
+
+    # Always stop the agent before deciding what to do
+    cleanup
+    AGENT_PID=""
+
+    if [ "$SERVER_EXIT" -eq "$RESTART_CODE" ]; then
+        info "Restarting..."
+        continue
+    fi
+
+    exit "$SERVER_EXIT"
+done

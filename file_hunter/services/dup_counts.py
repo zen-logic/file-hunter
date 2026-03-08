@@ -150,7 +150,12 @@ async def recalculate_dup_counts(db, hashes: set[str], source: str = ""):
 
     async def _on_progress(processed, total):
         if processed % 1000 < RECALC_BATCH:
-            log.info("recalculate_dup_counts: %d/%d hashes (%s)", processed, total, source or "inline")
+            log.info(
+                "recalculate_dup_counts: %d/%d hashes (%s)",
+                processed,
+                total,
+                source or "inline",
+            )
 
     await _batched_recalc(db, hashes, on_progress=_on_progress)
 

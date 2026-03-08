@@ -105,7 +105,15 @@ async def install_from_zip(zip_path: Path) -> dict:
     # Editable pip install
     result = await asyncio.to_thread(
         subprocess.run,
-        [sys.executable, "-m", "pip", "install", "--break-system-packages", "-e", str(pro_dir)],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--break-system-packages",
+            "-e",
+            str(pro_dir),
+        ],
         capture_output=True,
         text=True,
         timeout=120,

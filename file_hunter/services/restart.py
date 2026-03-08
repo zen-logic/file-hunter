@@ -1,6 +1,9 @@
 import asyncio
 import os
-import sys
+
+
+# Exit code that tells the launcher to restart both server and agent
+RESTART_EXIT_CODE = 75
 
 
 def schedule_restart(delay: float = 1.0):
@@ -10,5 +13,5 @@ def schedule_restart(delay: float = 1.0):
 
 
 def _restart():
-    """Replace the current process with a fresh instance using the same args."""
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    """Exit with a special code so the launcher restarts server + agent."""
+    os._exit(RESTART_EXIT_CODE)

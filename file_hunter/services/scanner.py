@@ -35,7 +35,6 @@ async def _mark_stale_files(
         return cursor.rowcount
 
 
-
 async def _ensure_folder_hierarchy(
     db, location_id: int, rel_dir_path: str, folder_cache: dict[str, tuple]
 ) -> tuple[int, int]:

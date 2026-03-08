@@ -78,7 +78,6 @@ async def file_content(request: Request):
 
     full_path = row["full_path"]
     filename = row["filename"]
-    location_id = row["location_id"]
 
     from file_hunter.extensions import get_content_proxy
 
