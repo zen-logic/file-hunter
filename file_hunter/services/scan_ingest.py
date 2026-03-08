@@ -267,6 +267,12 @@ async def ingest_batch(agent_id: int, files: list[dict]):
             insert_params,
         )
 
+    if insert_params:
+        await db.execute(
+            "UPDATE locations SET backfill_needed = 1 WHERE id = ?",
+            (session.location_id,),
+        )
+
     await db.commit()
 
     # Cross-location match detection

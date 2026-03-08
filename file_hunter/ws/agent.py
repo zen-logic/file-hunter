@@ -262,17 +262,32 @@ async def _finalize_scan(
             notify_agent_scan_complete(loc_info[0])
 
         if loc_info:
-            from file_hunter.services.hash_backfill import run_backfill
-
-            logger.info(
-                "Agent #%d scan_completed: launching backfill for "
-                "location #%d (%s), %d files ingested",
-                agent_id,
-                loc_info[0],
-                loc_info[1],
-                files_ingested,
+            db = await get_db()
+            row = await db.execute_fetchall(
+                "SELECT backfill_needed FROM locations WHERE id = ?",
+                (loc_info[0],),
             )
-            asyncio.create_task(run_backfill(agent_id, loc_info[0], loc_info[1]))
+            needs_backfill = row and row[0]["backfill_needed"]
+            if needs_backfill:
+                from file_hunter.services.hash_backfill import run_backfill
+
+                logger.info(
+                    "Agent #%d scan_completed: launching backfill for "
+                    "location #%d (%s), %d files ingested",
+                    agent_id,
+                    loc_info[0],
+                    loc_info[1],
+                    files_ingested,
+                )
+                asyncio.create_task(run_backfill(agent_id, loc_info[0], loc_info[1]))
+            else:
+                logger.info(
+                    "Agent #%d scan_completed: skipping backfill for "
+                    "location #%d (%s) — already complete",
+                    agent_id,
+                    loc_info[0],
+                    loc_info[1],
+                )
     except Exception:
         logger.error("Agent #%d _finalize_scan failed", agent_id, exc_info=True)
 

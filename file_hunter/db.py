@@ -163,6 +163,7 @@ _MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN dup_exclude INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE folders ADD COLUMN dup_exclude INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE locations ADD COLUMN agent_id INTEGER REFERENCES agents(id)",
+    "ALTER TABLE locations ADD COLUMN backfill_needed INTEGER NOT NULL DEFAULT 1",
 ]
 
 

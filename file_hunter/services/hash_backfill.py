@@ -304,6 +304,13 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
             }
         )
 
+        if not cancelled:
+            await db.execute(
+                "UPDATE locations SET backfill_needed = 0 WHERE id = ?",
+                (location_id,),
+            )
+            await db.commit()
+
         logger.info(
             "Backfill %s for %s: %d agent, %d errors, %d cross-agent, %d dups",
             "cancelled" if cancelled else "completed",
