@@ -46,6 +46,8 @@ PYTHON=$(find_python) || error "Python 3.10+ is required but not found."
 # ── First-run setup ─────────────────────────────────────────────────
 
 if [ ! -f "$CONFIG_FILE" ]; then
+    mkdir -p "$DATA_DIR"
+
     echo ""
     echo "  File Hunter — first run setup"
     echo ""
@@ -55,8 +57,6 @@ if [ ! -f "$CONFIG_FILE" ]; then
     prompt "Agent port"  "8001" FH_AGENT_PORT
 
     echo ""
-
-    mkdir -p "$DATA_DIR"
 
     cat > "$CONFIG_FILE" <<EOF
 {
