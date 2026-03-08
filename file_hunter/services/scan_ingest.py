@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from file_hunter.db import open_connection
 from file_hunter.services.scanner import (
     ensure_folder_hierarchy,
-    upsert_file,
     mark_stale_files,
 )
 from file_hunter.services.stats import invalidate_stats_cache
@@ -136,7 +135,12 @@ async def start_session(agent_id: int, path: str):
 
 
 async def ingest_batch(agent_id: int, files: list[dict]):
-    """Ingest a batch of file records from an agent scan."""
+    """Ingest a batch of file records from an agent scan.
+
+    Uses bulk DB operations: one SELECT to find existing files, then
+    executemany for updates and inserts. Folder hierarchy resolution
+    is per-file but almost always hits the in-memory cache.
+    """
     session = _active_sessions.get(agent_id)
     if not session:
         return
@@ -144,6 +148,8 @@ async def ingest_batch(agent_id: int, files: list[dict]):
     db = session.db
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+    # Phase 1: Resolve folder hierarchy (mostly cached after first batch)
+    prepared = []
     for f in files:
         rel_path = f.get("rel_path", "")
         if not rel_path:
@@ -159,34 +165,111 @@ async def ingest_batch(agent_id: int, files: list[dict]):
             folder_id = None
             folder_dup_exclude = 0
 
-        await upsert_file(
-            db,
-            location_id=session.location_id,
-            scan_id=session.scan_id,
-            filename=f.get("filename", ""),
-            full_path=f.get("full_path", ""),
-            rel_path=rel_path,
-            folder_id=folder_id,
-            file_size=f.get("file_size", 0),
-            created_date=f.get("created_date", ""),
-            modified_date=f.get("modified_date", ""),
-            file_type_high=f.get("file_type_high", ""),
-            file_type_low=f.get("file_type_low", ""),
-            hash_partial=f.get("hash_partial"),
-            hash_fast=f.get("hash_fast"),
-            hash_strong=f.get("hash_strong"),
-            now_iso=now_iso,
-            hidden=f.get("hidden", 0),
-            dup_exclude=folder_dup_exclude,
+        prepared.append((f, rel_path, folder_id, folder_dup_exclude))
+
+    if not prepared:
+        return
+
+    # Phase 2: Batch lookup existing files
+    existing_map = {}
+    rel_paths = [p[1] for p in prepared]
+    for i in range(0, len(rel_paths), 500):
+        batch_paths = rel_paths[i : i + 500]
+        placeholders = ",".join("?" * len(batch_paths))
+        rows = await db.execute_fetchall(
+            f"SELECT id, rel_path FROM files WHERE location_id = ? AND rel_path IN ({placeholders})",
+            [session.location_id] + batch_paths,
         )
-        session.files_ingested += 1
+        for r in rows:
+            existing_map[r["rel_path"]] = r["id"]
+
+    # Phase 3: Build parameter lists for batch UPDATE and INSERT
+    update_params = []
+    insert_params = []
+    for f, rel_path, folder_id, folder_dup_exclude in prepared:
         hs = f.get("hash_strong")
         if hs:
             session.affected_hashes.add(hs)
 
+        file_id = existing_map.get(rel_path)
+        if file_id is not None:
+            update_params.append(
+                (
+                    f.get("filename", ""),
+                    f.get("full_path", ""),
+                    folder_id,
+                    f.get("file_type_high", ""),
+                    f.get("file_type_low", ""),
+                    f.get("file_size", 0),
+                    f.get("hash_partial"),
+                    f.get("hash_fast"),
+                    hs,
+                    f.get("created_date", ""),
+                    f.get("modified_date", ""),
+                    now_iso,
+                    session.scan_id,
+                    f.get("hidden", 0),
+                    folder_dup_exclude,
+                    file_id,
+                )
+            )
+        else:
+            insert_params.append(
+                (
+                    f.get("filename", ""),
+                    f.get("full_path", ""),
+                    rel_path,
+                    session.location_id,
+                    folder_id,
+                    f.get("file_type_high", ""),
+                    f.get("file_type_low", ""),
+                    f.get("file_size", 0),
+                    f.get("hash_partial"),
+                    f.get("hash_fast"),
+                    hs,
+                    f.get("created_date", ""),
+                    f.get("modified_date", ""),
+                    now_iso,
+                    now_iso,
+                    session.scan_id,
+                    f.get("hidden", 0),
+                    folder_dup_exclude,
+                )
+            )
+
+    session.files_ingested += len(update_params) + len(insert_params)
+
+    # Phase 4: Execute batch operations
+    if update_params:
+        await db.executemany(
+            """UPDATE files SET
+                filename=?, full_path=?, folder_id=?,
+                file_type_high=?, file_type_low=?, file_size=?,
+                hash_partial=COALESCE(?, hash_partial),
+                hash_fast=COALESCE(?, hash_fast),
+                hash_strong=COALESCE(?, hash_strong),
+                created_date=?, modified_date=?,
+                date_last_seen=?, scan_id=?, stale=0, hidden=?, dup_exclude=?
+               WHERE id=?""",
+            update_params,
+        )
+
+    if insert_params:
+        await db.executemany(
+            """INSERT INTO files
+               (filename, full_path, rel_path, location_id, folder_id,
+                file_type_high, file_type_low, file_size,
+                hash_partial, hash_fast, hash_strong,
+                description, tags,
+                created_date, modified_date, date_cataloged, date_last_seen,
+                scan_id, stale, hidden, dup_exclude)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, ?, 0, ?, ?)""",
+            insert_params,
+        )
+
     await db.commit()
 
-    # Check for potential cross-location matches by (file_size, hash_partial)
+    # Cross-location match detection
     candidates = [
         (f.get("file_size", 0), f.get("hash_partial"))
         for f in files
@@ -293,26 +376,23 @@ async def complete_session(
 
         invalidate_stats_cache()
 
-        from file_hunter.services.sizes import recalculate_location_sizes
-
-        try:
-            await recalculate_location_sizes(db, session.location_id)
-        except Exception:
-            pass
-
-        try:
-            from file_hunter.services.dup_counts import recalculate_dup_counts
-
-            await recalculate_dup_counts(db, session.affected_hashes)
-        except Exception:
-            pass
-
         logger.info(
             "Agent #%d scan completed: %d files ingested, %d stale",
             agent_id,
             session.files_ingested,
             stale_count,
         )
+
+        # Fire-and-forget on own connections — never block the event loop
+        from file_hunter.services.sizes import schedule_size_recalc
+
+        schedule_size_recalc(session.location_id)
+
+        if session.affected_hashes:
+            from file_hunter.services.dup_counts import schedule_dup_recalc
+
+            schedule_dup_recalc(session.affected_hashes, session.location_name)
+
         return session.files_ingested
     finally:
         await db.close()

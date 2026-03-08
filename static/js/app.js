@@ -1184,6 +1184,20 @@ WS.on('stats_updated', async () => {
     await refreshDetailPanel();
 });
 
+WS.on('repair_started', () => {
+    ActivityLog.add('Catalog repair started...');
+});
+
+WS.on('repair_completed', async (msg) => {
+    ActivityLog.add(`Catalog repair complete: ${msg.staleCleared} stale flags cleared, ${msg.hashes} hashes recounted`);
+    await StatusBar.loadStats();
+    await refreshDetailPanel();
+});
+
+WS.on('repair_failed', () => {
+    ActivityLog.add('Catalog repair failed — check server logs');
+});
+
 WS.on('file_deleted', async (msg) => {
     if (selectedFile && selectedFile.id === msg.fileId) {
         selectedFile = null;

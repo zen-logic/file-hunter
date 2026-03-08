@@ -615,7 +615,10 @@ const Detail = {
                 ${scansHtml || '<div class="detail-field"><span class="value">No scans yet.</span></div>'}
             </div>
             <div class="detail-section">
-                <div class="detail-btn-group"><button class="btn" id="detail-recalc-stats">Recalculate Stats</button></div>
+                <div class="detail-btn-group">
+                    <button class="btn" id="detail-recalc-stats">Recalculate Stats</button>
+                    <button class="btn" id="detail-repair-catalog">Repair Catalog</button>
+                </div>
             </div>
         `;
         const recalcBtn = this.el.querySelector('#detail-recalc-stats');
@@ -625,6 +628,14 @@ const Detail = {
                 recalcBtn.disabled = true;
                 await API.post('/api/stats/recalculate');
                 this.renderDashboard();
+            });
+        }
+        const repairBtn = this.el.querySelector('#detail-repair-catalog');
+        if (repairBtn) {
+            repairBtn.addEventListener('click', async () => {
+                repairBtn.textContent = 'Repairing...';
+                repairBtn.disabled = true;
+                await API.post('/api/stats/repair');
             });
         }
     },

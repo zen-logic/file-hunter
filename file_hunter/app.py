@@ -44,7 +44,7 @@ from file_hunter.routes.scan import start_scan, cancel_scan, get_scan_queue
 from file_hunter.routes.consolidate import consolidate, batch_consolidate
 from file_hunter.routes.merge import merge, cancel_merge
 from file_hunter.routes.upload import upload_files
-from file_hunter.routes.stats import stats, recalculate_stats, location_stats, folder_stats
+from file_hunter.routes.stats import stats, recalculate_stats, repair_catalog, location_stats, folder_stats
 from file_hunter.routes.browse import browse
 from file_hunter.routes.batch import (
     batch_delete_route,
@@ -245,6 +245,7 @@ app = Starlette(
         Route("/api/ignore/{id:int}", delete_ignore_rule, methods=["DELETE"]),
         Route("/api/stats", stats, methods=["GET"]),
         Route("/api/stats/recalculate", recalculate_stats, methods=["POST"]),
+        Route("/api/stats/repair", repair_catalog, methods=["POST"]),
         Route("/api/locations/{id:int}/stats", location_stats, methods=["GET"]),
         Route("/api/folders/{id:int}/stats", folder_stats, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),
