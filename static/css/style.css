@@ -618,6 +618,10 @@ body::after {
     margin-right: 0.35rem;
 }
 
+.activity-new-indicator.hidden {
+    display: none;
+}
+
 .activity-new-indicator {
     position: absolute;
     bottom: 0;
