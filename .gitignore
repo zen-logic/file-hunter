@@ -11,4 +11,5 @@ PROJECT.md
 REQUIREMENTS.md
 dist/
 release.sh
+package.sh
 
