@@ -614,7 +614,20 @@ const Detail = {
                 <h3>Recent Scans</h3>
                 ${scansHtml || '<div class="detail-field"><span class="value">No scans yet.</span></div>'}
             </div>
+            <div class="detail-section">
+                <a href="#" class="detail-recalc-link">Recalculate Stats</a>
+            </div>
         `;
+        const recalcLink = this.el.querySelector('.detail-recalc-link');
+        if (recalcLink) {
+            recalcLink.addEventListener('click', async (e) => {
+                e.preventDefault();
+                recalcLink.textContent = 'Recalculating...';
+                recalcLink.style.pointerEvents = 'none';
+                await API.post('/api/stats/recalculate');
+                this.renderDashboard();
+            });
+        }
     },
 
     async renderFile(file) {

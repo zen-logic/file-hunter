@@ -13,6 +13,22 @@ async def stats(request: Request):
     return json_ok(data)
 
 
+async def recalculate_stats(request: Request):
+    """Force a full recalculation of all location sizes and stats cache."""
+    from file_hunter.services.sizes import recalculate_location_sizes
+    from file_hunter.services.stats import invalidate_stats_cache
+
+    conn = await open_connection()
+    try:
+        loc_rows = await conn.execute_fetchall("SELECT id FROM locations")
+        for loc in loc_rows:
+            await recalculate_location_sizes(conn, loc["id"])
+    finally:
+        await conn.close()
+    invalidate_stats_cache()
+    return json_ok({"recalculated": len(loc_rows)})
+
+
 async def location_stats(request: Request):
     loc_id = int(request.path_params["id"])
     conn = await open_connection()
