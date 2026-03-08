@@ -12,7 +12,7 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    root_path TEXT NOT NULL UNIQUE,
+    root_path TEXT NOT NULL,
     date_added TEXT NOT NULL,
     date_last_scanned TEXT
 );
@@ -208,6 +208,41 @@ async def init_db(db: aiosqlite.Connection):
             pass  # column already exists
     await db.commit()
 
+    # Fix UNIQUE constraint: root_path alone → (root_path, agent_id)
+    cursor = await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='locations'"
+    )
+    row = await cursor.fetchone()
+    if row and "root_path TEXT NOT NULL UNIQUE" in (row[0] or ""):
+        await db.execute("PRAGMA foreign_keys=OFF")
+        await db.execute(
+            """CREATE TABLE locations_mig (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                root_path TEXT NOT NULL,
+                date_added TEXT NOT NULL,
+                date_last_scanned TEXT,
+                scan_schedule_enabled INTEGER NOT NULL DEFAULT 0,
+                scan_schedule_days TEXT NOT NULL DEFAULT '',
+                scan_schedule_time TEXT NOT NULL DEFAULT '03:00',
+                scan_schedule_last_run TEXT,
+                total_size INTEGER,
+                file_count INTEGER,
+                agent_id INTEGER REFERENCES agents(id)
+            )"""
+        )
+        await db.execute(
+            """INSERT INTO locations_mig
+            SELECT id, name, root_path, date_added, date_last_scanned,
+                   scan_schedule_enabled, scan_schedule_days, scan_schedule_time,
+                   scan_schedule_last_run, total_size, file_count, agent_id
+            FROM locations"""
+        )
+        await db.execute("DROP TABLE locations")
+        await db.execute("ALTER TABLE locations_mig RENAME TO locations")
+        await db.commit()
+        await db.execute("PRAGMA foreign_keys=ON")
+
     # Post-migration indexes (columns may not exist until migrations run)
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_files_size_partial ON files(file_size, hash_partial)"
@@ -218,6 +253,10 @@ async def init_db(db: aiosqlite.Connection):
     await db.execute("DROP INDEX IF EXISTS idx_files_hidden")
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_locations_agent_id ON locations(agent_id)"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_root_agent "
+        "ON locations(root_path, agent_id)"
     )
     await db.commit()
 
