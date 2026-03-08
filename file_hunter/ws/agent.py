@@ -261,7 +261,7 @@ async def _finalize_scan(
 
             notify_agent_scan_complete(loc_info[0])
 
-        if loc_info and files_ingested > 0:
+        if loc_info:
             from file_hunter.services.hash_backfill import run_backfill
 
             logger.info(
@@ -273,14 +273,6 @@ async def _finalize_scan(
                 files_ingested,
             )
             asyncio.create_task(run_backfill(agent_id, loc_info[0], loc_info[1]))
-        else:
-            logger.warning(
-                "Agent #%d scan_completed: backfill NOT launched "
-                "(loc_info=%s, files_ingested=%d)",
-                agent_id,
-                loc_info,
-                files_ingested,
-            )
     except Exception:
         logger.error("Agent #%d _finalize_scan failed", agent_id, exc_info=True)
 
