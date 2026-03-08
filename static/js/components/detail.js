@@ -615,15 +615,14 @@ const Detail = {
                 ${scansHtml || '<div class="detail-field"><span class="value">No scans yet.</span></div>'}
             </div>
             <div class="detail-section">
-                <a href="#" class="detail-recalc-link">Recalculate Stats</a>
+                <button class="btn btn-sm" id="detail-recalc-stats">Recalculate Stats</button>
             </div>
         `;
-        const recalcLink = this.el.querySelector('.detail-recalc-link');
-        if (recalcLink) {
-            recalcLink.addEventListener('click', async (e) => {
-                e.preventDefault();
-                recalcLink.textContent = 'Recalculating...';
-                recalcLink.style.pointerEvents = 'none';
+        const recalcBtn = this.el.querySelector('#detail-recalc-stats');
+        if (recalcBtn) {
+            recalcBtn.addEventListener('click', async () => {
+                recalcBtn.textContent = 'Recalculating...';
+                recalcBtn.disabled = true;
                 await API.post('/api/stats/recalculate');
                 this.renderDashboard();
             });
