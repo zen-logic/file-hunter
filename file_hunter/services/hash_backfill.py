@@ -162,6 +162,7 @@ async def run_backfill(agent_id: int, location_id: int, location_name: str):
                WHERE f.location_id = ?
                  AND f.hash_strong IS NULL
                  AND f.hash_partial IS NOT NULL
+                 AND f.file_size > 0
                  AND f.stale = 0
                  AND EXISTS (
                      SELECT 1 FROM files f2
@@ -408,6 +409,7 @@ async def _backfill_agents(
            FROM files f
            WHERE f.hash_strong IS NULL
              AND f.hash_partial IS NOT NULL
+             AND f.file_size > 0
              AND f.stale = 0
              AND f.location_id != ?
              AND EXISTS (
