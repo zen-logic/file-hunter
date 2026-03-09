@@ -17,7 +17,6 @@ const StatusBar = {
     _scanningLocationId: null,
     _pendingQueue: [],
     _stats: null,
-    _lastProgress: {},
 
     init() {
         this.statsEl = document.getElementById('status-stats');
@@ -32,21 +31,13 @@ const StatusBar = {
         const res = await API.get('/api/stats');
         if (res.ok) {
             this._stats = res.data;
-            this._lastProgress = {};
             this._renderStats();
         }
     },
 
-    updateStatsFromProgress(msg) {
-        if (!this._stats) return;
-        const locId = msg.locationId || 0;
-        const prev = this._lastProgress[locId] || { filesFound: 0, duplicatesFound: 0 };
-        const fileDelta = (msg.filesFound || 0) - (prev.filesFound || 0);
-        const dupDelta = (msg.duplicatesFound || 0) - (prev.duplicatesFound || 0);
-        if (fileDelta > 0) this._stats.totalFiles += fileDelta;
-        if (dupDelta > 0) this._stats.duplicateFiles += dupDelta;
-        if (fileDelta > 0 || dupDelta > 0) this._renderStats();
-        this._lastProgress[locId] = { filesFound: msg.filesFound || 0, duplicatesFound: msg.duplicatesFound || 0 };
+    updateStatsFromProgress() {
+        // Stats are only updated via loadStats() after scan completion.
+        // Scan progress is shown in the activity section, not the stats counter.
     },
 
     _renderStats() {
