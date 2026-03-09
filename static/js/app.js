@@ -1166,6 +1166,7 @@ WS.on('dup_backfill_completed', msg => {
 WS.on('size_recalc_completed', msg => {
     ActivityLog.add('Location sizes recalculated');
     StatusBar.loadStats();
+    refreshDetailPanel();
 });
 WS.on('dup_recalc_completed', msg => {
     const src = msg.source ? ` (${msg.source})` : '';

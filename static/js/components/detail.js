@@ -620,11 +620,10 @@ const Detail = {
         `;
         const recalcBtn = this.el.querySelector('#detail-recalc-stats');
         if (recalcBtn) {
-            recalcBtn.addEventListener('click', async () => {
+            recalcBtn.addEventListener('click', () => {
                 recalcBtn.textContent = 'Recalculating...';
                 recalcBtn.disabled = true;
-                await API.post('/api/stats/recalculate');
-                this.renderDashboard();
+                API.post('/api/stats/recalculate');
             });
         }
     },

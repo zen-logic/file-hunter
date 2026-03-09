@@ -1,32 +1,51 @@
+import asyncio
+
 from starlette.requests import Request
-from file_hunter.db import open_connection
+from file_hunter.db import get_db, open_connection
 from file_hunter.core import json_ok, json_error
 from file_hunter.services.stats import get_stats, get_location_stats, get_folder_stats
 
 
 async def stats(request: Request):
-    conn = await open_connection()
-    try:
-        data = await get_stats(conn)
-    finally:
-        await conn.close()
+    db = await get_db()
+    data = await get_stats(db)
     return json_ok(data)
 
 
 async def recalculate_stats(request: Request):
-    """Force a full recalculation of all location sizes and stats cache."""
+    """Force a full recalculation of all location sizes and stats cache.
+
+    Returns immediately — work runs in background, broadcasts when done.
+    """
+    asyncio.create_task(_bg_recalculate())
+    return json_ok({"status": "started"})
+
+
+async def _bg_recalculate():
+    import logging
     from file_hunter.services.sizes import recalculate_location_sizes
     from file_hunter.services.stats import invalidate_stats_cache
+    from file_hunter.ws.scan import broadcast
+
+    log = logging.getLogger("file_hunter")
 
     conn = await open_connection()
     try:
         loc_rows = await conn.execute_fetchall("SELECT id FROM locations")
         for loc in loc_rows:
             await recalculate_location_sizes(conn, loc["id"])
+        invalidate_stats_cache()
+        log.info("Stats recalculated for %d locations", len(loc_rows))
+        await broadcast(
+            {
+                "type": "size_recalc_completed",
+                "locationIds": [r["id"] for r in loc_rows],
+            }
+        )
+    except Exception:
+        log.exception("Stats recalculation failed")
     finally:
         await conn.close()
-    invalidate_stats_cache()
-    return json_ok({"recalculated": len(loc_rows)})
 
 
 async def repair_catalog(request: Request):
@@ -35,8 +54,6 @@ async def repair_catalog(request: Request):
     Runs on a dedicated connection. Returns immediately — broadcasts
     repair_completed when done.
     """
-    import asyncio
-
     asyncio.create_task(_bg_repair())
     return json_ok({"status": "started"})
 
@@ -102,11 +119,8 @@ async def _bg_repair():
 
 async def location_stats(request: Request):
     loc_id = int(request.path_params["id"])
-    conn = await open_connection()
-    try:
-        data = await get_location_stats(conn, loc_id)
-    finally:
-        await conn.close()
+    db = await get_db()
+    data = await get_location_stats(db, loc_id)
     if not data:
         return json_error("Location not found.", 404)
     return json_ok(data)
@@ -114,11 +128,8 @@ async def location_stats(request: Request):
 
 async def folder_stats(request: Request):
     folder_id = int(request.path_params["id"])
-    conn = await open_connection()
-    try:
-        data = await get_folder_stats(conn, folder_id)
-    finally:
-        await conn.close()
+    db = await get_db()
+    data = await get_folder_stats(db, folder_id)
     if not data:
         return json_error("Folder not found.", 404)
     return json_ok(data)
