@@ -20,6 +20,7 @@ async def slideshow_ids(request: Request):
         "dateTo",
         "dupes",
         "minDups",
+        "maxDups",
         "hash",
         "mode",
     ]

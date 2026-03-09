@@ -175,6 +175,16 @@ async def _ids_for_search(db, search_params, hidden_filter):
         except (ValueError, TypeError):
             pass
 
+    max_dups = search_params.get("maxDups")
+    if max_dups:
+        try:
+            max_dups_val = int(max_dups)
+            if max_dups_val > 0:
+                conditions.append("f.dup_count <= ?")
+                params.append(max_dups_val)
+        except (ValueError, TypeError):
+            pass
+
     hash_strong = search_params.get("hash")
     if hash_strong:
         conditions.append("f.hash_strong = ?")

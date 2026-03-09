@@ -51,6 +51,7 @@ async def search(request: Request):
             include_files=request.query_params.get("files") != "false",
             dupes_only=bool(request.query_params.get("dupes")),
             min_dups=request.query_params.get("minDups"),
+            max_dups=request.query_params.get("maxDups"),
             include_folders=request.query_params.get("folders") == "true",
             hash_strong=request.query_params.get("hash"),
             location_id=location_id,

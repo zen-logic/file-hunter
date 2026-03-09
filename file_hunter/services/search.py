@@ -90,6 +90,7 @@ async def search_files(
     include_files=True,
     dupes_only=False,
     min_dups=None,
+    max_dups=None,
     hash_strong=None,
     include_folders=False,
     location_id=None,
@@ -180,6 +181,15 @@ async def search_files(
             if min_dups_val > 0:
                 conditions.append("f.dup_count >= ?")
                 params.append(min_dups_val)
+        except (ValueError, TypeError):
+            pass
+
+    if max_dups is not None:
+        try:
+            max_dups_val = int(max_dups)
+            if max_dups_val > 0:
+                conditions.append("f.dup_count <= ?")
+                params.append(max_dups_val)
         except (ValueError, TypeError):
             pass
 
@@ -330,7 +340,7 @@ def parse_conditions_from_params(params) -> list[dict]:
         if field in ("size",):
             cond["min"] = params.get(f"c{i}_min", "")
             cond["max"] = params.get(f"c{i}_max", "")
-        elif field in ("date",):
+        elif field in ("date", "duplicates"):
             cond["from"] = params.get(f"c{i}_from", "")
             cond["to"] = params.get(f"c{i}_to", "")
         else:
@@ -443,14 +453,26 @@ def build_condition_sql(cond):
         )
 
     elif field == "duplicates":
-        if not value:
-            return None, []
-        try:
-            min_count = int(value)
-            if min_count > 0:
-                return "f.dup_count >= ?", [min_count]
-        except (ValueError, TypeError):
-            pass
+        frags = []
+        params = []
+        if cond.get("from"):
+            try:
+                min_val = int(cond["from"])
+                if min_val > 0:
+                    frags.append("f.dup_count >= ?")
+                    params.append(min_val)
+            except (ValueError, TypeError):
+                pass
+        if cond.get("to"):
+            try:
+                max_val = int(cond["to"])
+                if max_val > 0:
+                    frags.append("f.dup_count <= ?")
+                    params.append(max_val)
+            except (ValueError, TypeError):
+                pass
+        if frags:
+            return " AND ".join(frags), params
         return None, []
 
     return None, []

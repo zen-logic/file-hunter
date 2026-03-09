@@ -893,6 +893,7 @@ Search.init({
                         if (c.max) params.set(`c${i}_max`, c.max);
                         break;
                     case 'date':
+                    case 'duplicates':
                         if (c.from) params.set(`c${i}_from`, c.from);
                         if (c.to) params.set(`c${i}_to`, c.to);
                         break;
@@ -913,6 +914,7 @@ Search.init({
             if (values.sizeMin) params.set('sizeMin', values.sizeMin);
             if (values.sizeMax) params.set('sizeMax', values.sizeMax);
             if (values.minDups) params.set('minDups', values.minDups);
+            if (values.maxDups) params.set('maxDups', values.maxDups);
             if (values.dateFrom) params.set('dateFrom', values.dateFrom);
             if (values.dateTo) params.set('dateTo', values.dateTo);
             if (!values.files) params.set('files', 'false');

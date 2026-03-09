@@ -134,6 +134,7 @@ const Search = {
             sizeMin: document.getElementById('search-size-min').value.trim(),
             sizeMax: document.getElementById('search-size-max').value.trim(),
             minDups: document.getElementById('search-min-dups').value.trim(),
+            maxDups: document.getElementById('search-max-dups').value.trim(),
             dateFrom: document.getElementById('search-date-from').value,
             dateTo: document.getElementById('search-date-to').value,
             files: document.getElementById('search-files').checked,
@@ -151,7 +152,7 @@ const Search = {
         if (this.mode === 'advanced') return this._hasAdvancedFilters();
         const v = this._getValues();
         return v.name || v.type || v.description || v.tags ||
-               v.sizeMin || v.sizeMax || v.minDups || v.dateFrom || v.dateTo || v.dupes || v.folders;
+               v.sizeMin || v.sizeMax || v.minDups || v.maxDups || v.dateFrom || v.dateTo || v.dupes || v.folders;
     },
 
     _updateSearchBtn() {
@@ -420,15 +421,26 @@ const Search = {
                 break;
             }
             case 'duplicates': {
-                const inp = document.createElement('input');
-                inp.type = 'number';
-                inp.className = 'search-input search-input-sm';
-                inp.placeholder = 'Min count';
-                inp.min = '1';
-                inp.dataset.role = 'value';
-                container.appendChild(inp);
+                const from = document.createElement('input');
+                from.type = 'number';
+                from.className = 'search-input search-input-sm';
+                from.placeholder = 'Min';
+                from.min = '1';
+                from.dataset.role = 'from';
+                container.appendChild(from);
+                const sep = document.createElement('span');
+                sep.className = 'search-separator';
+                sep.innerHTML = '&ndash;';
+                container.appendChild(sep);
+                const to = document.createElement('input');
+                to.type = 'number';
+                to.className = 'search-input search-input-sm';
+                to.placeholder = 'Max';
+                to.min = '1';
+                to.dataset.role = 'to';
+                container.appendChild(to);
                 bind();
-                inp.focus();
+                from.focus();
                 break;
             }
         }
@@ -448,12 +460,16 @@ const Search = {
                 case 'name':
                 case 'folder':
                 case 'description':
-                case 'tags':
-                case 'duplicates': {
+                case 'tags': {
                     const valEl = inputs.querySelector('[data-role="value"]');
                     entry.value = valEl ? valEl.value.trim() : '';
                     const matchEl = inputs.querySelector('[data-role="match"]');
                     if (matchEl) entry.match = matchEl.value;
+                    break;
+                }
+                case 'duplicates': {
+                    entry.from = (inputs.querySelector('[data-role="from"]')?.value || '').trim();
+                    entry.to = (inputs.querySelector('[data-role="to"]')?.value || '').trim();
                     break;
                 }
                 case 'type': {
@@ -638,6 +654,7 @@ const Search = {
             if (params.sizeMin) document.getElementById('search-size-min').value = params.sizeMin;
             if (params.sizeMax) document.getElementById('search-size-max').value = params.sizeMax;
             if (params.minDups) document.getElementById('search-min-dups').value = params.minDups;
+            if (params.maxDups) document.getElementById('search-max-dups').value = params.maxDups;
             if (params.dateFrom) document.getElementById('search-date-from').value = params.dateFrom;
             if (params.dateTo) document.getElementById('search-date-to').value = params.dateTo;
             if (params.files === false) document.getElementById('search-files').checked = false;
