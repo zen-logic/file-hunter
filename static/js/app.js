@@ -1132,15 +1132,11 @@ WS.on('backfill_progress', (msg) => {
 WS.on('backfill_completed', async (msg) => {
     Tree.clearBackfillingLocation(msg.locationId);
     StatusBar.renderActivity('idle');
-    const parts = [];
-    if (msg.agentFilesHashed) parts.push(`${msg.agentFilesHashed.toLocaleString()} files hashed`);
-    if (msg.duplicatesFound) parts.push(`${msg.duplicatesFound.toLocaleString()} duplicates`);
-    const summary = parts.length ? parts.join(', ') : 'no matches found';
+    const summary = msg.agentFilesHashed
+        ? `${msg.agentFilesHashed.toLocaleString()} files hashed`
+        : 'no matches found';
     const label = msg.cancelled ? 'Hash backfill cancelled' : 'Hash backfill completed';
     ActivityLog.add(`${label}: <b>${msg.location}</b> — ${summary}`);
-    if (msg.duplicatesFound && !msg.cancelled) {
-        Toast.info(`Backfill found ${msg.duplicatesFound.toLocaleString()} duplicates in ${msg.location}`);
-    }
     await StatusBar.loadStats();
     await Tree.reload();
     if (selectedNode) {

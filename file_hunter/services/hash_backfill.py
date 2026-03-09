@@ -33,7 +33,7 @@ def cancel_backfill(agent_id: int):
 
 def cancel_backfill_by_location(location_id: int) -> bool:
     """Request cancellation of a running backfill by location_id. Returns True if found."""
-    for aid, (loc_id, _) in _backfill_info.items():
+    for aid, (loc_id, _, _sp) in _backfill_info.items():
         if loc_id == location_id:
             cancel_backfill(aid)
             return True
@@ -214,8 +214,6 @@ async def run_backfill(
                     "location": location_name,
                     "agentFilesHashed": 0,
                     "agentErrors": 0,
-                    "crossAgentFilesHashed": 0,
-                    "duplicatesFound": 0,
                     "cancelled": False,
                 }
             )
@@ -292,57 +290,14 @@ async def run_backfill(
 
         cancelled = _active_backfills.get(agent_id, False)
 
-        # Cross-agent backfill: hash files on other connected agents
-        cross_agent_hashed = 0
+        # Mark complete and notify UI immediately — don't block on
+        # cross-agent hashing or dup count recalculation
         if not cancelled:
-            await broadcast(
-                {
-                    "type": "backfill_progress",
-                    "locationId": location_id,
-                    "location": location_name,
-                    "filesHashed": agent_hashed,
-                    "totalFiles": total,
-                    "phase": "cross_location",
-                }
-            )
-            cross_agent_hashed = await _backfill_agents(
-                db, agent_id, location_id, location_name, affected_hashes
-            )
-
-        if affected_hashes:
-            from file_hunter.services.dup_counts import recalculate_dup_counts
-
-            await broadcast(
-                {
-                    "type": "backfill_progress",
-                    "locationId": location_id,
-                    "location": location_name,
-                    "filesHashed": agent_hashed,
-                    "totalFiles": total,
-                    "phase": "dup_counts",
-                }
-            )
-            await recalculate_dup_counts(
-                db, affected_hashes, source=f"backfill {location_name}"
-            )
-
-        dup_count = 0
-        if agent_hashed > 0 or cross_agent_hashed > 0:
-            invalidate_stats_cache()
-            dup_rows = await db.execute_fetchall(
-                """SELECT COUNT(*) as c FROM files f
-                   WHERE f.location_id = ?
-                     AND f.hash_strong IS NOT NULL
-                     AND f.hash_strong != ''
-                     AND EXISTS (
-                         SELECT 1 FROM files f2
-                         WHERE f2.hash_strong = f.hash_strong
-                           AND f2.id != f.id
-                           AND f2.location_id != f.location_id
-                     )""",
+            await db.execute(
+                "UPDATE locations SET backfill_needed = 0 WHERE id = ?",
                 (location_id,),
             )
-            dup_count = dup_rows[0]["c"] if dup_rows else 0
+            await db.commit()
 
         await broadcast(
             {
@@ -351,28 +306,34 @@ async def run_backfill(
                 "location": location_name,
                 "agentFilesHashed": agent_hashed,
                 "agentErrors": agent_errors,
-                "crossAgentFilesHashed": cross_agent_hashed,
-                "duplicatesFound": dup_count,
                 "cancelled": cancelled,
             }
         )
 
-        if not cancelled:
-            await db.execute(
-                "UPDATE locations SET backfill_needed = 0 WHERE id = ?",
-                (location_id,),
-            )
-            await db.commit()
-
         logger.info(
-            "Backfill %s for %s: %d agent, %d errors, %d cross-agent, %d dups",
+            "Backfill %s for %s: %d agent hashed, %d errors",
             "cancelled" if cancelled else "completed",
             location_name,
             agent_hashed,
             agent_errors,
-            cross_agent_hashed,
-            dup_count,
         )
+
+        # Cross-agent backfill: hash files on other connected agents
+        cross_agent_hashed = 0
+        if not cancelled:
+            cross_agent_hashed = await _backfill_agents(
+                db, agent_id, location_id, location_name, affected_hashes
+            )
+
+        if affected_hashes:
+            from file_hunter.services.dup_counts import recalculate_dup_counts
+
+            await recalculate_dup_counts(
+                db, affected_hashes, source=f"backfill {location_name}"
+            )
+
+        if agent_hashed > 0 or cross_agent_hashed > 0:
+            invalidate_stats_cache()
 
     except Exception as e:
         logger.error("Backfill error for %s: %s", location_name, e)
@@ -382,8 +343,7 @@ async def run_backfill(
                 "locationId": location_id,
                 "location": location_name,
                 "agentFilesHashed": 0,
-                "localFilesHashed": 0,
-                "duplicatesFound": 0,
+                "agentErrors": 0,
                 "cancelled": True,
                 "error": str(e),
             }
