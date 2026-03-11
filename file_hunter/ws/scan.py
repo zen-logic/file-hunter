@@ -24,13 +24,44 @@ async def ws_endpoint(websocket: WebSocket):
                 await websocket.send_text(json.dumps(state))
 
         # Send queue state if items are pending
-        from file_hunter.services.scan_queue import get_queue_state
+        from file_hunter.services.queue_manager import get_queue_status
 
-        queue_state = get_queue_state()
-        if queue_state["pending"]:
-            await websocket.send_text(
-                json.dumps({"type": "scan_queue_updated", "queue": queue_state})
-            )
+        try:
+            queue_items = await get_queue_status()
+            if queue_items:
+                # Build format the frontend expects
+                running_ids = [
+                    i.get("location_id")
+                    for i in queue_items
+                    if i.get("status") == "running" and i.get("location_id")
+                ]
+                pending = [
+                    {
+                        "queue_id": i["id"],
+                        "location_id": i.get("location_id"),
+                        "name": i.get("location_name", ""),
+                        "queued_at": i.get("created_at", ""),
+                    }
+                    for i in queue_items
+                    if i.get("status") == "pending"
+                ]
+                if running_ids or pending:
+                    await websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "scan_queue_updated",
+                                "queue": {
+                                    "running_location_ids": running_ids,
+                                    "running_location_id": running_ids[0]
+                                    if running_ids
+                                    else None,
+                                    "pending": pending,
+                                },
+                            }
+                        )
+                    )
+        except Exception:
+            pass
         while True:
             await websocket.receive_text()
     except (WebSocketDisconnect, Exception):

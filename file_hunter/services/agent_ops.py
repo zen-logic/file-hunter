@@ -245,6 +245,27 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         raise ValueError(f"Unknown agent operation: {operation}")
 
 
+async def reconcile_directory(
+    agent_id: int, path: str, root_path: str, expected: list[dict]
+) -> dict:
+    """Call agent /reconcile endpoint for a single directory.
+
+    Returns dict with keys: unchanged, changed, gone, new, subdirs.
+    """
+    resolved = _resolve_agent(agent_id)
+    if not resolved:
+        raise ConnectionError(f"Agent {agent_id} is offline")
+    host, port, token = resolved
+    return await _post(
+        host,
+        port,
+        token,
+        "/reconcile",
+        {"path": path, "root_path": root_path, "expected": expected},
+        timeout=120.0,
+    )
+
+
 async def stream_copy(
     src_path: str,
     src_loc_id: int,

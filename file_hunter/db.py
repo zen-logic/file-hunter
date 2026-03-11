@@ -168,7 +168,27 @@ _MIGRATIONS = [
     "ALTER TABLE scans ADD COLUMN incremental INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE scans ADD COLUMN deleted_json TEXT",
     "ALTER TABLE pending_backfills ADD COLUMN scan_prefix TEXT",
+    "ALTER TABLE locations ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE locations ADD COLUMN type_counts TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE folders ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE folders ADD COLUMN type_counts TEXT NOT NULL DEFAULT '{}'",
 ]
+
+_OPERATION_QUEUE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS operation_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    agent_id INTEGER REFERENCES agents(id),
+    params TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_opqueue_status ON operation_queue(status);
+CREATE INDEX IF NOT EXISTS idx_opqueue_agent_status ON operation_queue(agent_id, status);
+"""
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -251,6 +271,13 @@ async def init_db(db: aiosqlite.Connection):
         await db.execute("ALTER TABLE locations_mig RENAME TO locations")
         await db.commit()
         await db.execute("PRAGMA foreign_keys=ON")
+
+    # Operation queue table (idempotent via IF NOT EXISTS)
+    for stmt in _OPERATION_QUEUE_SCHEMA.split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            await db.execute(stmt)
+    await db.commit()
 
     # Post-migration indexes (columns may not exist until migrations run)
     await db.execute(

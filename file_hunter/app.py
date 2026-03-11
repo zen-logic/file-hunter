@@ -151,24 +151,38 @@ async def on_startup():
         await hook()
     _elapsed("extension hooks done")
 
-    from file_hunter.services.scan_queue import restore_queue
-
-    await restore_queue()
-    _elapsed("scan queue restored")
+    # Reset stale agent status from previous session
+    await db.execute("UPDATE agents SET status = 'offline' WHERE status = 'online'")
+    await db.commit()
+    _elapsed("stale agent status reset")
 
     from file_hunter.services.dup_exclude import restore_pending as restore_dup_exclude
 
     await restore_dup_exclude()
 
-    from file_hunter.services.scan_ingest import resume_finalizing_scans
-
-    await resume_finalizing_scans()
-    _elapsed("finalizing scans resumed")
+    # Mark interrupted scans as error (agent will rescan on reconnect)
+    interrupted = await db.execute_fetchall(
+        "SELECT id FROM scans WHERE status IN ('running', 'interrupted', 'finalizing')"
+    )
+    if interrupted:
+        for row in interrupted:
+            await db.execute(
+                "UPDATE scans SET status = 'error', error = 'Server restarted' "
+                "WHERE id = ?",
+                (row["id"],),
+            )
+        await db.commit()
+        logger.info("Marked %d interrupted scan(s) as error", len(interrupted))
 
     from file_hunter.services.hash_backfill import restore_backfills
 
     await restore_backfills()
     _elapsed("backfills restored")
+
+    from file_hunter.services.queue_manager import start as start_queue_manager
+
+    start_queue_manager()
+    _elapsed("queue manager started")
 
     from file_hunter.services.dup_counts import backfill_dup_counts
 
@@ -181,9 +195,9 @@ async def on_startup():
 
 
 async def on_shutdown():
-    from file_hunter.services.scan_queue import clear_queue
+    from file_hunter.services.queue_manager import stop as stop_queue_manager
 
-    await clear_queue()
+    stop_queue_manager()
     await close_db()
 
 

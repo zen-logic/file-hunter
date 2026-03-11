@@ -16,7 +16,6 @@ from file_hunter.db import get_db, execute_write
 from file_hunter.services.auth import verify_password
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
-from file_hunter.services import scan_ingest
 
 logger = logging.getLogger("file_hunter")
 
@@ -232,95 +231,6 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     return location_ids
 
 
-async def _finalize_scan(
-    agent_id: int,
-    scan_path: str,
-    loc_info: tuple[int, str] | None,
-    msg: dict,
-):
-    """Background task: persist state, broadcast immediately, then do slow DB work."""
-    try:
-        # Step 1: Persist finalization state (fast — one UPDATE + commit)
-        info = await scan_ingest.prepare_finalization(agent_id, msg)
-        if not info:
-            logger.warning("Agent #%d _finalize_scan: no session to finalize", agent_id)
-            return
-
-        # Step 2: Broadcast scan_finalizing to UI immediately
-        await broadcast(
-            {
-                "type": "scan_finalizing",
-                "agentId": agent_id,
-                "locationId": info["location_id"],
-                "location": info["location_name"],
-                "filesFound": msg.get("filesFound", 0),
-                "filesHashed": msg.get("filesHashed", 0),
-                "filesSkipped": msg.get("filesSkipped", 0),
-            }
-        )
-
-        # Step 3: Release the scan queue slot so the next scan can start
-        if loc_info:
-            from file_hunter.services.scan_queue import notify_agent_scan_complete
-
-            notify_agent_scan_complete(loc_info[0])
-
-        # Step 4: Slow DB finalization (stale marking, size/dup recalc)
-        files_ingested = await scan_ingest.complete_session(agent_id)
-
-        # Step 5: Broadcast real scan_completed
-        await broadcast(
-            {
-                "type": "scan_completed",
-                "agentId": agent_id,
-                "locationId": info["location_id"],
-                "location": info["location_name"],
-                "filesHashed": msg.get("filesHashed", 0),
-                "filesSkipped": msg.get("filesSkipped", 0),
-                "duplicatesFound": 0,
-                "staleFiles": 0,
-            }
-        )
-
-        # Step 6: Launch backfill if needed
-        if loc_info:
-            db = await get_db()
-            row = await db.execute_fetchall(
-                "SELECT backfill_needed FROM locations WHERE id = ?",
-                (loc_info[0],),
-            )
-            needs_backfill = row and row[0]["backfill_needed"]
-            if needs_backfill:
-                from file_hunter.services.hash_backfill import run_backfill
-
-                logger.info(
-                    "Agent #%d scan_completed: launching backfill for "
-                    "location #%d (%s), %d files ingested",
-                    agent_id,
-                    loc_info[0],
-                    loc_info[1],
-                    files_ingested,
-                )
-                asyncio.create_task(
-                    run_backfill(
-                        agent_id,
-                        loc_info[0],
-                        loc_info[1],
-                        scan_prefix=info.get("scan_prefix"),
-                    )
-                )
-            else:
-                logger.info(
-                    "Agent #%d scan_completed: skipping backfill for "
-                    "location #%d (%s) — already complete",
-                    agent_id,
-                    loc_info[0],
-                    loc_info[1],
-                )
-    except Exception:
-        logger.error("Agent #%d _finalize_scan failed", agent_id, exc_info=True)
-
-
 async def agent_ws_endpoint(websocket: WebSocket):
     """Handle an incoming agent WebSocket connection."""
     qs = websocket.scope.get("query_string", b"").decode()
@@ -432,40 +342,6 @@ async def agent_ws_endpoint(websocket: WebSocket):
         len(agent_locations),
     )
 
-    # --- Clean up stale scan state from before reconnect ---
-    agent_scanning = msg.get("scanning", False)
-    location_ids = _agent_location_ids.get(agent_id, set())
-
-    if scan_ingest.has_session(agent_id):
-        if not agent_scanning:
-            loc_info = scan_ingest.get_session_location(agent_id)
-            await scan_ingest.interrupt_session(agent_id)
-            if loc_info:
-                from file_hunter.services.scan_queue import notify_agent_scan_complete
-
-                notify_agent_scan_complete(loc_info[0])
-                await broadcast(
-                    {
-                        "type": "scan_interrupted",
-                        "locationId": loc_info[0],
-                        "location": loc_info[1],
-                    }
-                )
-            logger.info(
-                "Cleared stale scan session for agent #%d on reconnect", agent_id
-            )
-
-    if not agent_scanning:
-        from file_hunter.services.scan_queue import notify_agent_scan_complete
-
-        for loc_id in location_ids:
-            notify_agent_scan_complete(loc_id)
-
-    # Kick the scan queue — a queued scan may have been waiting for this agent
-    from file_hunter.services.scan_queue import retry_queue
-
-    asyncio.ensure_future(retry_queue())
-
     # Resume interrupted backfill if one was pending for this agent
     from file_hunter.services.hash_backfill import (
         pop_pending_backfill,
@@ -483,7 +359,8 @@ async def agent_ws_endpoint(websocket: WebSocket):
             run_backfill(agent_id, pending_bf[0], pending_bf[1], pending_bf[2])
         )
 
-    # Message loop
+    # Message loop — server drives scanning via HTTP /reconcile now,
+    # so we only handle location updates and forward other messages.
     try:
         async for raw in websocket.iter_text():
             try:
@@ -493,79 +370,7 @@ async def agent_ws_endpoint(websocket: WebSocket):
 
             msg_type = msg.get("type", "")
 
-            if msg_type == "scan_progress":
-                if not scan_ingest.has_session(agent_id):
-                    await scan_ingest.start_session(agent_id, msg.get("path", ""))
-                msg["agentId"] = agent_id
-                loc_info = scan_ingest.get_session_location(agent_id)
-                if loc_info:
-                    msg["locationId"] = loc_info[0]
-                    msg["location"] = loc_info[1]
-                msg.setdefault("filesFound", 0)
-                msg.setdefault("filesHashed", 0)
-                msg.setdefault("filesSkipped", 0)
-                msg["potentialMatches"] = scan_ingest.get_potential_matches(agent_id)
-                await broadcast(msg)
-
-            elif msg_type == "scan_files":
-                if not scan_ingest.has_session(agent_id):
-                    await scan_ingest.start_session(agent_id, msg.get("path", ""))
-                await scan_ingest.ingest_batch(agent_id, msg.get("files", []))
-                msg["agentId"] = agent_id
-                await broadcast(msg)
-
-            elif msg_type == "scan_completed":
-                logger.info(
-                    "Agent #%d scan_completed received (path=%s)",
-                    agent_id,
-                    msg.get("path", ""),
-                )
-                if not scan_ingest.has_session(agent_id):
-                    await scan_ingest.start_session(agent_id, msg.get("path", ""))
-                loc_info = scan_ingest.get_session_location(agent_id)
-                scan_path = msg.get("path", "")
-                asyncio.create_task(_finalize_scan(agent_id, scan_path, loc_info, msg))
-
-            elif msg_type == "scan_cancelled":
-                loc_info = scan_ingest.get_session_location(agent_id)
-                await scan_ingest.cancel_session(agent_id)
-                msg["agentId"] = agent_id
-                if loc_info:
-                    msg["locationId"] = loc_info[0]
-                    msg["location"] = loc_info[1]
-                await broadcast(msg)
-
-                if loc_info:
-                    from file_hunter.services.scan_queue import (
-                        notify_agent_scan_complete,
-                    )
-
-                    notify_agent_scan_complete(loc_info[0])
-
-            elif msg_type == "scan_error":
-                loc_info = scan_ingest.get_session_location(agent_id)
-                await scan_ingest.error_session(agent_id, msg.get("error", ""))
-                msg["agentId"] = agent_id
-                if loc_info:
-                    msg["locationId"] = loc_info[0]
-                    msg["location"] = loc_info[1]
-                await broadcast(msg)
-
-                if loc_info:
-                    from file_hunter.services.scan_queue import (
-                        notify_agent_scan_complete,
-                    )
-
-                    notify_agent_scan_complete(loc_info[0])
-                else:
-                    from file_hunter.services.scan_queue import (
-                        notify_agent_scan_complete,
-                    )
-
-                    for loc_id in _agent_location_ids.get(agent_id, set()):
-                        notify_agent_scan_complete(loc_id)
-
-            elif msg_type == "locations_updated":
+            if msg_type == "locations_updated":
                 agent_locations = msg.get("locations", [])
                 if agent_locations:
                     await _sync_agent_locations(agent_id, agent_locations)
@@ -605,46 +410,6 @@ async def agent_ws_endpoint(websocket: WebSocket):
 
         interrupted_backfill = get_active_backfill_info(agent_id)
         cancel_backfill(agent_id)
-
-        # Clean up any active ingest session — interrupt, notify UI, re-queue
-        interrupted_scan_loc = None
-        if scan_ingest.has_session(agent_id):
-            interrupted_scan_loc = scan_ingest.get_session_location(agent_id)
-            await scan_ingest.interrupt_session(agent_id)
-            if interrupted_scan_loc:
-                await broadcast(
-                    {
-                        "type": "scan_interrupted",
-                        "locationId": interrupted_scan_loc[0],
-                        "location": interrupted_scan_loc[1],
-                    }
-                )
-
-        # Notify scan queue for any locations this agent owns
-        from file_hunter.services.scan_queue import notify_agent_scan_complete
-
-        for loc_id in _agent_location_ids.get(agent_id, set()):
-            notify_agent_scan_complete(loc_id)
-
-        # Re-queue the interrupted scan so it resumes when the agent reconnects
-        if interrupted_scan_loc:
-            from file_hunter.services.scan_queue import enqueue
-
-            loc_id, loc_name = interrupted_scan_loc
-            db = await get_db()
-            row = await db.execute_fetchall(
-                "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
-            )
-            if row:
-                try:
-                    await enqueue(loc_id, loc_name, row[0]["root_path"])
-                    logger.info(
-                        "Re-queued interrupted scan for location #%d (%s)",
-                        loc_id,
-                        loc_name,
-                    )
-                except ValueError:
-                    pass  # Already queued or running
 
         # Only clean up if this websocket is still the registered one
         replaced = _agent_connections.get(agent_id) is not websocket

@@ -12,7 +12,6 @@ import asyncio
 from datetime import datetime
 
 from file_hunter.db import get_db, execute_write
-from file_hunter.services.scan_queue import enqueue
 
 
 async def start_scheduler():
@@ -55,10 +54,32 @@ async def _check_schedules():
             continue
 
         try:
-            await enqueue(row["id"], row["name"], row["root_path"])
+            loc_row = await db.execute_fetchall(
+                "SELECT agent_id FROM locations WHERE id = ?", (row["id"],)
+            )
+            agent_id = loc_row[0]["agent_id"] if loc_row else None
+            if not agent_id:
+                continue
+
+            from file_hunter.services.queue_manager import enqueue, get_queue_status
+
+            # Skip if already queued/running
+            status = await get_queue_status()
+            if any(item.get("location_id") == row["id"] for item in status):
+                continue
+
+            await enqueue(
+                "scan_dir",
+                agent_id,
+                {
+                    "location_id": row["id"],
+                    "path": row["root_path"],
+                    "root_path": row["root_path"],
+                },
+            )
             await _update_last_run(row["id"], now)
-        except ValueError:
-            pass  # already queued or already scanning
+        except Exception:
+            pass  # don't crash the loop
 
 
 def _already_ran_today(last_run_iso, now):

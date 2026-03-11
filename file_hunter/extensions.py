@@ -183,9 +183,9 @@ def is_agent_scanning(location_id: int) -> bool:
     """Check if an agent is currently scanning this location."""
     if _agent_scanning_fn:
         return _agent_scanning_fn(location_id)
-    from file_hunter.services.scan_ingest import is_location_scanning
+    from file_hunter.services.queue_manager import is_location_running
 
-    return is_location_scanning(location_id)
+    return is_location_running(location_id)
 
 
 def set_disk_stats(fn):
