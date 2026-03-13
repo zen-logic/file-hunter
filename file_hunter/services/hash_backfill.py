@@ -11,7 +11,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from file_hunter.db import db_writer, get_db, execute_write
+from file_hunter.db import db_writer, get_db, open_connection, execute_write
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
 
@@ -395,27 +395,30 @@ async def _backfill_agents(
         "Cross-agent backfill: querying candidates for location %d", agent_location_id
     )
 
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        """SELECT f.id, f.full_path, f.location_id
-           FROM files f
-           WHERE f.hash_fast IS NULL
-             AND f.hash_partial IS NOT NULL
-             AND f.file_size > 0
-             AND f.stale = 0
-             AND f.location_id != ?
-             AND EXISTS (
-                 SELECT 1 FROM files f2
-                 WHERE f2.location_id = ?
-                   AND f2.file_size = f.file_size
-                   AND f2.hash_partial = f.hash_partial
-                   AND f2.hash_fast IS NOT NULL
-             )
-             AND f.location_id IN (
-                 SELECT id FROM locations WHERE agent_id IS NOT NULL
-             )""",
-        (agent_location_id, agent_location_id),
-    )
+    db = await open_connection()
+    try:
+        rows = await db.execute_fetchall(
+            """SELECT f.id, f.full_path, f.location_id
+               FROM files f
+               WHERE f.hash_fast IS NULL
+                 AND f.hash_partial IS NOT NULL
+                 AND f.file_size > 0
+                 AND f.stale = 0
+                 AND f.location_id != ?
+                 AND EXISTS (
+                     SELECT 1 FROM files f2
+                     WHERE f2.location_id = ?
+                       AND f2.file_size = f.file_size
+                       AND f2.hash_partial = f.hash_partial
+                       AND f2.hash_fast IS NOT NULL
+                 )
+                 AND f.location_id IN (
+                     SELECT id FROM locations WHERE agent_id IS NOT NULL
+                 )""",
+            (agent_location_id, agent_location_id),
+        )
+    finally:
+        await db.close()
 
     if not rows:
         logger.info("Cross-agent backfill: no candidates found")
