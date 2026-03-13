@@ -166,7 +166,7 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
         # Only hashes that have files BOTH inside and outside the affected
         # folders need recalculation. Hashes unique to the affected folders
         # are already correct (dup_count=0 from the bulk set above).
-        shared_rows = await db.execute_fetchall(
+        shared_strong_rows = await db.execute_fetchall(
             f"""SELECT DISTINCT f.hash_strong FROM files f
                 WHERE f.folder_id IN ({placeholders})
                   AND f.hash_strong IS NOT NULL AND f.hash_strong != ''
@@ -178,13 +178,28 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
                   )""",
             folder_ids + folder_ids,
         )
-        shared_hashes = {r["hash_strong"] for r in shared_rows}
+        shared_strong = {r["hash_strong"] for r in shared_strong_rows}
+
+        shared_fast_rows = await db.execute_fetchall(
+            f"""SELECT DISTINCT f.hash_fast FROM files f
+                WHERE f.folder_id IN ({placeholders})
+                  AND f.hash_fast IS NOT NULL AND f.hash_fast != ''
+                  AND f.hash_strong IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM files f2
+                      WHERE f2.hash_fast = f.hash_fast
+                        AND f2.folder_id NOT IN ({placeholders})
+                        AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                  )""",
+            folder_ids + folder_ids,
+        )
+        shared_fast = {r["hash_fast"] for r in shared_fast_rows}
 
         log.info(
-            "dup_exclude %s: %d shared hashes to recalculate (of %d total in folder)",
+            "dup_exclude %s: %d strong + %d fast shared hashes to recalculate",
             direction,
-            len(shared_hashes),
-            len(all_file_ids),
+            len(shared_strong),
+            len(shared_fast),
         )
 
         from file_hunter.services.dup_counts import _batched_recalc
@@ -201,7 +216,15 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
                         {"type": "dup_exclude_progress", "pct": 50 + step * 5}
                     )
 
-        recalculated = await _batched_recalc(shared_hashes, on_progress=_on_progress)
+        recalculated = 0
+        if shared_strong:
+            recalculated += await _batched_recalc(
+                shared_strong, hash_column="hash_strong", on_progress=_on_progress
+            )
+        if shared_fast:
+            recalculated += await _batched_recalc(
+                shared_fast, hash_column="hash_fast", on_progress=_on_progress
+            )
 
         invalidate_stats_cache()
 

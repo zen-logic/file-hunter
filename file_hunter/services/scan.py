@@ -129,7 +129,8 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
     try:
         while dirs_to_visit:
             current_dir = dirs_to_visit.popleft()
-            dir_affected_hashes: set[str] = set()
+            dir_affected_strong: set[str] = set()
+            dir_affected_fast: set[str] = set()
 
             # --- READ: expected files from catalog ---
             expected = await _get_expected_files(
@@ -190,13 +191,16 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                             ph = ",".join("?" for _ in batch)
                             async with db_writer() as db:
                                 hash_rows = await db.execute_fetchall(
-                                    f"SELECT DISTINCT hash_strong FROM files "
+                                    f"SELECT DISTINCT hash_strong, hash_fast FROM files "
                                     f"WHERE location_id = ? AND rel_path IN ({ph}) "
-                                    f"AND hash_strong IS NOT NULL",
+                                    f"AND (hash_strong IS NOT NULL OR hash_fast IS NOT NULL)",
                                     [location_id] + batch,
                                 )
                                 for hr in hash_rows:
-                                    dir_affected_hashes.add(hr["hash_strong"])
+                                    if hr["hash_strong"]:
+                                        dir_affected_strong.add(hr["hash_strong"])
+                                    elif hr["hash_fast"]:
+                                        dir_affected_fast.add(hr["hash_fast"])
                                 await db.execute(
                                     f"UPDATE files SET stale = 1 "
                                     f"WHERE location_id = ? AND rel_path IN ({ph})",
@@ -251,7 +255,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                                     )
                                     old_hs = old_row[0]["hash_strong"]
                                     if old_hs:
-                                        dir_affected_hashes.add(old_hs)
+                                        dir_affected_strong.add(old_hs)
 
                             folder_id = None
                             dup_exclude = 0
@@ -324,15 +328,10 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                     )
                     async with db_writer() as db:
                         await db.execute(
-                            "UPDATE files SET hash_fast = ?, hash_strong = ? "
-                            "WHERE id = ?",
-                            (
-                                hash_result["hash_fast"],
-                                hash_result["hash_strong"],
-                                row["id"],
-                            ),
+                            "UPDATE files SET hash_fast = ? WHERE id = ?",
+                            (hash_result["hash_fast"], row["id"]),
                         )
-                    new_hashes.add(hash_result["hash_strong"])
+                    new_hashes.add(hash_result["hash_fast"])
                 except (ConnectionError, OSError):
                     break
                 except Exception as e:
@@ -341,16 +340,17 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                         row["full_path"],
                         e,
                     )
-            dir_affected_hashes.update(new_hashes)
+            dir_affected_fast.update(new_hashes)
 
             # Submit to coalesced dup recalc writer
-            if dir_affected_hashes:
+            if dir_affected_strong or dir_affected_fast:
                 from file_hunter.services.dup_counts import (
                     submit_hashes_for_recalc,
                 )
 
                 submit_hashes_for_recalc(
-                    dir_affected_hashes,
+                    strong_hashes=dir_affected_strong or None,
+                    fast_hashes=dir_affected_fast or None,
                     source=f"scan {location_name}",
                     location_ids={location_id},
                 )
@@ -613,7 +613,7 @@ async def _query_backfill_candidates(
                FROM files f
                WHERE f.folder_id = ?
                  AND f.location_id = ?
-                 AND f.hash_strong IS NULL
+                 AND f.hash_fast IS NULL
                  AND f.hash_partial IS NOT NULL
                  AND f.file_size > 0
                  AND f.stale = 0
@@ -631,7 +631,7 @@ async def _query_backfill_candidates(
                FROM files f
                WHERE f.folder_id IS NULL
                  AND f.location_id = ?
-                 AND f.hash_strong IS NULL
+                 AND f.hash_fast IS NULL
                  AND f.hash_partial IS NOT NULL
                  AND f.file_size > 0
                  AND f.stale = 0
@@ -703,7 +703,7 @@ async def _launch_cross_agent_backfill(
             from file_hunter.services.dup_counts import submit_hashes_for_recalc
 
             submit_hashes_for_recalc(
-                affected_hashes,
+                fast_hashes=affected_hashes,
                 source=f"cross-agent {location_name}",
                 location_ids={location_id},
             )
@@ -716,7 +716,7 @@ async def _launch_cross_agent_backfill(
                 ah_ph = ",".join("?" for _ in ah_list)
                 cross_rows = await read_db.execute_fetchall(
                     f"SELECT DISTINCT location_id FROM files "
-                    f"WHERE hash_strong IN ({ah_ph}) AND location_id != ?",
+                    f"WHERE hash_fast IN ({ah_ph}) AND location_id != ?",
                     ah_list + [location_id],
                 )
                 for r in cross_rows:

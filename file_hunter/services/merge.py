@@ -330,7 +330,9 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
             hash_fast = src_file["hash_fast"]
             if not hash_strong:
                 try:
-                    hash_fast, hash_strong = await fs.file_hash(src_path, src_loc_id)
+                    hash_fast, hash_strong = await fs.file_hash(
+                        src_path, src_loc_id, strong=True
+                    )
                     files_hashed += 1
                     # Update source file record with hash
                     async with db_writer() as wdb:
@@ -437,7 +439,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
 
                     # Hash-verify the copy
                     copy_fast, copy_strong = await fs.file_hash(
-                        actual_dest, dest_loc_id
+                        actual_dest, dest_loc_id, strong=True
                     )
                     if copy_strong != hash_strong:
                         await fs.file_delete(actual_dest, dest_loc_id)
@@ -640,7 +642,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
         from file_hunter.services.dup_counts import recalculate_dup_counts
 
         await recalculate_dup_counts(
-            affected_hashes, source=f"merge {source_label} → {dest_label}"
+            strong_hashes=affected_hashes, source=f"merge {source_label} → {dest_label}"
         )
 
     except Exception as exc:

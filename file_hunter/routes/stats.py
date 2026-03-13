@@ -83,15 +83,27 @@ async def _bg_repair():
             await recalculate_location_sizes(loc["id"])
         log.info("Catalog repair: recalculated sizes for %d locations", len(loc_rows))
 
-        # 3. Full dup recount — get all hash_strong values and recount
-        hash_rows = await db.execute_fetchall(
+        # 3. Full dup recount — both hash types
+        strong_rows = await db.execute_fetchall(
             "SELECT DISTINCT hash_strong FROM files "
             "WHERE hash_strong IS NOT NULL AND hash_strong != ''"
         )
-        all_hashes = {r["hash_strong"] for r in hash_rows}
-        if all_hashes:
-            log.info("Catalog repair: recounting dups for %d hashes", len(all_hashes))
-            await recalculate_dup_counts(all_hashes, source="catalog repair")
+        strong_hashes = {r["hash_strong"] for r in strong_rows}
+
+        fast_rows = await db.execute_fetchall(
+            "SELECT DISTINCT hash_fast FROM files "
+            "WHERE hash_fast IS NOT NULL AND hash_fast != '' AND hash_strong IS NULL"
+        )
+        fast_hashes = {r["hash_fast"] for r in fast_rows}
+
+        total_hashes = len(strong_hashes) + len(fast_hashes)
+        if total_hashes:
+            log.info("Catalog repair: recounting dups for %d hashes", total_hashes)
+            await recalculate_dup_counts(
+                strong_hashes=strong_hashes,
+                fast_hashes=fast_hashes,
+                source="catalog repair",
+            )
 
         invalidate_stats_cache()
 
@@ -99,14 +111,14 @@ async def _bg_repair():
             "Catalog repair: complete (stale cleared=%d, locations=%d, hashes=%d)",
             stale_cleared,
             len(loc_rows),
-            len(all_hashes),
+            total_hashes,
         )
         await broadcast(
             {
                 "type": "repair_completed",
                 "staleCleared": stale_cleared,
                 "locations": len(loc_rows),
-                "hashes": len(all_hashes),
+                "hashes": total_hashes,
             }
         )
     except Exception:

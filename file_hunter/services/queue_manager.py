@@ -18,6 +18,8 @@ logger = logging.getLogger("file_hunter")
 
 _running = False
 _task: asyncio.Task | None = None
+_paused = False
+_quiescent: asyncio.Event | None = None  # set when paused and no running ops
 
 # Running operations: op_id -> (agent_id, asyncio.Task)
 _running_ops: dict[int, tuple[int | None, asyncio.Task]] = {}
@@ -217,6 +219,36 @@ async def stop():
     logger.info("Queue manager stopped")
 
 
+async def pause():
+    """Pause the queue manager and wait for all running operations to finish.
+
+    No new operations will be dispatched. Returns once quiescent (no running ops).
+    """
+    global _paused, _quiescent
+    if _paused:
+        return
+    _paused = True
+    _quiescent = asyncio.Event()
+    logger.info("Queue manager pausing, waiting for %d op(s)...", len(_running_ops))
+
+    if not _running_ops:
+        _quiescent.set()
+    else:
+        await _quiescent.wait()
+
+    logger.info("Queue manager paused (quiescent)")
+
+
+def resume():
+    """Resume the queue manager after a pause."""
+    global _paused, _quiescent
+    if not _paused:
+        return
+    _paused = False
+    _quiescent = None
+    logger.info("Queue manager resumed")
+
+
 async def _recover_interrupted():
     """On startup, reset any 'running' operations back to 'pending'
     and mark orphaned scan records as 'interrupted'."""
@@ -247,6 +279,13 @@ async def _run():
     while _running:
         try:
             await _reap_finished()
+
+            # When paused, signal quiescent once all ops finish
+            if _paused:
+                if not _running_ops and _quiescent and not _quiescent.is_set():
+                    _quiescent.set()
+                await asyncio.sleep(1)
+                continue
 
             busy_agents = {aid for aid, _ in _running_ops.values()}
 

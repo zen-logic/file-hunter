@@ -128,7 +128,9 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
                     "phase": "verifying",
                 }
             )
-            real_fast, real_strong = await fs.file_hash(canonical_path, selected_loc_id)
+            real_fast, real_strong = await fs.file_hash(
+                canonical_path, selected_loc_id, strong=True
+            )
             if real_strong != hash_strong:
                 # DB hash was stale — update the canonical record
                 async with db_writer() as wdb:
@@ -240,10 +242,10 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
                 }
             )
             source_hash_fast, source_hash_strong = await fs.file_hash(
-                source_path, source_loc_id
+                source_path, source_loc_id, strong=True
             )
             copy_hash_fast, copy_hash_strong = await fs.file_hash(
-                canonical_path, dest_loc_id
+                canonical_path, dest_loc_id, strong=True
             )
             if copy_hash_strong != source_hash_strong:
                 # Hash mismatch — clean up and fail
@@ -403,7 +405,9 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
 
         from file_hunter.services.dup_counts import recalculate_dup_counts
 
-        await recalculate_dup_counts({hash_strong}, source=f"consolidate {filename}")
+        await recalculate_dup_counts(
+            strong_hashes={hash_strong}, source=f"consolidate {filename}"
+        )
 
     except Exception as exc:
         await broadcast(

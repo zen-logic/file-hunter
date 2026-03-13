@@ -4,7 +4,7 @@ import logging
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import get_db, db_writer, execute_write
 from file_hunter.services.files import (
     list_files,
     get_file_detail,
@@ -52,8 +52,11 @@ async def file_dup_counts(request: Request):
         return json_error("hashes list is required.")
     from file_hunter.services.dup_counts import batch_dup_counts
 
+    # Auto-detect: SHA-256 = 64 hex chars, xxHash64 = 16 hex chars
+    strong = [h for h in hashes if h and len(h) == 64]
+    fast = [h for h in hashes if h and len(h) == 16]
     db = await get_db()
-    counts = await batch_dup_counts(db, hashes)
+    counts = await batch_dup_counts(db, strong_hashes=strong, fast_hashes=fast)
     return json_ok({"counts": counts})
 
 
@@ -179,6 +182,79 @@ async def file_delete(request: Request):
             }
         )
     return json_ok(result)
+
+
+async def file_verify(request: Request):
+    """POST /api/files/{id:int}/verify — compute SHA-256 for duplicate verification."""
+    file_id = int(request.path_params["id"])
+    db = await get_db()
+
+    row = await db.execute_fetchall(
+        """SELECT f.id, f.filename, f.full_path, f.location_id,
+                  f.hash_fast, f.hash_strong, l.root_path
+           FROM files f
+           JOIN locations l ON l.id = f.location_id
+           WHERE f.id = ?""",
+        (file_id,),
+    )
+    if not row:
+        return json_error("File not found.", 404)
+
+    f = row[0]
+    if f["hash_strong"]:
+        # Already verified — just return detail
+        detail = await get_file_detail(db, file_id)
+        return json_ok(detail)
+
+    from file_hunter.services import fs
+
+    online = await fs.dir_exists(f["root_path"], f["location_id"])
+    if not online:
+        return json_error("Location is offline.", 400)
+
+    exists = await fs.file_exists(f["full_path"], f["location_id"])
+    if not exists:
+        return json_error("File not found on disk.", 400)
+
+    try:
+        hash_fast, hash_strong = await fs.file_hash(
+            f["full_path"], f["location_id"], strong=True
+        )
+    except Exception as exc:
+        logger.warning("Verify failed for %s: %r", f["full_path"], exc)
+        return json_error(f"Hash computation failed: {exc}", 500)
+
+    async with db_writer() as wdb:
+        await wdb.execute(
+            "UPDATE files SET hash_fast = ?, hash_strong = ? WHERE id = ?",
+            (hash_fast, hash_strong, file_id),
+        )
+
+    # Recalc dup counts: new hash_strong group + old hash_fast group
+    from file_hunter.services.dup_counts import submit_hashes_for_recalc
+
+    old_hash_fast = f["hash_fast"]
+    submit_hashes_for_recalc(
+        strong_hashes={hash_strong},
+        fast_hashes={old_hash_fast} if old_hash_fast else None,
+        source=f"verify {f['filename']}",
+    )
+
+    from file_hunter.services.stats import invalidate_stats_cache
+
+    invalidate_stats_cache()
+
+    await broadcast(
+        {
+            "type": "file_verified",
+            "fileId": file_id,
+            "filename": f["filename"],
+            "hashStrong": hash_strong,
+        }
+    )
+
+    detail = await get_file_detail(db, file_id)
+    return json_ok(detail)
 
 
 async def folder_download(request: Request):

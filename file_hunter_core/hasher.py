@@ -23,6 +23,15 @@ def hash_file_sync(path: str) -> tuple[str, str]:
     return xx.hexdigest(), sha.hexdigest()
 
 
+def hash_fast_only_sync(path: str) -> str:
+    """Read file once, return xxHash64 hex only. ~10x faster than dual hash."""
+    xx = xxhash.xxh64()
+    with open(path, "rb") as f:
+        while chunk := f.read(CHUNK_SIZE):
+            xx.update(chunk)
+    return xx.hexdigest()
+
+
 def hash_file_partial_sync(path: str) -> str:
     """xxHash64 of first 64KB + last 64KB. For files <= 128KB, reads everything."""
     xx = xxhash.xxh64()

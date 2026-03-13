@@ -191,7 +191,7 @@ async def run_backfill(
             f"""SELECT f.id, f.full_path, f.file_size, f.hash_partial
                FROM files f
                WHERE f.location_id = ?
-                 AND f.hash_strong IS NULL
+                 AND f.hash_fast IS NULL
                  AND f.hash_partial IS NOT NULL
                  AND f.file_size > 0
                  AND f.stale = 0
@@ -258,10 +258,8 @@ async def run_backfill(
                     return
                 try:
                     result = await dispatch("file_hash", location_id, path=full_path)
-                    pending_writes.append(
-                        (file_id, result["hash_fast"], result["hash_strong"])
-                    )
-                    affected_hashes.add(result["hash_strong"])
+                    pending_writes.append((file_id, result["hash_fast"]))
+                    affected_hashes.add(result["hash_fast"])
                     agent_hashed += 1
                 except Exception as e:
                     agent_errors += 1
@@ -332,7 +330,7 @@ async def run_backfill(
             from file_hunter.services.dup_counts import submit_hashes_for_recalc
 
             submit_hashes_for_recalc(
-                affected_hashes,
+                fast_hashes=affected_hashes,
                 source=f"backfill {location_name}",
                 location_ids={location_id},
             )
@@ -369,13 +367,13 @@ async def run_backfill(
             )
 
 
-async def _flush_writes(writes: list[tuple[int, str, str]]):
-    """Batch-update hash_fast and hash_strong for a list of file IDs."""
+async def _flush_writes(writes: list[tuple[int, str]]):
+    """Batch-update hash_fast for a list of file IDs."""
     async with db_writer() as wdb:
-        for file_id, hash_fast, hash_strong in writes:
+        for file_id, hash_fast in writes:
             await wdb.execute(
-                "UPDATE files SET hash_fast = ?, hash_strong = ? WHERE id = ?",
-                (hash_fast, hash_strong, file_id),
+                "UPDATE files SET hash_fast = ? WHERE id = ?",
+                (hash_fast, file_id),
             )
 
 
@@ -397,7 +395,7 @@ async def _backfill_agents(
     rows = await db.execute_fetchall(
         """SELECT f.id, f.full_path, f.location_id
            FROM files f
-           WHERE f.hash_strong IS NULL
+           WHERE f.hash_fast IS NULL
              AND f.hash_partial IS NOT NULL
              AND f.file_size > 0
              AND f.stale = 0
@@ -407,7 +405,7 @@ async def _backfill_agents(
                  WHERE f2.location_id = ?
                    AND f2.file_size = f.file_size
                    AND f2.hash_partial = f.hash_partial
-                   AND f2.hash_strong IS NOT NULL
+                   AND f2.hash_fast IS NOT NULL
              )
              AND f.location_id IN (
                  SELECT id FROM locations WHERE agent_id IS NOT NULL
@@ -448,8 +446,8 @@ async def _backfill_agents(
             result = await dispatch(
                 "file_hash", row["location_id"], path=row["full_path"]
             )
-            pending.append((row["id"], result["hash_fast"], result["hash_strong"]))
-            affected_hashes.add(result["hash_strong"])
+            pending.append((row["id"], result["hash_fast"]))
+            affected_hashes.add(result["hash_fast"])
             hashed += 1
         except Exception as e:
             errors += 1

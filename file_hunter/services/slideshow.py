@@ -185,10 +185,10 @@ async def _ids_for_search(db, search_params, hidden_filter):
         except (ValueError, TypeError):
             pass
 
-    hash_strong = search_params.get("hash")
-    if hash_strong:
-        conditions.append("f.hash_strong = ?")
-        params.append(hash_strong)
+    hash_val = search_params.get("hash")
+    if hash_val:
+        conditions.append("(f.hash_strong = ? OR f.hash_fast = ?)")
+        params.extend([hash_val, hash_val])
 
     base_where = " AND ".join(conditions)
 

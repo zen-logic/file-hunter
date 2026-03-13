@@ -38,7 +38,9 @@ async def run_upload(
 
     for i, sf in enumerate(saved_files):
         try:
-            hash_fast, hash_strong = await fs.file_hash(sf["full_path"], location_id)
+            hash_fast, hash_strong = await fs.file_hash(
+                sf["full_path"], location_id, strong=True
+            )
 
             # Check for existing file with same strong hash (read)
             rows = await db.execute_fetchall(
@@ -196,7 +198,7 @@ async def run_upload(
 
     try:
         await recalculate_dup_counts(
-            affected_hashes, source=f"upload to {location_name}"
+            strong_hashes=affected_hashes, source=f"upload to {location_name}"
         )
     except Exception:
         pass

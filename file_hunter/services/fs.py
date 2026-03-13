@@ -133,13 +133,15 @@ async def file_stat(path: str, location_id: int) -> dict | None:
     return None
 
 
-async def file_hash(path: str, location_id: int) -> tuple[str, str]:
-    """Return (hash_fast, hash_strong)."""
+async def file_hash(path: str, location_id: int, *, strong: bool = False) -> tuple:
+    """Return (hash_fast,) or (hash_fast, hash_strong) if strong=True."""
     proxy = get_agent_proxy()
     if not proxy:
         raise ConnectionError("Agent proxy not available.")
-    result = await proxy("file_hash", location_id, path=path)
-    return result["hash_fast"], result["hash_strong"]
+    result = await proxy("file_hash", location_id, path=path, strong=strong)
+    if strong:
+        return result["hash_fast"], result["hash_strong"]
+    return (result["hash_fast"],)
 
 
 # ---------------------------------------------------------------------------

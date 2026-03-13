@@ -27,6 +27,7 @@ from file_hunter.routes.files import (
     file_update,
     file_delete,
     file_move,
+    file_verify,
     file_dup_counts,
     folder_download,
     location_download,
@@ -88,6 +89,11 @@ from file_hunter.routes.update import (
     install_update,
     upload_update,
     restart_server,
+)
+from file_hunter.routes.import_catalog import (
+    import_catalog_upload,
+    import_catalog_run,
+    import_catalog_progress,
 )
 from file_hunter.middleware import AuthMiddleware
 from file_hunter import extensions
@@ -243,6 +249,7 @@ app = Starlette(
         Route("/api/files/{id:int}", file_detail, methods=["GET"]),
         Route("/api/files/{id:int}", file_update, methods=["PATCH"]),
         Route("/api/files/{id:int}/move", file_move, methods=["POST"]),
+        Route("/api/files/{id:int}/verify", file_verify, methods=["POST"]),
         Route("/api/files/{id:int}", file_delete, methods=["DELETE"]),
         Route("/api/folders", create_new_folder, methods=["POST"]),
         Route("/api/folders/{id:int}/download", folder_download, methods=["GET"]),
@@ -274,6 +281,9 @@ app = Starlette(
         Route("/api/ignore/check", check_ignore, methods=["GET"]),
         Route("/api/ignore/count", count_ignore_matches, methods=["GET"]),
         Route("/api/ignore/{id:int}", delete_ignore_rule, methods=["DELETE"]),
+        Route("/api/import-catalog/upload", import_catalog_upload, methods=["POST"]),
+        Route("/api/import-catalog/run", import_catalog_run, methods=["POST"]),
+        Route("/api/import-catalog/progress", import_catalog_progress, methods=["GET"]),
         Route("/api/stats", stats, methods=["GET"]),
         Route("/api/stats/recalculate", recalculate_stats, methods=["POST"]),
         Route("/api/stats/repair", repair_catalog, methods=["POST"]),

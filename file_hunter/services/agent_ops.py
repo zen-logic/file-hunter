@@ -192,10 +192,14 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         return {"size": data["size"], "mtime": data["mtime"], "ctime": data["ctime"]}
 
     elif operation == "file_hash":
-        data = await _post(
-            host, port, token, "/files/hash", {"path": kwargs["path"]}, timeout=None
-        )
-        return {"hash_fast": data["hash_fast"], "hash_strong": data["hash_strong"]}
+        body = {"path": kwargs["path"]}
+        if kwargs.get("strong"):
+            body["strong"] = True
+        data = await _post(host, port, token, "/files/hash", body, timeout=None)
+        result = {"hash_fast": data["hash_fast"]}
+        if "hash_strong" in data:
+            result["hash_strong"] = data["hash_strong"]
+        return result
 
     elif operation == "dir_create":
         await _post(host, port, token, "/folders/create", {"path": kwargs["path"]})

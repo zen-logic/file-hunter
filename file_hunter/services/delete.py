@@ -8,7 +8,7 @@ from file_hunter.services import fs
 async def delete_file(db, file_id: int) -> dict:
     """Delete a single file from disk and catalog."""
     row = await db.execute_fetchall(
-        """SELECT f.id, f.filename, f.full_path, f.location_id, f.hash_strong, l.root_path
+        """SELECT f.id, f.filename, f.full_path, f.location_id, f.hash_fast, f.hash_strong, l.root_path
            FROM files f
            JOIN locations l ON l.id = f.location_id
            WHERE f.id = ?""",
@@ -22,6 +22,7 @@ async def delete_file(db, file_id: int) -> dict:
     full_path = rec["full_path"]
     root_path = rec["root_path"]
     location_id = rec["location_id"]
+    hash_fast = rec["hash_fast"]
     hash_strong = rec["hash_strong"]
 
     # Check if location is online and file exists
@@ -44,7 +45,12 @@ async def delete_file(db, file_id: int) -> dict:
     from file_hunter.services.dup_counts import submit_hashes_for_recalc
 
     schedule_size_recalc(location_id)
-    submit_hashes_for_recalc({hash_strong}, source=f"delete {filename}")
+    if hash_strong:
+        submit_hashes_for_recalc(
+            strong_hashes={hash_strong}, source=f"delete {filename}"
+        )
+    elif hash_fast:
+        submit_hashes_for_recalc(fast_hashes={hash_fast}, source=f"delete {filename}")
 
     return {"filename": filename, "deleted_from_disk": deleted_from_disk}
 
@@ -106,7 +112,9 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
 
     affected_loc_ids = {rec["location_id"] for rec in all_rows}
     schedule_size_recalc(*affected_loc_ids)
-    submit_hashes_for_recalc({hash_strong}, source=f"delete {filename} + duplicates")
+    submit_hashes_for_recalc(
+        strong_hashes={hash_strong}, source=f"delete {filename} + duplicates"
+    )
 
     return {
         "filename": filename,
@@ -152,12 +160,15 @@ async def delete_folder(db, folder_id: int) -> dict:
                SELECT ? UNION ALL
                SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id
            )
-           SELECT DISTINCT hash_strong FROM files
+           SELECT DISTINCT hash_strong, hash_fast FROM files
            WHERE folder_id IN (SELECT id FROM descendants)
-           AND hash_strong IS NOT NULL""",
+           AND (hash_strong IS NOT NULL OR hash_fast IS NOT NULL)""",
         (folder_id,),
     )
-    affected_hashes = {r["hash_strong"] for r in hash_rows}
+    affected_strong = {r["hash_strong"] for r in hash_rows if r["hash_strong"]}
+    affected_fast = {
+        r["hash_fast"] for r in hash_rows if not r["hash_strong"] and r["hash_fast"]
+    }
 
     # Check if location is online and folder exists
     deleted_from_disk = False
@@ -192,7 +203,11 @@ async def delete_folder(db, folder_id: int) -> dict:
     from file_hunter.services.dup_counts import submit_hashes_for_recalc
 
     schedule_size_recalc(location_id)
-    submit_hashes_for_recalc(affected_hashes, source=f"delete folder {name}")
+    submit_hashes_for_recalc(
+        strong_hashes=affected_strong,
+        fast_hashes=affected_fast,
+        source=f"delete folder {name}",
+    )
 
     return {
         "name": name,

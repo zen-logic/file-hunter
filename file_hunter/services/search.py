@@ -192,8 +192,8 @@ async def search_files(
             pass
 
     if hash_strong:
-        conditions.append("f.hash_strong = ?")
-        params.append(hash_strong)
+        conditions.append("(f.hash_strong = ? OR f.hash_fast = ?)")
+        params.extend([hash_strong, hash_strong])
 
     where = " AND ".join(conditions) if conditions else "1=1"
 
@@ -215,7 +215,7 @@ async def search_files(
         rows = await db.execute_fetchall(
             f"""SELECT f.id, f.filename, f.file_type_high, f.file_type_low,
                        f.file_size, f.modified_date, f.full_path,
-                       f.hash_strong, f.stale, f.location_id, f.dup_count,
+                       f.hash_fast, f.hash_strong, f.stale, f.location_id, f.dup_count,
                        f.hidden, l.root_path
                 FROM files f
                 JOIN locations l ON l.id = f.location_id
@@ -230,7 +230,13 @@ async def search_files(
 
         from file_hunter.services.dup_counts import batch_dup_counts
 
-        live_dups = await batch_dup_counts(db, [r["hash_strong"] for r in rows])
+        strong_list = [r["hash_strong"] for r in rows if r["hash_strong"]]
+        fast_list = [
+            r["hash_fast"] for r in rows if not r["hash_strong"] and r["hash_fast"]
+        ]
+        live_dups = await batch_dup_counts(
+            db, strong_hashes=strong_list, fast_hashes=fast_list
+        )
 
         items = [
             {
@@ -240,8 +246,9 @@ async def search_files(
                 "typeLow": r["file_type_low"],
                 "size": r["file_size"],
                 "date": r["modified_date"],
-                "dups": live_dups.get(r["hash_strong"], 0),
+                "dups": live_dups.get(r["hash_strong"] or r["hash_fast"], 0),
                 "hashStrong": r["hash_strong"],
+                "hashFast": r["hash_fast"],
                 "stale": bool(r["stale"]),
                 "missing": False if r["stale"] else r["id"] in missing_set,
                 "hidden": bool(r["hidden"]),
@@ -513,7 +520,7 @@ async def search_files_advanced(
         rows = await db.execute_fetchall(
             f"""SELECT f.id, f.filename, f.file_type_high, f.file_type_low,
                        f.file_size, f.modified_date, f.full_path,
-                       f.hash_strong, f.stale, f.location_id, f.dup_count,
+                       f.hash_fast, f.hash_strong, f.stale, f.location_id, f.dup_count,
                        f.hidden, l.root_path
                 FROM files f
                 JOIN locations l ON l.id = f.location_id
@@ -528,7 +535,13 @@ async def search_files_advanced(
 
         from file_hunter.services.dup_counts import batch_dup_counts
 
-        live_dups = await batch_dup_counts(db, [r["hash_strong"] for r in rows])
+        strong_list = [r["hash_strong"] for r in rows if r["hash_strong"]]
+        fast_list = [
+            r["hash_fast"] for r in rows if not r["hash_strong"] and r["hash_fast"]
+        ]
+        live_dups = await batch_dup_counts(
+            db, strong_hashes=strong_list, fast_hashes=fast_list
+        )
 
         items = [
             {
@@ -538,8 +551,9 @@ async def search_files_advanced(
                 "typeLow": r["file_type_low"],
                 "size": r["file_size"],
                 "date": r["modified_date"],
-                "dups": live_dups.get(r["hash_strong"], 0),
+                "dups": live_dups.get(r["hash_strong"] or r["hash_fast"], 0),
                 "hashStrong": r["hash_strong"],
+                "hashFast": r["hash_fast"],
                 "stale": bool(r["stale"]),
                 "missing": False if r["stale"] else r["id"] in missing_set,
                 "hidden": bool(r["hidden"]),

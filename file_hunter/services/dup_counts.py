@@ -3,6 +3,10 @@
 Write serialization: all dup recalc work is submitted to a shared queue
 and processed by a single long-lived background task. All writes go
 through the single db_writer() connection — no independent writers.
+
+Dual-hash support: files with hash_strong use hash_strong for dup grouping.
+Files without hash_strong use hash_fast. The dup_count on each file
+reflects duplicates found via its effective hash.
 """
 
 import asyncio
@@ -22,8 +26,16 @@ _recalc_queue: asyncio.Queue | None = None
 _writer_task: asyncio.Task | None = None
 
 
-async def _batched_recalc(hashes, *, on_progress=None):
+async def _batched_recalc(
+    hashes, *, hash_column: str = "hash_strong", on_progress=None
+):
     """Recalculate dup_count for files sharing the given hashes.
+
+    hash_column: "hash_strong" or "hash_fast".
+    - hash_strong: GROUP BY hash_strong, UPDATE all matching files.
+    - hash_fast: GROUP BY hash_fast (counting ALL files with that hash),
+      but UPDATE only files WHERE hash_strong IS NULL (verified files
+      get their dup_count from hash_strong grouping).
 
     Uses batched GROUP BY for counts (one query per batch of RECALC_BATCH
     hashes) and grouped UPDATEs by dup_count value. Yields between batches.
@@ -37,19 +49,22 @@ async def _batched_recalc(hashes, *, on_progress=None):
     processed = 0
     db = await get_db()
 
+    # For hash_fast updates, only target files without hash_strong
+    update_extra = " AND hash_strong IS NULL" if hash_column == "hash_fast" else ""
+
     for i in range(0, total, RECALC_BATCH):
         batch = hash_list[i : i + RECALC_BATCH]
         ph = ",".join("?" for _ in batch)
 
         # One GROUP BY query gives counts for the whole batch (read)
         rows = await db.execute_fetchall(
-            f"""SELECT hash_strong, COUNT(*) as cnt FROM files
-                WHERE hash_strong IN ({ph})
+            f"""SELECT {hash_column}, COUNT(*) as cnt FROM files
+                WHERE {hash_column} IN ({ph})
                   AND stale = 0 AND hidden = 0 AND dup_exclude = 0
-                GROUP BY hash_strong""",
+                GROUP BY {hash_column}""",
             batch,
         )
-        count_map = {r["hash_strong"]: r["cnt"] for r in rows}
+        count_map = {r[hash_column]: r["cnt"] for r in rows}
 
         # Group hashes by their dup_count value for batched UPDATEs
         by_dup_count = defaultdict(list)
@@ -68,8 +83,9 @@ async def _batched_recalc(hashes, *, on_progress=None):
                 dc_ph = ",".join("?" for _ in dc_hashes)
                 await wdb.execute(
                     f"UPDATE files SET dup_count = ? "
-                    f"WHERE hash_strong IN ({dc_ph}) "
-                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+                    f"WHERE {hash_column} IN ({dc_ph}) "
+                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0"
+                    f"{update_extra}",
                     [dc] + dc_hashes,
                 )
 
@@ -78,8 +94,9 @@ async def _batched_recalc(hashes, *, on_progress=None):
                 z_ph = ",".join("?" for _ in zero_hashes)
                 await wdb.execute(
                     f"UPDATE files SET dup_count = 0 "
-                    f"WHERE hash_strong IN ({z_ph}) "
-                    f"AND (stale = 1 OR hidden = 1 OR dup_exclude = 1)",
+                    f"WHERE {hash_column} IN ({z_ph}) "
+                    f"AND (stale = 1 OR hidden = 1 OR dup_exclude = 1)"
+                    f"{update_extra}",
                     zero_hashes,
                 )
 
@@ -94,7 +111,11 @@ async def _batched_recalc(hashes, *, on_progress=None):
 
 
 def submit_hashes_for_recalc(
-    hashes: set[str], source: str = "", location_ids: set[int] | None = None
+    *,
+    strong_hashes: set[str] | None = None,
+    fast_hashes: set[str] | None = None,
+    source: str = "",
+    location_ids: set[int] | None = None,
 ):
     """Submit hashes to the coalesced dup recalc writer.
 
@@ -102,16 +123,21 @@ def submit_hashes_for_recalc(
     by a single background task on one DB connection. Safe to call from
     any context — scan loops, route handlers, backfill tasks.
 
+    strong_hashes: hash_strong values — files grouped by hash_strong.
+    fast_hashes: hash_fast values — files grouped by hash_fast (only
+    updates files without hash_strong).
+
     Also updates stored locations.duplicate_count for all affected
     locations after recalculating files.dup_count.
     """
     global _recalc_queue, _writer_task
-    hashes = {h for h in hashes if h}
-    if not hashes:
+    strong = {h for h in (strong_hashes or set()) if h}
+    fast = {h for h in (fast_hashes or set()) if h}
+    if not strong and not fast:
         return
     if _recalc_queue is None:
         _recalc_queue = asyncio.Queue()
-    _recalc_queue.put_nowait((hashes, source, location_ids or set()))
+    _recalc_queue.put_nowait((strong, fast, source, location_ids or set()))
     if _writer_task is None or _writer_task.done():
         _writer_task = asyncio.create_task(_dup_recalc_writer())
 
@@ -147,17 +173,19 @@ async def _dup_recalc_writer():
                 break
 
             # Coalesce: drain any additional items that accumulated
-            merged_hashes: set[str] = set(item[0])
-            merged_sources: list[str] = [item[1]] if item[1] else []
-            merged_location_ids: set[int] = set(item[2])
+            merged_strong: set[str] = set(item[0])
+            merged_fast: set[str] = set(item[1])
+            merged_sources: list[str] = [item[2]] if item[2] else []
+            merged_location_ids: set[int] = set(item[3])
 
             while not _recalc_queue.empty():
                 try:
                     more = _recalc_queue.get_nowait()
-                    merged_hashes.update(more[0])
-                    if more[1]:
-                        merged_sources.append(more[1])
-                    merged_location_ids.update(more[2])
+                    merged_strong.update(more[0])
+                    merged_fast.update(more[1])
+                    if more[2]:
+                        merged_sources.append(more[2])
+                    merged_location_ids.update(more[3])
                 except asyncio.QueueEmpty:
                     break
 
@@ -166,24 +194,40 @@ async def _dup_recalc_writer():
                 source_label += f" +{len(merged_sources) - 3}"
 
             log.info(
-                "Coalesced dup recalc: %d hashes (%s)",
-                len(merged_hashes),
+                "Coalesced dup recalc: %d strong + %d fast hashes (%s)",
+                len(merged_strong),
+                len(merged_fast),
                 source_label or "unknown",
             )
 
             # Recalculate dup_count on files
-            await recalculate_dup_counts(merged_hashes, source=source_label)
+            await recalculate_dup_counts(
+                strong_hashes=merged_strong,
+                fast_hashes=merged_fast,
+                source=source_label,
+            )
 
             # Update stored duplicate_count for affected locations
             db = await get_db()
-            h_list = list(merged_hashes)
-            h_ph = ",".join("?" for _ in h_list)
-            rows = await db.execute_fetchall(
-                f"SELECT DISTINCT location_id FROM files WHERE hash_strong IN ({h_ph})",
-                h_list,
-            )
-            affected = {r["location_id"] for r in rows}
-            affected |= merged_location_ids
+            affected: set[int] = set(merged_location_ids)
+
+            if merged_strong:
+                h_list = list(merged_strong)
+                h_ph = ",".join("?" for _ in h_list)
+                rows = await db.execute_fetchall(
+                    f"SELECT DISTINCT location_id FROM files WHERE hash_strong IN ({h_ph})",
+                    h_list,
+                )
+                affected |= {r["location_id"] for r in rows}
+
+            if merged_fast:
+                h_list = list(merged_fast)
+                h_ph = ",".join("?" for _ in h_list)
+                rows = await db.execute_fetchall(
+                    f"SELECT DISTINCT location_id FROM files WHERE hash_fast IN ({h_ph})",
+                    h_list,
+                )
+                affected |= {r["location_id"] for r in rows}
 
             # Read counts per location, then batch-write
             loc_updates = []
@@ -205,56 +249,98 @@ async def _dup_recalc_writer():
 
             invalidate_stats_cache()
 
-            await broadcast(
-                {"type": "dup_recalc_completed", "hashCount": len(merged_hashes)}
-            )
+            total_hashes = len(merged_strong) + len(merged_fast)
+            await broadcast({"type": "dup_recalc_completed", "hashCount": total_hashes})
     except Exception:
         log.error("Coalesced dup recalc writer failed", exc_info=True)
 
 
-async def batch_dup_counts(db, hashes: list[str]) -> dict[str, int]:
-    """Return live dup counts for a batch of hash_strong values.
+async def batch_dup_counts(
+    db,
+    strong_hashes: list[str] | None = None,
+    fast_hashes: list[str] | None = None,
+) -> dict[str, int]:
+    """Return live dup counts for a batch of hashes.
 
-    Returns {hash_strong: count} where count = total non-stale files - 1.
+    strong_hashes: GROUP BY hash_strong for verified files.
+    fast_hashes: GROUP BY hash_fast for unverified files.
+
+    Returns {hash: count} where count = total non-stale files - 1.
     Only includes hashes with count > 0.  Designed for page-sized batches
     (~120 items) so always fast.
     """
-    unique = {h for h in hashes if h}
-    if not unique:
-        return {}
-    placeholders = ",".join("?" for _ in unique)
-    rows = await db.execute_fetchall(
-        f"""SELECT hash_strong, COUNT(*) as cnt FROM files
-            WHERE hash_strong IN ({placeholders}) AND stale = 0 AND hidden = 0 AND dup_exclude = 0
-            GROUP BY hash_strong HAVING COUNT(*) > 1""",
-        list(unique),
-    )
-    return {r["hash_strong"]: r["cnt"] - 1 for r in rows}
+    result: dict[str, int] = {}
+
+    unique_strong = {h for h in (strong_hashes or []) if h}
+    if unique_strong:
+        ph = ",".join("?" for _ in unique_strong)
+        rows = await db.execute_fetchall(
+            f"""SELECT hash_strong, COUNT(*) as cnt FROM files
+                WHERE hash_strong IN ({ph}) AND stale = 0 AND hidden = 0 AND dup_exclude = 0
+                GROUP BY hash_strong HAVING COUNT(*) > 1""",
+            list(unique_strong),
+        )
+        for r in rows:
+            result[r["hash_strong"]] = r["cnt"] - 1
+
+    unique_fast = {h for h in (fast_hashes or []) if h}
+    if unique_fast:
+        ph = ",".join("?" for _ in unique_fast)
+        rows = await db.execute_fetchall(
+            f"""SELECT hash_fast, COUNT(*) as cnt FROM files
+                WHERE hash_fast IN ({ph}) AND stale = 0 AND hidden = 0 AND dup_exclude = 0
+                GROUP BY hash_fast HAVING COUNT(*) > 1""",
+            list(unique_fast),
+        )
+        for r in rows:
+            result[r["hash_fast"]] = r["cnt"] - 1
+
+    return result
 
 
-async def recalculate_dup_counts(hashes: set[str], source: str = ""):
+async def recalculate_dup_counts(
+    strong_hashes: set[str] | None = None,
+    fast_hashes: set[str] | None = None,
+    source: str = "",
+):
     """Recalculate dup_count for all files sharing the given hashes.
 
     Uses batched GROUP BY queries with yields between batches.
-    All writes go through db_writer(). Safe to call with an empty set (no-op).
+    All writes go through db_writer(). Safe to call with empty sets (no-op).
     """
-    if not hashes:
+    strong = {h for h in (strong_hashes or set()) if h}
+    fast = {h for h in (fast_hashes or set()) if h}
+    if not strong and not fast:
         return
-    hashes = {h for h in hashes if h}
-    if not hashes:
-        return
-    log.info("recalculate_dup_counts: %d hashes (%s)", len(hashes), source or "inline")
 
-    async def _on_progress(processed, total):
-        if processed % 1000 < RECALC_BATCH:
+    total = len(strong) + len(fast)
+    log.info(
+        "recalculate_dup_counts: %d strong + %d fast hashes (%s)",
+        len(strong),
+        len(fast),
+        source or "inline",
+    )
+
+    progress_offset = 0
+
+    async def _on_progress(processed, _batch_total):
+        actual = progress_offset + processed
+        if actual % 1000 < RECALC_BATCH:
             log.info(
                 "recalculate_dup_counts: %d/%d hashes (%s)",
-                processed,
+                actual,
                 total,
                 source or "inline",
             )
 
-    await _batched_recalc(hashes, on_progress=_on_progress)
+    if strong:
+        await _batched_recalc(
+            strong, hash_column="hash_strong", on_progress=_on_progress
+        )
+        progress_offset = len(strong)
+
+    if fast:
+        await _batched_recalc(fast, hash_column="hash_fast", on_progress=_on_progress)
 
 
 async def backfill_dup_counts():
@@ -262,11 +348,13 @@ async def backfill_dup_counts():
 
     Reads via get_db(), writes via db_writer() (inside _batched_recalc).
     Skips if no files have stale dup_counts (quick consistency check).
+    Checks both hash_strong and hash_fast groupings.
     """
     db = await get_db()
     try:
         # Quick check: any file with dup_count=0 that actually has duplicates?
-        stale = await db.execute_fetchall(
+        # Check hash_strong grouping
+        stale_strong_check = await db.execute_fetchall(
             """SELECT 1 FROM files f
                WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
                  AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
@@ -277,85 +365,131 @@ async def backfill_dup_counts():
                  )
                LIMIT 1"""
         )
-        if not stale:
+        # Check hash_fast grouping (files without hash_strong)
+        stale_fast_check = await db.execute_fetchall(
+            """SELECT 1 FROM files f
+               WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
+                 AND f.hash_strong IS NULL
+                 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                 AND EXISTS (
+                     SELECT 1 FROM files f2
+                     WHERE f2.hash_fast = f.hash_fast
+                       AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                 )
+               LIMIT 1"""
+        )
+
+        if not stale_strong_check and not stale_fast_check:
             log.info("dup_count backfill: counts consistent, skipping")
             await broadcast({"type": "dup_backfill_completed", "skipped": True})
             return
 
-        # Find which locations have stale counts
-        stale_locs = await db.execute_fetchall(
-            """SELECT DISTINCT l.name
-               FROM files f
-               JOIN locations l ON l.id = f.location_id
-               WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
-                 AND EXISTS (
-                     SELECT 1 FROM files f2
-                     WHERE f2.hash_strong = f.hash_strong
-                       AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
-                 )"""
-        )
-        stale_loc_names = [r["name"] for r in stale_locs]
+        # Collect stale hash_strong values
+        strong_hashes: set[str] = set()
+        if stale_strong_check:
+            rows = await db.execute_fetchall(
+                """SELECT DISTINCT f.hash_strong
+                   FROM files f
+                   WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
+                     AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                     AND EXISTS (
+                         SELECT 1 FROM files f2
+                         WHERE f2.hash_strong = f.hash_strong
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                     )"""
+            )
+            strong_hashes = {r["hash_strong"] for r in rows}
 
-        # Only recalculate hashes that are actually wrong, not all hash groups
-        dup_rows = await db.execute_fetchall(
-            """SELECT DISTINCT f.hash_strong
-               FROM files f
-               WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
-                 AND EXISTS (
-                     SELECT 1 FROM files f2
-                     WHERE f2.hash_strong = f.hash_strong
-                       AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
-                 )"""
-        )
-        stale_hashes = {r["hash_strong"] for r in dup_rows}
+            # Also find false positives for hash_strong
+            fp_rows = await db.execute_fetchall(
+                """SELECT DISTINCT f.hash_strong
+                   FROM files f
+                   WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
+                     AND f.dup_count > 0 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0
+                     AND NOT EXISTS (
+                         SELECT 1 FROM files f2
+                         WHERE f2.hash_strong = f.hash_strong
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                     )"""
+            )
+            strong_hashes |= {r["hash_strong"] for r in fp_rows}
 
-        # Also find hashes where dup_count > 0 but no longer have duplicates
-        false_positive_rows = await db.execute_fetchall(
-            """SELECT DISTINCT f.hash_strong
-               FROM files f
-               WHERE f.dup_count > 0 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0
-                 AND NOT EXISTS (
-                     SELECT 1 FROM files f2
-                     WHERE f2.hash_strong = f.hash_strong
-                       AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
-                 )"""
-        )
-        false_positive_hashes = {r["hash_strong"] for r in false_positive_rows}
+        # Collect stale hash_fast values (files without hash_strong)
+        fast_hashes: set[str] = set()
+        if stale_fast_check:
+            rows = await db.execute_fetchall(
+                """SELECT DISTINCT f.hash_fast
+                   FROM files f
+                   WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
+                     AND f.hash_strong IS NULL
+                     AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                     AND EXISTS (
+                         SELECT 1 FROM files f2
+                         WHERE f2.hash_fast = f.hash_fast
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                     )"""
+            )
+            fast_hashes = {r["hash_fast"] for r in rows}
 
-        all_stale = stale_hashes | false_positive_hashes
-        total_hashes = len(all_stale)
+            # Also find false positives for hash_fast
+            fp_rows = await db.execute_fetchall(
+                """SELECT DISTINCT f.hash_fast
+                   FROM files f
+                   WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
+                     AND f.hash_strong IS NULL
+                     AND f.dup_count > 0 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0
+                     AND NOT EXISTS (
+                         SELECT 1 FROM files f2
+                         WHERE f2.hash_fast = f.hash_fast
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                     )"""
+            )
+            fast_hashes |= {r["hash_fast"] for r in fp_rows}
 
-        loc_label = ", ".join(stale_loc_names[:5])
-        if len(stale_loc_names) > 5:
-            loc_label += f" + {len(stale_loc_names) - 5} more"
+        total_hashes = len(strong_hashes) + len(fast_hashes)
+        if total_hashes == 0:
+            log.info("dup_count backfill: counts consistent, skipping")
+            await broadcast({"type": "dup_backfill_completed", "skipped": True})
+            return
+
         log.info(
-            "dup_count backfill: %d stale hashes across %d locations (%s)",
-            total_hashes,
-            len(stale_loc_names),
-            loc_label,
+            "dup_count backfill: %d strong + %d fast stale hashes",
+            len(strong_hashes),
+            len(fast_hashes),
         )
         await broadcast(
             {
                 "type": "dup_backfill_started",
                 "totalHashes": total_hashes,
-                "locations": stale_loc_names,
             }
         )
 
-        async def _on_progress(processed, total):
-            if processed % 10000 < RECALC_BATCH:
-                log.info("dup_count backfill: %d / %d hashes", processed, total)
+        progress_offset = 0
+
+        async def _on_progress(processed, _batch_total):
+            nonlocal progress_offset
+            actual = progress_offset + processed
+            if actual % 10000 < RECALC_BATCH:
+                log.info("dup_count backfill: %d / %d hashes", actual, total_hashes)
                 await broadcast(
                     {
                         "type": "dup_backfill_progress",
-                        "processed": processed,
-                        "totalHashes": total,
+                        "processed": actual,
+                        "totalHashes": total_hashes,
                     }
                 )
 
-        updated = await _batched_recalc(all_stale, on_progress=_on_progress)
+        updated = 0
+        if strong_hashes:
+            updated += await _batched_recalc(
+                strong_hashes, hash_column="hash_strong", on_progress=_on_progress
+            )
+            progress_offset = len(strong_hashes)
+
+        if fast_hashes:
+            updated += await _batched_recalc(
+                fast_hashes, hash_column="hash_fast", on_progress=_on_progress
+            )
 
         invalidate_stats_cache()
 

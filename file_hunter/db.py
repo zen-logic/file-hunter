@@ -291,6 +291,12 @@ async def init_db(db: aiosqlite.Connection):
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_files_dup_count ON files(dup_count)"
     )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_files_hash_fast ON files(hash_fast)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_files_location_hash_fast ON files(location_id, hash_fast)"
+    )
     await db.execute("DROP INDEX IF EXISTS idx_files_hidden")
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_locations_agent_id ON locations(agent_id)"
