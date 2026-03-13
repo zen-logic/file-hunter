@@ -25,7 +25,7 @@ from file_hunter.services.scanner import (
     upsert_file,
     mark_stale_files,
 )
-from file_hunter.services.agent_ops import reconcile_directory, dispatch
+from file_hunter.services.agent_ops import reconcile_directory, dispatch, stream_tree
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
 
@@ -53,7 +53,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
     # --- Initialisation (read location info, create/resume scan record) ---
     async with db_writer() as db:
         loc_row = await db.execute_fetchall(
-            "SELECT name, file_count, total_size, type_counts "
+            "SELECT name, file_count, total_size, type_counts, date_last_scanned "
             "FROM locations WHERE id = ?",
             (location_id,),
         )
@@ -63,6 +63,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         running_type_counts = (
             json.loads(loc_row[0]["type_counts"] or "{}") if loc_row else {}
         )
+        is_first_scan = not (loc_row and loc_row[0]["date_last_scanned"])
 
         now_iso = _now()
         saved_scan_id = params.get("scan_id")
@@ -126,10 +127,75 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         len(dirs_to_visit),
     )
 
+    # --- Tree-diff fast path: skip unchanged directories ---
+    tree_diff_dirs: set[str] | None = None
+    can_tree_diff = not is_first_scan and not saved_traversal and not scan_prefix
+
     try:
+        if can_tree_diff:
+            try:
+                tree_diff_dirs = await _tree_diff(
+                    agent_id, location_id, root_path, read_db
+                )
+                if tree_diff_dirs is not None:
+                    if not tree_diff_dirs:
+                        dirs_to_visit.clear()
+                        logger.info(
+                            "Tree diff: 0 changed directories for location #%d (%s) — "
+                            "skipping BFS entirely",
+                            location_id,
+                            location_name,
+                        )
+                    else:
+                        # Rebuild BFS queue to only visit changed directories
+                        changed_abs = {
+                            os.path.join(root_path, d) if d else root_path
+                            for d in tree_diff_dirs
+                        }
+                        dirs_to_visit = deque(sorted(changed_abs))
+                        logger.info(
+                            "Tree diff: %d changed directories for location #%d (%s)",
+                            len(tree_diff_dirs),
+                            location_id,
+                            location_name,
+                        )
+                else:
+                    logger.info(
+                        "Tree diff: agent does not support /tree for location #%d (%s) — "
+                        "falling back to full BFS",
+                        location_id,
+                        location_name,
+                    )
+            except (ConnectionError, OSError, httpx.ConnectError):
+                raise  # agent offline — let outer handler deal with it
+            except Exception:
+                logger.warning(
+                    "Tree diff failed for location #%d (%s) — falling back to full BFS",
+                    location_id,
+                    location_name,
+                    exc_info=True,
+                )
+
+        # Bulk-confirm unchanged files so mark_stale_files doesn't falsely stale them
+        if tree_diff_dirs is not None:
+            async with db_writer() as db:
+                await db.execute(
+                    "UPDATE files SET scan_id = ?, date_last_seen = ? "
+                    "WHERE location_id = ? AND stale = 0",
+                    (scan_id, now_iso, location_id),
+                )
+            # Refresh read snapshot so COUNT sees the just-written scan_id
+            await read_db.commit()
+            # Pre-count confirmed files for accurate progress/completion stats
+            count_row = await read_db.execute_fetchall(
+                "SELECT COUNT(*) as cnt FROM files WHERE location_id = ? AND stale = 0",
+                (location_id,),
+            )
+            files_found = count_row[0]["cnt"] if count_row else 0
         while dirs_to_visit:
             # Checkpoint: block here while queue is paused (e.g. during import)
             from file_hunter.services.queue_manager import wait_if_paused
+
             await wait_if_paused()
 
             current_dir = dirs_to_visit.popleft()
@@ -161,8 +227,11 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
                 # First page: subdirs, unchanged, gone
                 if is_first_page:
-                    for subdir in sorted(result.get("subdirs", [])):
-                        dirs_to_visit.append(os.path.join(current_dir, subdir))
+                    # When tree-diff is active, don't BFS into subdirs —
+                    # we already know exactly which dirs need reconcile
+                    if tree_diff_dirs is None:
+                        for subdir in sorted(result.get("subdirs", [])):
+                            dirs_to_visit.append(os.path.join(current_dir, subdir))
 
                     # Unchanged — batched in 500s with yields
                     unchanged = result.get("unchanged", [])
@@ -797,6 +866,118 @@ async def _broadcast_progress(
             "globalTypeBreakdown": global_type_breakdown,
         }
     )
+
+
+async def _get_catalog_dir(
+    db, location_id: int, rel_dir: str
+) -> dict[str, tuple[int, str]]:
+    """Load catalog files for one directory, keyed by rel_path.
+
+    Returns {rel_path: (file_size, modified_date)} for non-stale files.
+    """
+    if rel_dir == "":
+        rows = await db.execute_fetchall(
+            "SELECT rel_path, file_size, modified_date "
+            "FROM files WHERE location_id = ? AND stale = 0 AND folder_id IS NULL",
+            (location_id,),
+        )
+    else:
+        folder_row = await db.execute_fetchall(
+            "SELECT id FROM folders WHERE location_id = ? AND rel_path = ?",
+            (location_id, rel_dir),
+        )
+        if not folder_row:
+            return {}
+        rows = await db.execute_fetchall(
+            "SELECT rel_path, file_size, modified_date "
+            "FROM files WHERE location_id = ? AND stale = 0 AND folder_id = ?",
+            (location_id, folder_row[0]["id"]),
+        )
+    return {r["rel_path"]: (r["file_size"], r["modified_date"]) for r in rows}
+
+
+def _diff_directory(
+    agent_files: list[dict], catalog: dict[str, tuple[int, str]]
+) -> bool:
+    """Compare agent files against catalog for one directory.
+
+    Returns True if the directory has changed (needs reconcile).
+    """
+    if len(agent_files) != len(catalog):
+        return True
+    for af in agent_files:
+        entry = catalog.get(af["rel_path"])
+        if entry is None:
+            return True
+        cat_size, cat_mtime = entry
+        if af["size"] != cat_size:
+            return True
+        if af["mtime"] != cat_mtime:
+            return True
+    return False
+
+
+async def _tree_diff(
+    agent_id: int,
+    location_id: int,
+    root_path: str,
+    read_db,
+) -> set[str] | None:
+    """Stream the agent tree and diff against catalog.
+
+    Returns set of changed rel_dir strings (directories needing reconcile),
+    or None if tree streaming is not supported (agent returned 404).
+    """
+    changed_dirs: set[str] = set()
+    all_dirs: list[str] = []
+    current_rel_dir: str | None = None
+    current_files: list[dict] = []
+
+    async def _flush_dir():
+        """Diff the buffered directory and record result."""
+        if current_rel_dir is None:
+            return
+        catalog = await _get_catalog_dir(read_db, location_id, current_rel_dir)
+        if _diff_directory(current_files, catalog):
+            changed_dirs.add(current_rel_dir)
+
+    got_records = False
+    async for record in stream_tree(agent_id, root_path):
+        got_records = True
+        rtype = record.get("type")
+
+        if rtype == "dir":
+            await _flush_dir()
+            current_rel_dir = record["rel_dir"]
+            current_files = []
+            all_dirs.append(current_rel_dir)
+
+        elif rtype == "file":
+            current_files.append(record)
+
+        elif rtype == "end":
+            await _flush_dir()
+
+    if not got_records:
+        # stream_tree returned without yielding — agent doesn't support /tree
+        return None
+
+    # Detect deleted directories: catalog dirs not in agent tree
+    catalog_dirs_rows = await read_db.execute_fetchall(
+        "SELECT DISTINCT rel_path FROM folders WHERE location_id = ? ",
+        (location_id,),
+    )
+    agent_dir_set = set(all_dirs)
+    for row in catalog_dirs_rows:
+        if row["rel_path"] not in agent_dir_set:
+            changed_dirs.add(row["rel_path"])
+
+    # Also check root-level files if root ("") wasn't already changed
+    if "" not in agent_dir_set:
+        # Agent didn't report root — means root dir doesn't exist, mark changed
+        changed_dirs.add("")
+
+    return changed_dirs
 
 
 def _now() -> str:

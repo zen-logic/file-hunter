@@ -390,6 +390,50 @@ async def rename_agent_location(agent_id: int, root_path: str, new_name: str):
     )
 
 
+async def stream_tree(agent_id: int, root_path: str, prefix: str | None = None):
+    """Stream the full metadata tree from an agent as parsed JSON objects.
+
+    Yields dicts: {"type":"dir",...}, {"type":"file",...}, {"type":"end",...}
+    Returns None (instead of yielding) if the agent doesn't support /tree (404).
+    Raises ConnectionError if the agent is offline.
+    """
+    import json as _json
+
+    resolved = _resolve_agent(agent_id)
+    if not resolved:
+        raise ConnectionError(f"Agent {agent_id} is offline")
+    host, port, token = resolved
+
+    url = f"http://{host}:{port}/tree"
+    body = {"path": root_path}
+    if prefix:
+        body["prefix"] = prefix
+
+    timeout = httpx.Timeout(1800.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream(
+            "POST",
+            url,
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        ) as resp:
+            if resp.status_code == 404:
+                return
+            if resp.status_code != 200:
+                text = ""
+                async for chunk in resp.aiter_text():
+                    text += chunk
+                    if len(text) > 500:
+                        break
+                raise RuntimeError(
+                    f"Agent /tree error {resp.status_code}: {text[:500]}"
+                )
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if line:
+                    yield _json.loads(line)
+
+
 async def delete_agent_location(agent_id: int, root_path: str, location_id: int = None):
     """Tell an agent to remove a location from its config.json.
 
