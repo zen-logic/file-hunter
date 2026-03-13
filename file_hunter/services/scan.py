@@ -128,6 +128,10 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
     try:
         while dirs_to_visit:
+            # Checkpoint: block here while queue is paused (e.g. during import)
+            from file_hunter.services.queue_manager import wait_if_paused
+            await wait_if_paused()
+
             current_dir = dirs_to_visit.popleft()
             dir_affected_strong: set[str] = set()
             dir_affected_fast: set[str] = set()

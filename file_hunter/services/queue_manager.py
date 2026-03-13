@@ -19,7 +19,11 @@ logger = logging.getLogger("file_hunter")
 _running = False
 _task: asyncio.Task | None = None
 _paused = False
-_quiescent: asyncio.Event | None = None  # set when paused and no running ops
+
+# Event that running operations await between iterations.
+# Set = running normally. Cleared = suspended (pause active).
+_pause_event: asyncio.Event = asyncio.Event()
+_pause_event.set()  # start in running state
 
 # Running operations: op_id -> (agent_id, asyncio.Task)
 _running_ops: dict[int, tuple[int | None, asyncio.Task]] = {}
@@ -220,33 +224,35 @@ async def stop():
 
 
 async def pause():
-    """Pause the queue manager and wait for all running operations to finish.
+    """Suspend all running operations and prevent new ones from dispatching.
 
-    No new operations will be dispatched. Returns once quiescent (no running ops).
+    Clears _pause_event so running ops block at their next checkpoint.
+    Waits briefly for ops to reach a checkpoint, then returns.
     """
-    global _paused, _quiescent
+    global _paused
     if _paused:
         return
     _paused = True
-    _quiescent = asyncio.Event()
-    logger.info("Queue manager pausing, waiting for %d op(s)...", len(_running_ops))
-
-    if not _running_ops:
-        _quiescent.set()
-    else:
-        await _quiescent.wait()
-
-    logger.info("Queue manager paused (quiescent)")
+    _pause_event.clear()
+    logger.info("Queue manager: suspending %d running op(s)", len(_running_ops))
+    # Give running ops time to hit their checkpoint and block
+    await asyncio.sleep(0.5)
+    logger.info("Queue manager: paused")
 
 
 def resume():
-    """Resume the queue manager after a pause."""
-    global _paused, _quiescent
+    """Resume the queue manager — unblock suspended operations."""
+    global _paused
     if not _paused:
         return
     _paused = False
-    _quiescent = None
-    logger.info("Queue manager resumed")
+    _pause_event.set()
+    logger.info("Queue manager: resumed, operations unblocked")
+
+
+async def wait_if_paused():
+    """Checkpoint for long-running operations. Blocks while queue is paused."""
+    await _pause_event.wait()
 
 
 async def _recover_interrupted():
@@ -280,10 +286,8 @@ async def _run():
         try:
             await _reap_finished()
 
-            # When paused, signal quiescent once all ops finish
+            # When paused, don't dispatch new ops
             if _paused:
-                if not _running_ops and _quiescent and not _quiescent.is_set():
-                    _quiescent.set()
                 await asyncio.sleep(1)
                 continue
 

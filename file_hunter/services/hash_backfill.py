@@ -266,6 +266,10 @@ async def run_backfill(
                     logger.warning("Backfill: hash failed for %s: %r", full_path, e)
 
         for i, row in enumerate(candidates):
+            # Checkpoint: block here while queue is paused (e.g. during import)
+            from file_hunter.services.queue_manager import wait_if_paused
+            await wait_if_paused()
+
             if _active_backfills.get(agent_id):
                 break
 
@@ -438,6 +442,10 @@ async def _backfill_agents(
         return 0
 
     for row in rows:
+        # Checkpoint: block here while queue is paused (e.g. during import)
+        from file_hunter.services.queue_manager import wait_if_paused
+        await wait_if_paused()
+
         if row["location_id"] not in online_loc_ids:
             continue
         if _active_backfills.get(agent_id):
