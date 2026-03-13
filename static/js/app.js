@@ -1057,33 +1057,16 @@ WS.on('scan_error', (msg) => {
 
 function syncQueuedLocations(queue) {
     StatusBar.updateQueue(queue);
-    // Rebuild all badge sets from queue state (single source of truth)
-    Tree._scanningLocations.clear();
-    Tree._backfillingLocations.clear();
-    Tree._deletingLocations.clear();
+    // Rebuild both sets from queue state (single source of truth)
     Tree._queuedLocations.clear();
+    Tree._scanningLocations.clear();
     if (queue) {
-        // Typed running sets (preferred)
-        if (queue.scanning_location_ids) {
-            for (const locId of queue.scanning_location_ids) {
-                Tree._scanningLocations.add('loc-' + locId);
-            }
-        }
-        if (queue.backfilling_location_ids) {
-            for (const locId of queue.backfilling_location_ids) {
-                Tree._backfillingLocations.add('loc-' + locId);
-            }
-        }
-        if (queue.deleting_location_ids) {
-            for (const locId of queue.deleting_location_ids) {
-                Tree._deletingLocations.add('loc-' + locId);
-            }
-        }
-        // Fallback for old server without typed ids
-        if (!queue.scanning_location_ids && queue.running_location_ids) {
+        if (queue.running_location_ids) {
             for (const locId of queue.running_location_ids) {
                 Tree._scanningLocations.add('loc-' + locId);
             }
+        } else if (queue.running_location_id) {
+            Tree._scanningLocations.add('loc-' + queue.running_location_id);
         }
         if (queue.pending) {
             for (const entry of queue.pending) {
