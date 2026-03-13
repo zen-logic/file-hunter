@@ -24,6 +24,7 @@ import ActivityLog from './components/activitylog.js';
 import Toast from './components/toast.js';
 import Upload from './components/upload.js';
 import SlideshowTriage from './components/slideshow-triage.js';
+import ImportCatalog from './components/importcatalog.js';
 import Keyboard from './keyboard.js';
 import WS from './ws.js';
 
@@ -438,6 +439,7 @@ consolidateBtn.addEventListener('click', async () => {
 
 SlideshowTriage.init();
 Detail.slideshowTriage = SlideshowTriage;
+ImportCatalog.init();
 
 Merge.init(async ({ source_id, destination_id }) => {
     await API.post('/api/merge', { source_id, destination_id });
