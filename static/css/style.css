@@ -6,6 +6,10 @@
     user-select: none;
 }
 
+.hidden {
+    display: none !important;
+}
+
 input, textarea, select, [contenteditable], .detail-preview pre, .preview-modal-content pre {
     -webkit-user-select: text;
     user-select: text;
@@ -1961,6 +1965,22 @@ body::after {
 
 .modal-error.hidden {
     display: none;
+}
+
+/* ── Import catalog progress bar ── */
+
+.import-progress-bar {
+    height: 6px;
+    background: var(--color-progress-track);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.import-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--color-progress-fill);
+    transition: width 0.3s ease;
 }
 
 /* ── Status bar cancel button ── */
