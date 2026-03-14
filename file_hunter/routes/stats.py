@@ -121,14 +121,18 @@ async def _bg_repair():
     Phase 2: Full dup recount — recalculate dup_count for all hashes.
     Phase 3: Recalculate all location sizes.
     """
+    from collections import defaultdict
+
     from file_hunter.db import db_writer, open_connection
-    from file_hunter.services.agent_ops import dispatch
+    from file_hunter.services.agent_ops import hash_fast_batch
     from file_hunter.services.dup_counts import _batched_recalc
     from file_hunter.services.online_check import agent_online_check
     from file_hunter.services.queue_manager import pause, resume
     from file_hunter.services.sizes import recalculate_location_sizes
     from file_hunter.services.stats import invalidate_stats_cache
     from file_hunter.ws.scan import broadcast
+
+    HASH_BATCH_SIZE = 50
 
     try:
         _repair_progress["status"] = "running"
@@ -150,15 +154,17 @@ async def _bg_repair():
         # Use dedicated connection — this query touches the full files table.
         db = await open_connection()
         try:
-            # Get all locations with their agent_id for online checks
             loc_rows = await db.execute_fetchall(
                 "SELECT id, name, agent_id FROM locations"
             )
-            # Find which locations are online
+            # Build location_id -> agent_id map and find online locations
+            loc_agent_map: dict[int, int] = {}
             online_loc_ids = []
             for loc in loc_rows:
-                if loc["agent_id"] and agent_online_check(loc):
-                    online_loc_ids.append(loc["id"])
+                if loc["agent_id"]:
+                    loc_agent_map[loc["id"]] = loc["agent_id"]
+                    if agent_online_check(loc):
+                        online_loc_ids.append(loc["id"])
 
             if online_loc_ids:
                 loc_ph = ",".join("?" for _ in online_loc_ids)
@@ -189,50 +195,90 @@ async def _bg_repair():
         _repair_progress["total"] = total
         log.info("Catalog repair: %d files need hash_fast on online locations", total)
 
-        # Hash files via agents
+        # Group candidates by agent_id for batched hash calls
+        # Build path->file_id lookup and group paths by agent
+        path_to_id: dict[str, int] = {}
+        agent_batches: dict[int, list[str]] = defaultdict(list)
+        for row in candidates:
+            path_to_id[row["full_path"]] = row["id"]
+            agent_id = loc_agent_map.get(row["location_id"])
+            if agent_id:
+                agent_batches[agent_id].append(row["full_path"])
+
         hashed = 0
         errors = 0
+        skipped = 0
         pending_writes: list[tuple[int, str]] = []
         affected_fast_hashes: set[str] = set()
+        failed_agents: set[int] = set()
 
-        for row in candidates:
-            try:
-                result = await dispatch(
-                    "file_hash", row["location_id"], path=row["full_path"]
-                )
-                pending_writes.append((row["id"], result["hash_fast"]))
-                affected_fast_hashes.add(result["hash_fast"])
-                hashed += 1
+        for agent_id, paths in agent_batches.items():
+            if agent_id in failed_agents:
+                skipped += len(paths)
+                _repair_progress["skipped"] = skipped
+                continue
+
+            # Process in batches
+            for i in range(0, len(paths), HASH_BATCH_SIZE):
+                # Yield to event loop so cancellation can be processed
+                await asyncio.sleep(0)
+
+                if agent_id in failed_agents:
+                    skipped += len(paths) - i
+                    _repair_progress["skipped"] = skipped
+                    break
+
+                batch = paths[i : i + HASH_BATCH_SIZE]
+                try:
+                    result = await hash_fast_batch(agent_id, batch)
+                except ConnectionError:
+                    # Agent went offline — skip all remaining files for it
+                    failed_agents.add(agent_id)
+                    remaining = len(paths) - i
+                    skipped += remaining
+                    _repair_progress["skipped"] = skipped
+                    log.warning(
+                        "Catalog repair: agent %d offline, skipping %d files",
+                        agent_id,
+                        remaining,
+                    )
+                    break
+
+                # Process results
+                for item in result.get("results", []):
+                    file_id = path_to_id.get(item["path"])
+                    if file_id:
+                        pending_writes.append((file_id, item["hash_fast"]))
+                        affected_fast_hashes.add(item["hash_fast"])
+                        hashed += 1
+
+                for item in result.get("errors", []):
+                    errors += 1
+
                 _repair_progress["hashed"] = hashed
-            except Exception as e:
-                errors += 1
                 _repair_progress["errors"] = errors
-                log.warning(
-                    "Catalog repair: hash failed for %s: %r",
-                    row["full_path"],
-                    e,
-                )
 
-            # Flush writes in batches of 50
-            if len(pending_writes) >= 50:
-                async with db_writer() as wdb:
-                    for file_id, hash_fast in pending_writes:
-                        await wdb.execute(
-                            "UPDATE files SET hash_fast = ? WHERE id = ?",
-                            (hash_fast, file_id),
-                        )
-                pending_writes.clear()
+                # Flush writes
+                if len(pending_writes) >= 50:
+                    async with db_writer() as wdb:
+                        for file_id, hash_fast in pending_writes:
+                            await wdb.execute(
+                                "UPDATE files SET hash_fast = ? WHERE id = ?",
+                                (hash_fast, file_id),
+                            )
+                    pending_writes.clear()
 
-            # Log progress periodically
-            done = hashed + errors
-            if done % 100 == 0 and done > 0:
-                log.info(
-                    "Catalog repair: phase 1 — %d/%d (hashed=%d, errors=%d)",
-                    done,
-                    total,
-                    hashed,
-                    errors,
-                )
+                done = hashed + errors + skipped
+                if done % 500 == 0 and done > 0:
+                    log.info(
+                        "Catalog repair: phase 1 — %d/%d "
+                        "(hashed=%d, errors=%d, skipped=%d)",
+                        done,
+                        total,
+                        hashed,
+                        errors,
+                        skipped,
+                    )
 
         # Flush remaining writes
         if pending_writes:
@@ -245,9 +291,10 @@ async def _bg_repair():
             pending_writes.clear()
 
         log.info(
-            "Catalog repair: phase 1 complete — hashed=%d, errors=%d of %d",
+            "Catalog repair: phase 1 complete — hashed=%d, errors=%d, skipped=%d of %d",
             hashed,
             errors,
+            skipped,
             total,
         )
 
@@ -353,6 +400,7 @@ async def _bg_repair():
             {
                 "type": "repair_completed",
                 "hashed": hashed,
+                "skipped": skipped,
                 "errors": errors,
                 "dupHashes": dup_total,
                 "locations": len(all_locs),

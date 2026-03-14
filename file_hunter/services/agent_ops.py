@@ -260,6 +260,21 @@ async def hash_partial_batch(agent_id: int, paths: list[str]) -> dict:
     )
 
 
+async def hash_fast_batch(agent_id: int, paths: list[str]) -> dict:
+    """Call agent /files/hash-batch for a list of file paths.
+
+    Returns {"results": [{"path": ..., "hash_fast": ...}], "errors": [...]}.
+    Raises ConnectionError if agent is offline.
+    """
+    resolved = _resolve_agent(agent_id)
+    if not resolved:
+        raise ConnectionError(f"Agent {agent_id} is offline")
+    host, port, token = resolved
+    return await _post(
+        host, port, token, "/files/hash-batch", {"paths": paths}, timeout=600.0
+    )
+
+
 async def reconcile_directory(
     agent_id: int, path: str, root_path: str, expected: list[dict], cursor=None
 ) -> dict:

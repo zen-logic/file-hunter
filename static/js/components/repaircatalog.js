@@ -62,12 +62,13 @@ const RepairCatalog = {
                 textEl.textContent = 'Querying database...';
             } else if (p.phase === 'hashing') {
                 phaseEl.textContent = 'Phase 1: Computing missing hashes';
-                const done = p.hashed + p.errors;
+                const done = p.hashed + p.errors + (p.skipped || 0);
                 const pct = p.total > 0 ? Math.round((done / p.total) * 100) : 0;
                 fillEl.style.width = pct + '%';
                 const parts = [];
                 parts.push(`${done.toLocaleString()} / ${p.total.toLocaleString()}`);
                 if (p.hashed > 0) parts.push(`${p.hashed.toLocaleString()} hashed`);
+                if (p.skipped > 0) parts.push(`${p.skipped.toLocaleString()} skipped (offline)`);
                 if (p.errors > 0) parts.push(`${p.errors.toLocaleString()} errors`);
                 textEl.textContent = parts.join(' \u2014 ');
             } else if (p.phase === 'dup_recount') {
@@ -105,9 +106,10 @@ const RepairCatalog = {
             el.innerHTML = `<span style="color:var(--color-status-error)">Repair failed: ${p.error || 'Unknown error'}</span>`;
         } else {
             const lines = ['Catalog repair complete.'];
-            if (p.hashed > 0 || p.errors > 0) {
+            if (p.hashed > 0 || p.skipped > 0 || p.errors > 0) {
                 lines.push(
                     `Hashing: ${p.hashed.toLocaleString()} computed` +
+                    (p.skipped > 0 ? `, ${p.skipped.toLocaleString()} skipped (offline)` : '') +
                     (p.errors > 0 ? `, ${p.errors.toLocaleString()} errors` : '')
                 );
             }
