@@ -131,7 +131,7 @@ async def get_shallow_tree(db):
             "children": children,
         }
         if loc["id"] in agent_loc_ids:
-            node["agent"] = True
+            node["agent"] = "local" if agent_name == "Local Agent" else "remote"
         tree.append(node)
     return tree
 

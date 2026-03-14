@@ -597,7 +597,7 @@ const Tree = {
             if (node.agent) {
                 const b = document.createElement('span');
                 b.className = 'tree-badge agent';
-                b.textContent = 'agent';
+                b.textContent = node.agent === 'local' ? 'local' : 'remote';
                 badges.appendChild(b);
             }
             if (node.online === false) {
