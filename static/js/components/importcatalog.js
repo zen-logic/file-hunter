@@ -257,9 +257,13 @@ const ImportCatalog = {
                 textEl.textContent = `Recalculating sizes... (${p.files_imported.toLocaleString()} files imported)`;
                 fillEl.style.width = '100%';
             } else if (p.status === 'running') {
-                textEl.textContent =
-                    `${p.files_imported.toLocaleString()} / ${p.files_total.toLocaleString()} files` +
-                    (rate > 0 ? ` (${rate.toLocaleString()}/sec)` : '');
+                if (p.files_imported === 0 && p.folders_created > 0) {
+                    textEl.textContent = `Creating folders... ${p.folders_created.toLocaleString()} created`;
+                } else {
+                    textEl.textContent =
+                        `${p.files_imported.toLocaleString()} / ${p.files_total.toLocaleString()} files` +
+                        (rate > 0 ? ` (${rate.toLocaleString()}/sec)` : '');
+                }
             } else if (p.status === 'complete') {
                 clearInterval(this._pollTimer);
                 this._pollTimer = null;
