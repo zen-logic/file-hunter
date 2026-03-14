@@ -197,11 +197,16 @@ async def run_import(
         _progress["status"] = "recalculating"
         await _recalculate_location_sizes(location_id)
 
-        # Update date_last_scanned
+        # Update date_last_scanned and record import in scans table
         async with db_writer() as wdb:
             await wdb.execute(
                 "UPDATE locations SET date_last_scanned = ? WHERE id = ?",
                 (now, location_id),
+            )
+            await wdb.execute(
+                "INSERT INTO scans (location_id, status, started_at, completed_at, "
+                "files_found) VALUES (?, 'imported', ?, ?, ?)",
+                (location_id, now, now, _progress["files_imported"]),
             )
 
         _progress["status"] = "complete"
