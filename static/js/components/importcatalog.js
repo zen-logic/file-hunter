@@ -96,12 +96,27 @@ const ImportCatalog = {
         formData.append('catalog', this._file);
 
         const token = localStorage.getItem('fh-token');
-        const res = await fetch('/api/import-catalog/upload', {
-            method: 'POST',
-            headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-            body: formData,
+        const fileSize = this._file.size;
+
+        const data = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/import-catalog/upload');
+            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    const mb = (e.loaded / 1048576).toFixed(0);
+                    const totalMb = (e.total / 1048576).toFixed(0);
+                    btn.textContent = `Uploading... ${mb} / ${totalMb} MB (${pct}%)`;
+                }
+            });
+            xhr.onload = () => {
+                try { resolve(JSON.parse(xhr.responseText)); }
+                catch { resolve({ ok: false, error: 'Invalid response' }); }
+            };
+            xhr.onerror = () => resolve({ ok: false, error: 'Upload failed' });
+            xhr.send(formData);
         });
-        const data = await res.json();
 
         btn.textContent = 'Upload';
 
