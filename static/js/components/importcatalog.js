@@ -53,7 +53,11 @@ const ImportCatalog = {
         this._showStep('upload');
         document.getElementById('import-file-name').value = '';
         document.getElementById('import-upload-btn').disabled = true;
+        document.getElementById('import-upload-btn').textContent = 'Upload';
         document.getElementById('import-upload-error').classList.add('hidden');
+        document.getElementById('import-run-btn').disabled = false;
+        document.getElementById('import-config-error').classList.add('hidden');
+        this._fileInput.value = '';
         this.overlayEl.classList.remove('hidden');
     },
 
