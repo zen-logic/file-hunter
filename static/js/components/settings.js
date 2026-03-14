@@ -1,6 +1,7 @@
 import API from '../api.js';
 import { themeNames, applyTheme } from '../themes.js';
 import Update from './update.js';
+import RepairCatalog from './repaircatalog.js';
 
 const Settings = {
     _currentUser: null,
@@ -119,11 +120,9 @@ const Settings = {
         document.getElementById('settings-add-user').addEventListener('click', () => this._showAddUser());
 
         // Repair catalog
-        document.getElementById('settings-repair-catalog').addEventListener('click', async (e) => {
-            const btn = e.target;
-            btn.textContent = 'Repairing...';
-            btn.disabled = true;
-            await API.post('/api/stats/repair');
+        document.getElementById('settings-repair-catalog').addEventListener('click', () => {
+            this.close();
+            RepairCatalog.start();
         });
 
         // Pro updates / upgrade

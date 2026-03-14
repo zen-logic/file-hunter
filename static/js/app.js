@@ -25,6 +25,7 @@ import Toast from './components/toast.js';
 import Upload from './components/upload.js';
 import SlideshowTriage from './components/slideshow-triage.js';
 import ImportCatalog from './components/importcatalog.js';
+import RepairCatalog from './components/repaircatalog.js';
 import Keyboard from './keyboard.js';
 import WS from './ws.js';
 
@@ -440,6 +441,7 @@ consolidateBtn.addEventListener('click', async () => {
 SlideshowTriage.init();
 Detail.slideshowTriage = SlideshowTriage;
 ImportCatalog.init();
+RepairCatalog.init();
 
 Merge.init(async ({ source_id, destination_id }) => {
     await API.post('/api/merge', { source_id, destination_id });
@@ -1255,7 +1257,12 @@ WS.on('repair_started', () => {
 });
 
 WS.on('repair_completed', async (msg) => {
-    ActivityLog.add(`Catalog repair complete: ${msg.staleCleared} stale flags cleared, ${msg.hashes} hashes recounted`);
+    const parts = [];
+    if (msg.hashed > 0) parts.push(`${msg.hashed} files hashed`);
+    if (msg.skipped > 0) parts.push(`${msg.skipped} skipped`);
+    if (msg.dupHashes > 0) parts.push(`${msg.dupHashes} hashes recounted`);
+    if (msg.locations > 0) parts.push(`${msg.locations} locations recalculated`);
+    ActivityLog.add(`Catalog repair complete: ${parts.join(', ') || 'no changes'}`);
     await StatusBar.loadStats();
     await Detail.refreshStats();
 });

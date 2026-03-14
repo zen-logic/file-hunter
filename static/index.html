@@ -387,6 +387,21 @@
                 </div>
             </div>
         </div>
+        <div id="slideshow-tag-modal" class="modal-overlay hidden">
+            <div class="modal-dialog">
+                <h2 class="modal-title">Tag Marked Images</h2>
+                <p id="slideshow-tag-text" class="modal-text"></p>
+                <div id="slideshow-tag-list" class="modal-list-scroll"></div>
+                <div class="modal-field">
+                    <label class="modal-label" for="slideshow-tag-input">Tag</label>
+                    <input type="text" class="modal-input" id="slideshow-tag-input" placeholder="Enter tag">
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" id="slideshow-tag-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="slideshow-tag-submit">Tag</button>
+                </div>
+            </div>
+        </div>
         <div id="new-folder-modal" class="modal-overlay hidden">
             <div class="modal-dialog">
                 <h2 class="modal-title">New Folder</h2>
@@ -524,6 +539,28 @@
                     </div>
                     <div class="modal-actions">
                         <button class="btn btn-primary" id="import-done-close">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="repair-catalog-modal" class="modal-overlay hidden">
+            <div class="modal-dialog modal-dialog-wide">
+                <h2 class="modal-title">Repair Catalog</h2>
+                <div id="repair-step-progress">
+                    <div class="modal-field">
+                        <label class="modal-label" id="repair-phase-label">Starting...</label>
+                        <div class="import-progress-bar">
+                            <div class="import-progress-fill" id="repair-progress-fill"></div>
+                        </div>
+                        <div id="repair-progress-text" class="modal-text" style="margin-top:0.25rem"></div>
+                    </div>
+                </div>
+                <div id="repair-step-done" class="hidden">
+                    <div class="modal-field">
+                        <div id="repair-done-text" class="modal-text"></div>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn btn-primary" id="repair-done-close">Close</button>
                     </div>
                 </div>
             </div>

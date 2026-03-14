@@ -49,6 +49,7 @@ from file_hunter.routes.stats import (
     stats,
     recalculate_stats,
     repair_catalog,
+    repair_catalog_progress,
     rehash_partial,
     location_stats,
     folder_stats,
@@ -194,10 +195,6 @@ async def on_startup():
     start_queue_manager()
     _elapsed("queue manager started")
 
-    from file_hunter.services.dup_counts import backfill_dup_counts
-
-    asyncio.get_event_loop().create_task(backfill_dup_counts())
-
     from file_hunter.services.stats import warm_stats_cache
 
     asyncio.get_event_loop().create_task(warm_stats_cache())
@@ -205,9 +202,11 @@ async def on_startup():
 
 
 async def on_shutdown():
+    from file_hunter.routes.stats import stop_repair
     from file_hunter.services.queue_manager import stop as stop_queue_manager
     from file_hunter.services.dup_counts import stop_writer as stop_dup_writer
 
+    await stop_repair()
     await stop_queue_manager()
     await stop_dup_writer()
     await close_db()
@@ -287,6 +286,7 @@ app = Starlette(
         Route("/api/stats", stats, methods=["GET"]),
         Route("/api/stats/recalculate", recalculate_stats, methods=["POST"]),
         Route("/api/stats/repair", repair_catalog, methods=["POST"]),
+        Route("/api/stats/repair-progress", repair_catalog_progress, methods=["GET"]),
         Route("/api/admin/rehash-partial", rehash_partial, methods=["POST"]),
         Route("/api/locations/{id:int}/stats", location_stats, methods=["GET"]),
         Route("/api/folders/{id:int}/stats", folder_stats, methods=["GET"]),
