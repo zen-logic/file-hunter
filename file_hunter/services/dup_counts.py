@@ -27,7 +27,7 @@ _writer_task: asyncio.Task | None = None
 
 
 async def _batched_recalc(
-    hashes, *, hash_column: str = "hash_strong", on_progress=None
+    hashes, *, hash_column: str = "hash_strong", on_progress=None, batch_size: int = 0
 ):
     """Recalculate dup_count for files sharing the given hashes.
 
@@ -47,13 +47,14 @@ async def _batched_recalc(
     hash_list = list(hashes)
     total = len(hash_list)
     processed = 0
+    effective_batch = batch_size if batch_size > 0 else RECALC_BATCH
     db = await get_db()
 
     # For hash_fast updates, only target files without hash_strong
     update_extra = " AND hash_strong IS NULL" if hash_column == "hash_fast" else ""
 
-    for i in range(0, total, RECALC_BATCH):
-        batch = hash_list[i : i + RECALC_BATCH]
+    for i in range(0, total, effective_batch):
+        batch = hash_list[i : i + effective_batch]
         ph = ",".join("?" for _ in batch)
 
         # One GROUP BY query gives counts for the whole batch (read)

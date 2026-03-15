@@ -230,52 +230,36 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
 
         recalculated = 0
         if shared_total > 0:
-            from file_hunter.services.dup_counts import (
-                _batched_recalc,
-                full_dup_recount,
-            )
+            from file_hunter.services.dup_counts import _batched_recalc
 
-            if shared_total > 10000:
-                # Large set — use full_dup_recount for performance
-                last_hash_step = -1
+            # Use large batch size for >10K hashes to reduce commit frequency
+            bs = 5000 if shared_total > 10000 else 0
+            last_hash_step = -1
 
-                async def _on_dup_progress(total_processed):
-                    nonlocal last_hash_step
-                    if shared_total > 0:
-                        step = (total_processed * 50 // shared_total) // 5
-                        if step > last_hash_step:
-                            last_hash_step = step
-                            await broadcast(
-                                {"type": "dup_exclude_progress", "pct": 50 + step * 5}
-                            )
+            async def _on_progress(processed, total):
+                nonlocal last_hash_step
+                if total > 0:
+                    step = (processed * 50 // total) // 5
+                    if step > last_hash_step:
+                        last_hash_step = step
+                        await broadcast(
+                            {"type": "dup_exclude_progress", "pct": 50 + step * 5}
+                        )
 
-                recalculated = await full_dup_recount(on_progress=_on_dup_progress)
-            else:
-                # Small set — incremental recalc is fine
-                last_hash_step = -1
-
-                async def _on_progress(processed, total):
-                    nonlocal last_hash_step
-                    if total > 0:
-                        step = (processed * 50 // total) // 5
-                        if step > last_hash_step:
-                            last_hash_step = step
-                            await broadcast(
-                                {"type": "dup_exclude_progress", "pct": 50 + step * 5}
-                            )
-
-                if shared_strong:
-                    recalculated += await _batched_recalc(
-                        shared_strong,
-                        hash_column="hash_strong",
-                        on_progress=_on_progress,
-                    )
-                if shared_fast:
-                    recalculated += await _batched_recalc(
-                        shared_fast,
-                        hash_column="hash_fast",
-                        on_progress=_on_progress,
-                    )
+            if shared_strong:
+                recalculated += await _batched_recalc(
+                    shared_strong,
+                    hash_column="hash_strong",
+                    on_progress=_on_progress,
+                    batch_size=bs,
+                )
+            if shared_fast:
+                recalculated += await _batched_recalc(
+                    shared_fast,
+                    hash_column="hash_fast",
+                    on_progress=_on_progress,
+                    batch_size=bs,
+                )
 
         invalidate_stats_cache()
 
