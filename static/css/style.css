@@ -518,6 +518,12 @@ body::after {
     color: var(--color-offline-text);
 }
 
+.tree-badge.excluded {
+    background: var(--color-stale-bg);
+    color: var(--color-stale-text);
+    margin-left: 0.35rem;
+}
+
 .tree-badge.scanning {
     background: var(--color-scan-bg);
     color: var(--color-scan-text);

@@ -615,12 +615,20 @@ const Tree = {
             }
             meta.appendChild(badges);
             item.appendChild(meta);
-        } else if (node.totalSize > 0) {
+        } else if (node.totalSize > 0 || node.dupExcluded) {
             // Inline size for folder nodes
-            const sizeSpan = document.createElement('span');
-            sizeSpan.className = 'tree-size';
-            sizeSpan.textContent = formatSize(node.totalSize);
-            item.appendChild(sizeSpan);
+            if (node.totalSize > 0) {
+                const sizeSpan = document.createElement('span');
+                sizeSpan.className = 'tree-size';
+                sizeSpan.textContent = formatSize(node.totalSize);
+                item.appendChild(sizeSpan);
+            }
+            if (node.dupExcluded) {
+                const exBadge = document.createElement('span');
+                exBadge.className = 'tree-badge excluded';
+                exBadge.textContent = 'excluded';
+                item.appendChild(exBadge);
+            }
         }
 
         item.addEventListener('click', async (e) => {

@@ -1232,7 +1232,11 @@ WS.on('dup_exclude_progress', msg => {
 WS.on('dup_exclude_completed', async msg => {
     const verb = msg.direction === 'exclude' ? 'excluded' : 'included';
     ActivityLog.add(`Duplicate exclusion updated: <b>${msg.folder}</b> ${verb} — ${(msg.fileCount || 0).toLocaleString()} files, ${(msg.hashCount || 0).toLocaleString()} hashes recalculated`);
-    if (selectedNode) await FileList.showFolder(selectedNode.id);
+    await Tree.reload();
+    if (selectedNode) {
+        selectedNode = Tree._findNode(selectedNode.id);
+        await FileList.showFolder(selectedNode.id);
+    }
     await Detail.refreshStats();
     await StatusBar.loadStats();
 });
