@@ -25,14 +25,27 @@ async def delete_file(db, file_id: int) -> dict:
     hash_fast = rec["hash_fast"]
     hash_strong = rec["hash_strong"]
 
-    # Check if location is online and file exists
-    deleted_from_disk = False
+    # Check if location is online
     online = await fs.dir_exists(root_path, location_id)
-    if online:
-        exists = await fs.file_exists(full_path, location_id)
-        if exists:
-            await fs.file_delete(full_path, location_id)
-            deleted_from_disk = True
+
+    if not online:
+        # Defer — keep file in catalog with pending_op indicator
+        from file_hunter.services.deferred_ops import queue_deferred_op
+
+        await queue_deferred_op(db, file_id, location_id, "delete")
+        await db.commit()
+
+        from file_hunter.services.stats import invalidate_stats_cache
+
+        invalidate_stats_cache()
+        return {"filename": filename, "deleted_from_disk": False, "deferred": True}
+
+    # Online — delete from disk and catalog immediately
+    deleted_from_disk = False
+    exists = await fs.file_exists(full_path, location_id)
+    if exists:
+        await fs.file_delete(full_path, location_id)
+        deleted_from_disk = True
 
     await db.execute("DELETE FROM files WHERE id = ?", (file_id,))
     await db.commit()
@@ -52,7 +65,11 @@ async def delete_file(db, file_id: int) -> dict:
     elif hash_fast:
         submit_hashes_for_recalc(fast_hashes={hash_fast}, source=f"delete {filename}")
 
-    return {"filename": filename, "deleted_from_disk": deleted_from_disk}
+    return {
+        "filename": filename,
+        "deleted_from_disk": deleted_from_disk,
+        "deferred": False,
+    }
 
 
 async def delete_file_and_duplicates(db, file_id: int) -> dict:
@@ -87,6 +104,7 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
 
     deleted_count = 0
     deleted_from_disk_count = 0
+    deferred_count = 0
 
     for rec in all_rows:
         fid = rec["id"]
@@ -100,9 +118,14 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
             if exists:
                 await fs.file_delete(full_path, loc_id)
                 deleted_from_disk_count += 1
+            await db.execute("DELETE FROM files WHERE id = ?", (fid,))
+            deleted_count += 1
+        else:
+            # Defer for offline locations
+            from file_hunter.services.deferred_ops import queue_deferred_op
 
-        await db.execute("DELETE FROM files WHERE id = ?", (fid,))
-        deleted_count += 1
+            await queue_deferred_op(db, fid, loc_id, "delete")
+            deferred_count += 1
 
     await db.commit()
 
@@ -128,6 +151,7 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
         "filename": filename,
         "deleted_count": deleted_count,
         "deleted_from_disk_count": deleted_from_disk_count,
+        "deferred_count": deferred_count,
     }
 
 

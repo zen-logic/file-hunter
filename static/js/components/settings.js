@@ -122,7 +122,7 @@ const Settings = {
         // Repair catalog
         document.getElementById('settings-repair-catalog').addEventListener('click', () => {
             this.close();
-            RepairCatalog.start();
+            RepairCatalog.open();
         });
 
         // Pro updates / upgrade

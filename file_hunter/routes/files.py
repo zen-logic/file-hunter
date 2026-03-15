@@ -159,28 +159,51 @@ async def file_delete(request: Request):
         result = await execute_write(delete_file_and_duplicates, file_id)
         if result is None:
             return json_error("File not found.", 404)
-        await broadcast(
-            {
-                "type": "file_deleted",
-                "fileId": file_id,
-                "filename": result["filename"],
-                "deletedCount": result["deleted_count"],
-                "deletedFromDiskCount": result["deleted_from_disk_count"],
-                "allDuplicates": True,
-            }
-        )
+        deferred = result.get("deferred_count", 0)
+        if deferred and result["deleted_count"] == 0:
+            # All copies were on offline locations — all deferred
+            await broadcast(
+                {
+                    "type": "deferred_op_created",
+                    "fileId": file_id,
+                    "opType": "delete",
+                    "filename": result["filename"],
+                }
+            )
+        else:
+            await broadcast(
+                {
+                    "type": "file_deleted",
+                    "fileId": file_id,
+                    "filename": result["filename"],
+                    "deletedCount": result["deleted_count"],
+                    "deletedFromDiskCount": result["deleted_from_disk_count"],
+                    "allDuplicates": True,
+                    "deferredCount": deferred,
+                }
+            )
     else:
         result = await execute_write(delete_file, file_id)
         if result is None:
             return json_error("File not found.", 404)
-        await broadcast(
-            {
-                "type": "file_deleted",
-                "fileId": file_id,
-                "filename": result["filename"],
-                "deletedFromDisk": result["deleted_from_disk"],
-            }
-        )
+        if result.get("deferred"):
+            await broadcast(
+                {
+                    "type": "deferred_op_created",
+                    "fileId": file_id,
+                    "opType": "delete",
+                    "filename": result["filename"],
+                }
+            )
+        else:
+            await broadcast(
+                {
+                    "type": "file_deleted",
+                    "fileId": file_id,
+                    "filename": result["filename"],
+                    "deletedFromDisk": result["deleted_from_disk"],
+                }
+            )
     return json_ok(result)
 
 
@@ -210,7 +233,19 @@ async def file_verify(request: Request):
 
     online = await fs.dir_exists(f["root_path"], f["location_id"])
     if not online:
-        return json_error("Location is offline.", 400)
+        # Defer — verify when location comes back online
+        from file_hunter.services.deferred_ops import queue_deferred_op
+
+        await execute_write(queue_deferred_op, file_id, f["location_id"], "verify")
+        await broadcast(
+            {
+                "type": "deferred_op_created",
+                "fileId": file_id,
+                "opType": "verify",
+                "filename": f["filename"],
+            }
+        )
+        return json_ok({"deferred": True, "filename": f["filename"]})
 
     exists = await fs.file_exists(f["full_path"], f["location_id"])
     if not exists:
@@ -355,18 +390,48 @@ async def file_move(request: Request):
 
     invalidate_stats_cache()
 
-    await broadcast(
-        {
-            "type": "file_moved",
-            "fileId": file_id,
-            "oldName": result.get("old_name"),
-            "newName": result.get("new_name"),
-            "renamed": result.get("renamed", False),
-            "moved": result.get("moved", False),
-        }
-    )
+    if result.get("deferred"):
+        await broadcast(
+            {
+                "type": "deferred_op_created",
+                "fileId": file_id,
+                "opType": "move",
+                "filename": result.get("old_name"),
+            }
+        )
+    else:
+        await broadcast(
+            {
+                "type": "file_moved",
+                "fileId": file_id,
+                "oldName": result.get("old_name"),
+                "newName": result.get("new_name"),
+                "renamed": result.get("renamed", False),
+                "moved": result.get("moved", False),
+            }
+        )
 
     return json_ok(result)
+
+
+async def file_cancel_pending(request: Request):
+    """POST /api/files/{id:int}/cancel-pending — cancel a deferred operation."""
+    file_id = int(request.path_params["id"])
+
+    db = await get_db()
+    row = await db.execute_fetchall(
+        "SELECT id, pending_op, filename FROM files WHERE id = ?", (file_id,)
+    )
+    if not row:
+        return json_error("File not found.", 404)
+    if not row[0]["pending_op"]:
+        return json_error("No pending operation on this file.", 400)
+
+    from file_hunter.services.deferred_ops import cancel_pending_op
+
+    await cancel_pending_op(file_id)
+
+    return json_ok({"cancelled": True, "filename": row[0]["filename"]})
 
 
 async def folder_dup_exclude(request: Request):

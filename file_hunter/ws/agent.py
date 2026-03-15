@@ -201,8 +201,9 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
                 path_status[loc_id] = True
     update_location_path_status(agent_id, path_status)
 
-    # Drain any pending consolidation jobs for online locations
+    # Drain any pending consolidation jobs and deferred file ops for online locations
     from file_hunter.services.consolidate import drain_pending_jobs
+    from file_hunter.services.deferred_ops import drain_pending_ops
 
     for loc_id, online in path_status.items():
         if not online:
@@ -213,7 +214,9 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
         loc_row = await cursor.fetchone()
         if not loc_row:
             continue
-        # Check if there are pending jobs before draining
+        root_path = loc_row["root_path"]
+
+        # Check if there are pending consolidation jobs before draining
         pending = await db.execute(
             "SELECT COUNT(*) as cnt FROM consolidation_jobs "
             "WHERE source_location_id = ? AND status = 'pending'",
@@ -221,7 +224,17 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
         )
         cnt_row = await pending.fetchone()
         if cnt_row and cnt_row["cnt"] > 0:
-            await drain_pending_jobs(loc_id, loc_row["root_path"])
+            await drain_pending_jobs(loc_id, root_path)
+
+        # Check if there are pending file ops before draining
+        pending_ops = await db.execute(
+            "SELECT COUNT(*) as cnt FROM pending_file_ops "
+            "WHERE location_id = ? AND status = 'pending'",
+            (loc_id,),
+        )
+        ops_row = await pending_ops.fetchone()
+        if ops_row and ops_row["cnt"] > 0:
+            await drain_pending_ops(loc_id, root_path)
 
     return location_ids
 

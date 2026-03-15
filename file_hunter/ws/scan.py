@@ -24,42 +24,14 @@ async def ws_endpoint(websocket: WebSocket):
                 await websocket.send_text(json.dumps(state))
 
         # Send queue state if items are pending
-        from file_hunter.services.queue_manager import get_queue_status
+        from file_hunter.services.queue_manager import get_queue_status_for_broadcast
 
         try:
-            queue_items = await get_queue_status()
-            if queue_items:
-                # Build format the frontend expects
-                running_ids = [
-                    i.get("location_id")
-                    for i in queue_items
-                    if i.get("status") == "running" and i.get("location_id")
-                ]
-                pending = [
-                    {
-                        "queue_id": i["id"],
-                        "location_id": i.get("location_id"),
-                        "name": i.get("location_name", ""),
-                        "queued_at": i.get("created_at", ""),
-                    }
-                    for i in queue_items
-                    if i.get("status") == "pending"
-                ]
-                if running_ids or pending:
-                    await websocket.send_text(
-                        json.dumps(
-                            {
-                                "type": "scan_queue_updated",
-                                "queue": {
-                                    "running_location_ids": running_ids,
-                                    "running_location_id": running_ids[0]
-                                    if running_ids
-                                    else None,
-                                    "pending": pending,
-                                },
-                            }
-                        )
-                    )
+            queue = await get_queue_status_for_broadcast()
+            if queue.get("running_location_ids") or queue.get("pending"):
+                await websocket.send_text(
+                    json.dumps({"type": "scan_queue_updated", "queue": queue})
+                )
         except Exception:
             pass
         while True:

@@ -118,6 +118,20 @@ CREATE TABLE IF NOT EXISTS pending_backfills (
     PRIMARY KEY (agent_id, location_id)
 );
 
+CREATE TABLE IF NOT EXISTS pending_file_ops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_type TEXT NOT NULL,
+    file_id INTEGER NOT NULL,
+    location_id INTEGER NOT NULL,
+    params TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    date_created TEXT NOT NULL,
+    date_completed TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pending_ops_location_status
+    ON pending_file_ops(location_id, status);
+
 CREATE TABLE IF NOT EXISTS ignored_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT NOT NULL,
@@ -177,6 +191,7 @@ _MIGRATIONS = [
     "ALTER TABLE locations ADD COLUMN type_counts TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE folders ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE folders ADD COLUMN type_counts TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE files ADD COLUMN pending_op TEXT",
 ]
 
 _OPERATION_QUEUE_SCHEMA = """

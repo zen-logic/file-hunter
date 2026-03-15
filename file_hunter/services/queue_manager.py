@@ -488,24 +488,44 @@ _HANDLERS = {
 async def get_queue_status_for_broadcast() -> dict:
     """Build the queue state dict in the format the frontend expects."""
     status = await get_queue_status()
-    running_ids = [
-        item["location_id"]
-        for item in status
-        if item.get("status") == "running" and item.get("location_id")
-    ]
+
+    # Split running ops by type so frontend can show correct badges
+    scanning_ids = []
+    backfilling_ids = []
+    deleting_ids = []
+    all_running_ids = []
+    for item in status:
+        if item.get("status") != "running":
+            continue
+        loc_id = item.get("location_id")
+        if not loc_id:
+            continue
+        all_running_ids.append(loc_id)
+        op_type = item.get("type", "")
+        if op_type == "scan_dir":
+            scanning_ids.append(loc_id)
+        elif op_type == "backfill_location":
+            backfilling_ids.append(loc_id)
+        elif op_type == "delete_location":
+            deleting_ids.append(loc_id)
+
     pending = [
         {
             "queue_id": item["id"],
             "location_id": item.get("location_id"),
             "name": item.get("location_name", ""),
+            "type": item.get("type", ""),
             "queued_at": item.get("created_at", ""),
         }
         for item in status
         if item.get("status") == "pending"
     ]
     return {
-        "running_location_ids": running_ids,
-        "running_location_id": running_ids[0] if running_ids else None,
+        "running_location_ids": all_running_ids,
+        "running_location_id": all_running_ids[0] if all_running_ids else None,
+        "scanning_location_ids": scanning_ids,
+        "backfilling_location_ids": backfilling_ids,
+        "deleting_location_ids": deleting_ids,
         "pending": pending,
     }
 

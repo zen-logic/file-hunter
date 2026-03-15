@@ -135,26 +135,58 @@ async def _run_and_notify(
     agent_id: int,
     location_name: str,
 ):
-    """Pause queue, run import, enqueue backfill, resume queue."""
+    """Pause queue, run import, recount dups, resume queue."""
+    import logging
+
+    log = logging.getLogger("file_hunter")
+
     from file_hunter.services.import_catalog import _progress
-    from file_hunter.services.queue_manager import enqueue, pause, resume
+    from file_hunter.services.queue_manager import pause, resume
     from file_hunter.services.stats import invalidate_stats_cache
     from file_hunter.ws.scan import broadcast
 
     try:
         _progress["status"] = "pausing"
         await pause()
-        await broadcast({"type": "queue_paused", "reason": "import", "location": location_name})
+        await broadcast(
+            {"type": "queue_paused", "reason": "import", "location": location_name}
+        )
         await run_import(catalog_path, location_id, root_path)
 
-        # Queue backfill so imported files get full hashes for dup detection
+        # Recount dups for imported location before resuming queue
+        log.info(
+            "Import post-processing: status=%s, starting dup recount for location %d",
+            _progress["status"],
+            location_id,
+        )
         if _progress["status"] == "complete":
-            await enqueue(
-                "backfill_location",
-                agent_id,
-                {"location_id": location_id, "location_name": location_name},
+            from file_hunter.services.dup_counts import full_dup_recount
+
+            _progress["status"] = "dup_recount"
+            _progress["dup_hashes_done"] = 0
+            _progress["dup_hashes_total"] = 0
+
+            async def _on_dup_total(total):
+                _progress["dup_hashes_total"] = total
+
+            async def _on_dup_progress(total_processed):
+                _progress["dup_hashes_done"] = total_processed
+
+            await full_dup_recount(
+                location_id=location_id,
+                on_progress=_on_dup_progress,
+                on_total=_on_dup_total,
             )
+            log.info("Import dup recount complete for location %d", location_id)
+            _progress["status"] = "complete"
+        else:
+            log.warning(
+                "Import dup recount skipped — status was '%s' not 'complete'",
+                _progress["status"],
+            )
+
     except Exception as e:
+        log.exception("Import post-processing failed")
         _progress["status"] = "error"
         _progress["error"] = str(e)
     finally:
@@ -162,7 +194,13 @@ async def _run_and_notify(
         await broadcast({"type": "queue_resumed"})
 
     invalidate_stats_cache()
-    await broadcast({"type": "location_changed"})
+    await broadcast(
+        {
+            "type": "location_changed",
+            "action": "imported",
+            "location": {"label": location_name},
+        }
+    )
 
 
 async def import_catalog_progress(request: Request):

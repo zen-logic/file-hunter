@@ -124,6 +124,10 @@ async def _refresh_dashboard(db):
         for r in recent_scans_rows
     ]
 
+    from file_hunter.services.deferred_ops import get_pending_ops_count
+
+    pending_ops = await get_pending_ops_count(db)
+
     _cache["dashboard"] = {
         "totalFiles": total_files,
         "totalLocations": total_locations,
@@ -132,6 +136,7 @@ async def _refresh_dashboard(db):
         "totalSizeFormatted": format_size(total_size),
         "typeBreakdown": type_breakdown,
         "recentScans": recent_scans,
+        "pendingOps": pending_ops,
     }
 
 
@@ -244,6 +249,10 @@ async def get_stats(db):
         for r in recent_scans_rows
     ]
 
+    from file_hunter.services.deferred_ops import get_pending_ops_count
+
+    pending_ops = await get_pending_ops_count(db)
+
     total_files = loc_agg_rows[0]["fc"]
     total_size = loc_agg_rows[0]["s"]
     return {
@@ -254,6 +263,7 @@ async def get_stats(db):
         "totalSizeFormatted": format_size(total_size),
         "typeBreakdown": type_breakdown,
         "recentScans": recent_scans,
+        "pendingOps": pending_ops,
     }
 
 

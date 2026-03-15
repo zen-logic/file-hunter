@@ -59,7 +59,7 @@ const DeleteFileModal = {
             }
             let text = `Permanently delete folder "${item.name || item.label}"${sizeInfo}? This will remove all files from disk and the catalog.`;
             if (offline) {
-                text += ' (Location is offline \u2014 only the catalog entry will be removed.)';
+                text += ' (Location is offline \u2014 only the catalog entries will be removed. Files on disk will remain until the next scan.)';
             }
             this.textEl.textContent = text;
             // No duplicates checkbox for folders
@@ -67,7 +67,7 @@ const DeleteFileModal = {
         } else {
             let text = `Permanently delete "${item.name}"? This will remove the file from disk and the catalog.`;
             if (item.offline) {
-                text += ' (Location is offline \u2014 only the catalog entry will be removed.)';
+                text += ' (Location is offline \u2014 the file will be deleted when the location comes online.)';
             }
             this.textEl.textContent = text;
 

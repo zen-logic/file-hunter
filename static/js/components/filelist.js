@@ -685,7 +685,8 @@ const FileList = {
             const tr = document.createElement('tr');
             const selected = this._isSelected(file);
             if (selected) tr.classList.add('selected');
-            if (file.stale) tr.classList.add('stale');
+            if (file.pendingOp) tr.classList.add('pending-op');
+            else if (file.stale) tr.classList.add('stale');
             else if (file.missing) tr.classList.add('missing');
             if (file.hidden) tr.classList.add('hidden-item');
 
@@ -713,6 +714,9 @@ const FileList = {
             const missingHtml = (!file.stale && file.missing)
                 ? '<span class="missing-indicator">missing</span>'
                 : '';
+            const pendingHtml = file.pendingOp
+                ? `<span class="pending-indicator">pending ${file.pendingOp}</span>`
+                : '';
             const locHtml = file.location
                 ? `<span class="file-location-label">${file.location}</span>`
                 : '';
@@ -721,7 +725,7 @@ const FileList = {
             const tempRow = document.createElement('tr');
             tempRow.innerHTML = `
                 <td class="col-icon">${fileIcon(file)}</td>
-                <td><span class="file-name">${file.name}${dupHtml}${staleHtml}${missingHtml}</span>${locHtml}</td>
+                <td><span class="file-name">${file.name}${dupHtml}${staleHtml}${missingHtml}${pendingHtml}</span>${locHtml}</td>
                 <td class="col-type">${file.typeLow || ''}</td>
                 <td class="col-size">${formatSize(file.size)}</td>
                 <td class="col-date">${formatDate(file.date)}</td>

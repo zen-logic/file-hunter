@@ -8,17 +8,35 @@ const RepairCatalog = {
     init() {
         this.overlayEl = document.getElementById('repair-catalog-modal');
         document.getElementById('repair-done-close').addEventListener('click', () => this.close());
+        document.getElementById('repair-choose-cancel').addEventListener('click', () => this.close());
+        document.getElementById('repair-choose-start').addEventListener('click', () => this._startFromChoices());
     },
 
-    async start() {
+    open() {
+        document.getElementById('repair-opt-hashes').checked = true;
+        document.getElementById('repair-opt-duplicates').checked = true;
+        document.getElementById('repair-opt-sizes').checked = true;
+        this._showStep('choose');
+        this.overlayEl.classList.remove('hidden');
+    },
+
+    _startFromChoices() {
+        const phases = [];
+        if (document.getElementById('repair-opt-hashes').checked) phases.push('hashes');
+        if (document.getElementById('repair-opt-duplicates').checked) phases.push('duplicates');
+        if (document.getElementById('repair-opt-sizes').checked) phases.push('sizes');
+        if (phases.length === 0) return;
+        this.start(phases);
+    },
+
+    async start(phases) {
         this._busy = true;
         this._showStep('progress');
         document.getElementById('repair-phase-label').textContent = 'Starting...';
         document.getElementById('repair-progress-fill').style.width = '0%';
         document.getElementById('repair-progress-text').textContent = '';
-        this.overlayEl.classList.remove('hidden');
 
-        const res = await API.post('/api/stats/repair');
+        const res = await API.post('/api/stats/repair', { phases });
         if (!res.ok) {
             this._showDone({ status: 'error', error: res.error || 'Failed to start repair' });
             return;
@@ -37,6 +55,7 @@ const RepairCatalog = {
     },
 
     _showStep(step) {
+        document.getElementById('repair-step-choose').classList.toggle('hidden', step !== 'choose');
         document.getElementById('repair-step-progress').classList.toggle('hidden', step !== 'progress');
         document.getElementById('repair-step-done').classList.toggle('hidden', step !== 'done');
     },
@@ -72,15 +91,16 @@ const RepairCatalog = {
                 if (p.errors > 0) parts.push(`${p.errors.toLocaleString()} errors`);
                 textEl.textContent = parts.join(' \u2014 ');
             } else if (p.phase === 'dup_recount') {
-                phaseEl.textContent = 'Phase 2: Recounting duplicates';
+                phaseEl.textContent = 'Recounting duplicates';
                 const pct = p.dup_hashes_total > 0
                     ? Math.round((p.dup_hashes_done / p.dup_hashes_total) * 100)
                     : 0;
                 fillEl.style.width = pct + '%';
-                textEl.textContent =
-                    `${p.dup_hashes_done.toLocaleString()} / ${p.dup_hashes_total.toLocaleString()} hashes`;
+                textEl.textContent = p.dup_hashes_total > 0
+                    ? `${p.dup_hashes_done.toLocaleString()} / ${p.dup_hashes_total.toLocaleString()} hashes`
+                    : 'Querying hash counts...';
             } else if (p.phase === 'sizes') {
-                phaseEl.textContent = 'Phase 3: Recalculating sizes';
+                phaseEl.textContent = 'Recalculating sizes';
                 const pct = p.locations_total > 0
                     ? Math.round((p.locations_done / p.locations_total) * 100)
                     : 0;
@@ -105,7 +125,7 @@ const RepairCatalog = {
         if (p.status === 'error') {
             el.innerHTML = `<span style="color:var(--color-status-error)">Repair failed: ${p.error || 'Unknown error'}</span>`;
         } else {
-            const lines = ['Catalog repair complete.'];
+            const lines = ['Repair complete.'];
             if (p.hashed > 0 || p.skipped > 0 || p.errors > 0) {
                 lines.push(
                     `Hashing: ${p.hashed.toLocaleString()} computed` +

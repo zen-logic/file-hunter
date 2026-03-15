@@ -19,6 +19,8 @@ _progress = {
     "files_total": 0,
     "files_imported": 0,
     "folders_created": 0,
+    "dup_hashes_done": 0,
+    "dup_hashes_total": 0,
     "error": None,
 }
 
@@ -64,14 +66,15 @@ async def run_import(
     root_path: str,
 ):
     """Bulk import catalog into server DB. Updates _progress in-place."""
-    global _progress
-    _progress = {
-        "status": "running",
-        "files_total": 0,
-        "files_imported": 0,
-        "folders_created": 0,
-        "error": None,
-    }
+    _progress.update(
+        status="running",
+        files_total=0,
+        files_imported=0,
+        folders_created=0,
+        dup_hashes_done=0,
+        dup_hashes_total=0,
+        error=None,
+    )
 
     try:
         cat = sqlite3.connect(catalog_path)

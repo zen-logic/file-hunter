@@ -1066,16 +1066,33 @@ WS.on('scan_error', (msg) => {
 
 function syncQueuedLocations(queue) {
     StatusBar.updateQueue(queue);
-    // Rebuild both sets from queue state (single source of truth)
-    Tree._queuedLocations.clear();
+    // Rebuild all badge sets from queue state (single source of truth)
     Tree._scanningLocations.clear();
+    Tree._backfillingLocations.clear();
+    Tree._deletingLocations.clear();
+    Tree._queuedLocations.clear();
     if (queue) {
-        if (queue.running_location_ids) {
+        // Typed running sets (preferred)
+        if (queue.scanning_location_ids) {
+            for (const locId of queue.scanning_location_ids) {
+                Tree._scanningLocations.add('loc-' + locId);
+            }
+        }
+        if (queue.backfilling_location_ids) {
+            for (const locId of queue.backfilling_location_ids) {
+                Tree._backfillingLocations.add('loc-' + locId);
+            }
+        }
+        if (queue.deleting_location_ids) {
+            for (const locId of queue.deleting_location_ids) {
+                Tree._deletingLocations.add('loc-' + locId);
+            }
+        }
+        // Fallback for old server without typed ids
+        if (!queue.scanning_location_ids && queue.running_location_ids) {
             for (const locId of queue.running_location_ids) {
                 Tree._scanningLocations.add('loc-' + locId);
             }
-        } else if (queue.running_location_id) {
-            Tree._scanningLocations.add('loc-' + queue.running_location_id);
         }
         if (queue.pending) {
             for (const entry of queue.pending) {
@@ -1317,6 +1334,31 @@ WS.on('file_moved', async (msg) => {
         if (selectedNode) await FileList.showFolder(selectedNode.id);
     }
     await StatusBar.loadStats();
+    await refreshDetailPanel();
+});
+
+WS.on('deferred_op_created', async (msg) => {
+    const label = msg.opType === 'delete' ? 'deletion' : msg.opType === 'move' ? 'move' : msg.opType;
+    Toast.info(`${msg.filename}: ${label} queued for when location comes online`);
+    ActivityLog.add(`Deferred ${label}: <b>${msg.filename}</b>`);
+    await StatusBar.loadStats();
+    if (selectedNode) await FileList.showFolder(selectedNode.id);
+    await refreshDetailPanel();
+});
+
+WS.on('deferred_op_cancelled', async (msg) => {
+    await StatusBar.loadStats();
+    if (selectedNode) await FileList.showFolder(selectedNode.id);
+    await refreshDetailPanel();
+});
+
+WS.on('deferred_ops_drained', async (msg) => {
+    if (msg.completed > 0) {
+        Toast.info(`${msg.completed} deferred file operation${msg.completed === 1 ? '' : 's'} completed`);
+        ActivityLog.add(`Drained ${msg.completed} deferred file ops for location #${msg.locationId}`);
+    }
+    await StatusBar.loadStats();
+    if (selectedNode) await FileList.showFolder(selectedNode.id);
     await refreshDetailPanel();
 });
 

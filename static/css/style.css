@@ -794,6 +794,46 @@ body::after {
     margin-left: 0.35rem;
 }
 
+.file-table tr.pending-op {
+    opacity: var(--opacity-pending);
+}
+
+.pending-indicator {
+    font-size: var(--font-size-xs);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+    background: var(--color-pending-bg);
+    color: var(--color-pending-text);
+    margin-left: 0.35rem;
+}
+
+.detail-pending-banner {
+    background: var(--color-pending-bg);
+    color: var(--color-pending-text);
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    font-size: var(--font-size-sm);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.detail-pending-banner button {
+    flex-shrink: 0;
+}
+
+.detail-verified-badge {
+    font-size: var(--font-size-xs);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+    background: var(--color-scan-bg);
+    color: var(--color-scan-text);
+    margin-left: 0.5rem;
+    font-weight: normal;
+}
+
 .detail-offline-badge {
     font-size: var(--font-size-xs);
     padding: 0.05rem 0.3rem;
@@ -1974,6 +2014,27 @@ select.modal-input {
 }
 
 /* ── Import catalog progress bar ── */
+
+.repair-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.repair-option {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    cursor: pointer;
+}
+
+.repair-option input[type="checkbox"] {
+    flex-shrink: 0;
+}
+
+.repair-option .settings-hint {
+    margin-left: 0.25rem;
+}
 
 .import-progress-bar {
     height: 6px;

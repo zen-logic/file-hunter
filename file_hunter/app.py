@@ -29,6 +29,7 @@ from file_hunter.routes.files import (
     file_move,
     file_verify,
     file_dup_counts,
+    file_cancel_pending,
     folder_download,
     location_download,
     folder_delete,
@@ -249,6 +250,9 @@ app = Starlette(
         Route("/api/files/{id:int}", file_update, methods=["PATCH"]),
         Route("/api/files/{id:int}/move", file_move, methods=["POST"]),
         Route("/api/files/{id:int}/verify", file_verify, methods=["POST"]),
+        Route(
+            "/api/files/{id:int}/cancel-pending", file_cancel_pending, methods=["POST"]
+        ),
         Route("/api/files/{id:int}", file_delete, methods=["DELETE"]),
         Route("/api/folders", create_new_folder, methods=["POST"]),
         Route("/api/folders/{id:int}/download", folder_download, methods=["GET"]),

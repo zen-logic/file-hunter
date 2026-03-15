@@ -118,7 +118,8 @@ async def list_files(
     files = await db.execute_fetchall(
         f"""SELECT f.id, f.filename, f.file_type_high, f.file_type_low,
                    f.file_size, f.modified_date, f.full_path,
-                   f.hash_fast, f.hash_strong, f.stale, f.dup_count, f.hidden, l.root_path
+                   f.hash_fast, f.hash_strong, f.stale, f.dup_count, f.hidden,
+                   f.pending_op, l.root_path
             FROM files f
             JOIN locations l ON l.id = f.location_id
             WHERE {where}
@@ -171,6 +172,7 @@ async def list_files(
             if (f["stale"] and f["id"] not in unstale_set)
             else f["id"] in missing_file_ids,
             "hidden": bool(f["hidden"]),
+            "pendingOp": f["pending_op"],
         }
         for f in files
     ]
@@ -326,6 +328,7 @@ async def get_file_detail(db, file_id: int):
         "hashStrong": f["hash_strong"],
         "verified": bool(f["hash_strong"]),
         "stale": stale,
+        "pendingOp": f.get("pending_op"),
         "description": f["description"] or "",
         "tags": tags,
         "duplicates": dups,
@@ -373,10 +376,7 @@ async def move_file(
     src_root = f["location_root_path"]
     src_loc_id = f["location_id"]
 
-    if not await fs.dir_exists(src_root, src_loc_id):
-        raise ValueError("Location is offline.")
-    if not await fs.file_exists(f["full_path"], src_loc_id):
-        raise ValueError("File not found on disk.")
+    src_online = await fs.dir_exists(src_root, src_loc_id)
 
     old_name = f["filename"]
     final_name = new_name if new_name else old_name
@@ -419,16 +419,47 @@ async def move_file(
         else:
             raise ValueError("Invalid destination_folder_id.")
 
-        # Cross-location: check destination is online
-        if final_root != src_root or final_location_id != src_loc_id:
-            if not await fs.dir_exists(final_root, final_location_id):
-                raise ValueError("Destination location is offline.")
-
-        if not await fs.dir_exists(dest_dir, final_location_id):
-            raise ValueError("Destination directory does not exist on disk.")
-
     new_full_path = os.path.join(dest_dir, final_name)
     new_rel_path = os.path.relpath(new_full_path, final_root)
+
+    cross_location = final_location_id != src_loc_id
+    dst_online = True
+    if cross_location:
+        dst_online = await fs.dir_exists(final_root, final_location_id)
+
+    # If any involved location is offline, defer the operation
+    any_offline = not src_online or (cross_location and not dst_online)
+    if any_offline:
+        from file_hunter.services.deferred_ops import queue_deferred_op
+
+        params = {
+            "dst_full_path": new_full_path,
+            "dst_rel_path": new_rel_path,
+            "dst_location_id": final_location_id,
+            "dst_folder_id": final_folder_id,
+            "dst_filename": final_name,
+        }
+        await queue_deferred_op(db, file_id, src_loc_id, "move", params)
+        await db.commit()
+
+        from file_hunter.services.stats import invalidate_stats_cache
+
+        invalidate_stats_cache()
+        return {
+            "id": file_id,
+            "old_name": old_name,
+            "new_name": final_name,
+            "renamed": renamed,
+            "moved": moved,
+            "deferred": True,
+        }
+
+    # Both sides online — validate and execute immediately
+    if not await fs.file_exists(f["full_path"], src_loc_id):
+        raise ValueError("File not found on disk.")
+
+    if moved and not await fs.dir_exists(dest_dir, final_location_id):
+        raise ValueError("Destination directory does not exist on disk.")
 
     # Check collision on disk (unless it's the same file — rename case)
     if new_full_path != f["full_path"]:
@@ -446,7 +477,6 @@ async def move_file(
 
     # Move/rename on disk
     if new_full_path != f["full_path"]:
-        cross_location = final_location_id != src_loc_id
         if cross_location:
             # Cross-location (possibly agent↔local): copy + delete
             await fs.copy_file(
@@ -494,4 +524,5 @@ async def move_file(
         "new_name": final_name,
         "renamed": renamed,
         "moved": moved,
+        "deferred": False,
     }

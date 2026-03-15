@@ -783,25 +783,32 @@ const Detail = {
 
         const previewHtml = (detail.online && !detail.stale) ? this._buildPreview(detail) : '';
 
+        const hasPendingOp = !!detail.pendingOp;
+        const pendingOpLabel = detail.pendingOp === 'delete' ? 'deleted' : detail.pendingOp === 'move' ? 'moved' : detail.pendingOp === 'verify' ? 'verified' : detail.pendingOp;
+
         const staleBanner = detail.stale
             ? '<div class="detail-stale-banner">This file was not found during the last scan of this location.</div>'
             : '';
+        const pendingBanner = hasPendingOp
+            ? `<div class="detail-pending-banner"><span>This file will be ${pendingOpLabel} when the location comes online.</span><button class="btn btn-sm" id="detail-cancel-pending">Cancel</button></div>`
+            : '';
         const ignoredBannerPlaceholder = detail.id ? '<div id="detail-ignored-banner"></div>' : '';
         const showInFolderBtn = detail.folderId ? `<button class="btn btn-sm" id="detail-show-folder" style="margin-top:0.4rem">Show in Folder</button>` : '';
-        const downloadBtn = detail.id && detail.online && !detail.stale ? `<button class="btn btn-sm" id="detail-download" style="margin-top:0.4rem">Download</button>` : '';
+        const downloadBtn = detail.id && detail.online && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-download" style="margin-top:0.4rem">Download</button>` : '';
         const fileMissing = detail.locationOnline && !detail.online;
         const fileDisabled = detail.stale || fileMissing;
         const disabledReason = detail.stale ? 'File is stale' : 'File is missing from disk';
-        const renameFileBtn = detail.id && detail.locationOnline && !detail.stale ? `<button class="btn btn-sm" id="detail-rename-file" style="margin-top:0.4rem"${fileMissing ? ` disabled title="${disabledReason}"` : ''}>Rename</button>` : '';
-        const moveFileBtn = detail.id && detail.locationOnline && !detail.stale ? `<button class="btn btn-sm" id="detail-move-file" style="margin-top:0.4rem"${fileMissing ? ` disabled title="${disabledReason}"` : ''}>Move</button>` : '';
-        const deleteFileBtn = detail.id ? `<button class="btn btn-danger btn-sm" id="detail-delete-file" style="margin-top:0.4rem"${detail.locationOnline === false ? ' disabled title="Location is offline"' : ''}>Delete</button>` : '';
-        const ignoreFileBtn = detail.id ? `<button class="btn btn-sm" id="detail-ignore-file" style="margin-top:0.4rem">Ignore files like this\u2026</button>` : '';
+        const renameFileBtn = detail.id && detail.locationOnline && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-rename-file" style="margin-top:0.4rem"${fileMissing ? ` disabled title="${disabledReason}"` : ''}>Rename</button>` : '';
+        const moveFileBtn = detail.id && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-move-file" style="margin-top:0.4rem"${fileMissing ? ` disabled title="${disabledReason}"` : ''}>Move</button>` : '';
+        const deleteFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-danger btn-sm" id="detail-delete-file" style="margin-top:0.4rem">Delete</button>` : '';
+        const ignoreFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-sm" id="detail-ignore-file" style="margin-top:0.4rem">Ignore files like this\u2026</button>` : '';
         const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${ignoreFileBtn}${deleteFileBtn}</div>` : '';
 
         let html = `
             <div class="detail-section">
-                <div class="detail-filename">${detail.name}${detail.locationOnline === false ? '<span class="detail-offline-badge">offline</span>' : ''}</div>
+                <div class="detail-filename">${detail.name}${detail.locationOnline === false ? '<span class="detail-offline-badge">offline</span>' : ''}${hasPendingOp ? `<span class="pending-indicator">pending ${detail.pendingOp}</span>` : ''}</div>
                 ${staleBanner}
+                ${pendingBanner}
                 ${ignoredBannerPlaceholder}
                 ${detail.breadcrumb ? this._buildBreadcrumb(detail.breadcrumb) : `<div class="detail-path">${detail.path || ''}</div>`}
                 ${btnRow}
@@ -831,7 +838,7 @@ const Detail = {
                 </div>
             </div>
             <div class="detail-section">
-                <h3>Hashes</h3>
+                <h3>Hashes${detail.verified ? '<span class="detail-verified-badge">verified</span>' : ''}</h3>
                 <div class="detail-field">
                     <span class="label">Partial</span>
                     <span class="value" style="font-family: monospace; font-size: 0.8em;">${detail.hashPartial || ''}</span>
@@ -844,6 +851,7 @@ const Detail = {
                     <span class="label">Strong</span>
                     <span class="value" style="font-family: monospace; font-size: 0.8em; word-break: break-all;">${detail.hashStrong || ''}</span>
                 </div>
+                ${detail.id && !detail.verified && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-verify" style="margin-top:0.4rem">Verify (SHA-256)${detail.locationOnline === false ? ' \u2014 queued' : ''}</button>` : ''}
             </div>
             <div class="detail-section">
                 <h3>Description</h3>
@@ -894,6 +902,35 @@ const Detail = {
         const hexPreviewBtn = document.getElementById('detail-preview-hex');
         if (hexPreviewBtn) hexPreviewBtn.addEventListener('click', () => this._openHexPreview(detail));
         this._checkIgnored(detail, gen);
+
+        const cancelPendingBtn = document.getElementById('detail-cancel-pending');
+        if (cancelPendingBtn && detail.id) {
+            cancelPendingBtn.addEventListener('click', async () => {
+                cancelPendingBtn.disabled = true;
+                cancelPendingBtn.textContent = 'Cancelling\u2026';
+                await API.post(`/api/files/${detail.id}/cancel-pending`);
+            });
+        }
+
+        const verifyBtn = document.getElementById('detail-verify');
+        if (verifyBtn && detail.id) {
+            verifyBtn.addEventListener('click', async () => {
+                verifyBtn.disabled = true;
+                verifyBtn.textContent = 'Verifying\u2026';
+                const res = await API.post(`/api/files/${detail.id}/verify`);
+                if (res.ok) {
+                    if (res.data.deferred) {
+                        // Queued for offline — detail will refresh via WS
+                        verifyBtn.textContent = 'Queued';
+                    } else {
+                        this._lastDetail = res.data;
+                        this.showFile(detail.id);
+                    }
+                } else {
+                    verifyBtn.textContent = res.error || 'Failed';
+                }
+            });
+        }
 
         return {
             folderId: detail.folderId || null,

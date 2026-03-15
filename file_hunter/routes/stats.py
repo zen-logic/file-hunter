@@ -31,6 +31,7 @@ def _reset_progress():
     _repair_progress.update(
         status="idle",
         phase="",
+        phases=[],
         hashed=0,
         skipped=0,
         errors=0,
@@ -93,19 +94,40 @@ async def _bg_recalculate():
 
 
 async def repair_catalog(request: Request):
-    """Repair catalog: hash promotion + full dup recount + size recalc.
+    """Repair catalog with selectable phases.
 
-    Pauses the queue for exclusive write access, runs the repair phases,
-    then resumes. Returns immediately — frontend polls repair_progress.
+    Accepts JSON body with optional "phases" list:
+    - "hashes": hash promotion (phase 1)
+    - "duplicates": full dup recount (phase 2)
+    - "sizes": recalculate sizes (phase 3)
+
+    Default (no phases specified): all three.
+    Pauses the queue, runs selected phases, resumes.
     """
     global _repair_task
 
     if _repair_progress["status"] not in ("idle", "complete", "error"):
         return json_error("A repair is already in progress")
 
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    valid_phases = {"hashes", "duplicates", "sizes"}
+    phases = body.get("phases")
+    if phases:
+        phases = [p for p in phases if p in valid_phases]
+        if not phases:
+            return json_error("No valid phases specified")
+    else:
+        phases = ["hashes", "duplicates", "sizes"]
+
     _reset_progress()
-    _repair_task = asyncio.create_task(_bg_repair())
-    return json_ok({"status": "started"})
+    _repair_progress["phases"] = phases
+    _repair_task = asyncio.create_task(_bg_repair(phases))
+    return json_ok({"status": "started", "phases": phases})
 
 
 async def repair_catalog_progress(request: Request):
@@ -113,19 +135,21 @@ async def repair_catalog_progress(request: Request):
     return json_ok(dict(_repair_progress))
 
 
-async def _bg_repair():
-    """Repair catalog in three phases with queue paused.
+async def _bg_repair(phases: list[str] | None = None):
+    """Repair catalog with selectable phases, queue paused.
 
-    Phase 1: Hash promotion — find files on ONLINE locations with matching
-    (file_size, hash_partial) that lack hash_fast. Compute hash_fast via agent.
-    Phase 2: Full dup recount — recalculate dup_count for all hashes.
-    Phase 3: Recalculate all location sizes.
+    Phase 1 ("hashes"): Hash promotion — find files on ONLINE locations with
+    matching (file_size, hash_partial) that lack hash_fast. Compute via agent.
+    Phase 2 ("duplicates"): Full dup recount — recalculate dup_count for all hashes.
+    Phase 3 ("sizes"): Recalculate all location sizes.
     """
+    if phases is None:
+        phases = ["hashes", "duplicates", "sizes"]
     from collections import defaultdict
 
     from file_hunter.db import db_writer, open_connection
     from file_hunter.services.agent_ops import hash_fast_batch
-    from file_hunter.services.dup_counts import _batched_recalc
+    from file_hunter.services.dup_counts import full_dup_recount
     from file_hunter.services.online_check import agent_online_check
     from file_hunter.services.queue_manager import pause, resume
     from file_hunter.services.sizes import recalculate_location_sizes
@@ -144,253 +168,219 @@ async def _bg_repair():
             {"type": "queue_paused", "reason": "repair", "location": "Catalog Repair"}
         )
 
-        # ── Phase 1: Hash promotion ──────────────────────────────────
-        _repair_progress["phase"] = "querying"
-        log.info("Catalog repair: phase 1 — querying candidates")
-
-        # Find files with partial+filesize matches that need hash_fast.
-        # Only query files on ONLINE locations — no point fetching millions
-        # of offline candidates just to skip them.
-        # Use dedicated connection — this query touches the full files table.
-        db = await open_connection()
-        try:
-            loc_rows = await db.execute_fetchall(
-                "SELECT id, name, agent_id FROM locations"
-            )
-            # Build location_id -> agent_id map and find online locations
-            loc_agent_map: dict[int, int] = {}
-            online_loc_ids = []
-            for loc in loc_rows:
-                if loc["agent_id"]:
-                    loc_agent_map[loc["id"]] = loc["agent_id"]
-                    if agent_online_check(loc):
-                        online_loc_ids.append(loc["id"])
-
-            if online_loc_ids:
-                loc_ph = ",".join("?" for _ in online_loc_ids)
-                candidates = await db.execute_fetchall(
-                    f"""SELECT f.id, f.full_path, f.location_id
-                       FROM files f
-                       WHERE f.hash_fast IS NULL
-                         AND f.hash_partial IS NOT NULL
-                         AND f.file_size > 0
-                         AND f.stale = 0
-                         AND f.location_id IN ({loc_ph})
-                         AND EXISTS (
-                             SELECT 1 FROM files f2
-                             WHERE f2.file_size = f.file_size
-                               AND f2.hash_partial = f.hash_partial
-                               AND f2.id != f.id
-                               AND f2.stale = 0
-                         )""",
-                    online_loc_ids,
-                )
-            else:
-                candidates = []
-        finally:
-            await db.close()
-
-        total = len(candidates)
-        _repair_progress["phase"] = "hashing"
-        _repair_progress["total"] = total
-        log.info("Catalog repair: %d files need hash_fast on online locations", total)
-
-        # Group candidates by agent_id for batched hash calls
-        # Build path->file_id lookup and group paths by agent
-        path_to_id: dict[str, int] = {}
-        agent_batches: dict[int, list[str]] = defaultdict(list)
-        for row in candidates:
-            path_to_id[row["full_path"]] = row["id"]
-            agent_id = loc_agent_map.get(row["location_id"])
-            if agent_id:
-                agent_batches[agent_id].append(row["full_path"])
-
         hashed = 0
         errors = 0
         skipped = 0
-        pending_writes: list[tuple[int, str]] = []
-        affected_fast_hashes: set[str] = set()
-        failed_agents: set[int] = set()
+        total = 0
+        dup_total = 0
+        all_locs = []
 
-        for agent_id, paths in agent_batches.items():
-            if agent_id in failed_agents:
-                skipped += len(paths)
-                _repair_progress["skipped"] = skipped
-                continue
+        # ── Phase 1: Hash promotion ──────────────────────────────────
+        if "hashes" not in phases:
+            log.info("Catalog repair: skipping phase 1 (hashes)")
+        else:
+            _repair_progress["phase"] = "querying"
+            log.info("Catalog repair: phase 1 — querying candidates")
 
-            # Process in batches
-            for i in range(0, len(paths), HASH_BATCH_SIZE):
-                # Yield to event loop so cancellation can be processed
-                await asyncio.sleep(0)
+            db = await open_connection()
+            try:
+                loc_rows = await db.execute_fetchall(
+                    "SELECT id, name, agent_id FROM locations"
+                )
+                loc_agent_map: dict[int, int] = {}
+                online_loc_ids = []
+                for loc in loc_rows:
+                    if loc["agent_id"]:
+                        loc_agent_map[loc["id"]] = loc["agent_id"]
+                        if agent_online_check(loc):
+                            online_loc_ids.append(loc["id"])
 
+                if online_loc_ids:
+                    loc_ph = ",".join("?" for _ in online_loc_ids)
+                    candidates = await db.execute_fetchall(
+                        f"""SELECT f.id, f.full_path, f.location_id
+                           FROM files f
+                           WHERE f.hash_fast IS NULL
+                             AND f.hash_partial IS NOT NULL
+                             AND f.file_size > 0
+                             AND f.stale = 0
+                             AND f.location_id IN ({loc_ph})
+                             AND EXISTS (
+                                 SELECT 1 FROM files f2
+                                 WHERE f2.file_size = f.file_size
+                                   AND f2.hash_partial = f.hash_partial
+                                   AND f2.id != f.id
+                                   AND f2.stale = 0
+                             )""",
+                        online_loc_ids,
+                    )
+                else:
+                    candidates = []
+            finally:
+                await db.close()
+
+            total = len(candidates)
+            _repair_progress["phase"] = "hashing"
+            _repair_progress["total"] = total
+            log.info(
+                "Catalog repair: %d files need hash_fast on online locations", total
+            )
+
+            path_to_id: dict[str, int] = {}
+            agent_batches: dict[int, list[str]] = defaultdict(list)
+            for row in candidates:
+                path_to_id[row["full_path"]] = row["id"]
+                agent_id = loc_agent_map.get(row["location_id"])
+                if agent_id:
+                    agent_batches[agent_id].append(row["full_path"])
+
+            pending_writes: list[tuple[int, str]] = []
+            affected_fast_hashes: set[str] = set()
+            failed_agents: set[int] = set()
+
+            for agent_id, paths in agent_batches.items():
                 if agent_id in failed_agents:
-                    skipped += len(paths) - i
+                    skipped += len(paths)
                     _repair_progress["skipped"] = skipped
-                    break
+                    continue
 
-                batch = paths[i : i + HASH_BATCH_SIZE]
-                try:
-                    result = await hash_fast_batch(agent_id, batch)
-                except ConnectionError:
-                    # Agent went offline — skip all remaining files for it
-                    failed_agents.add(agent_id)
-                    remaining = len(paths) - i
-                    skipped += remaining
-                    _repair_progress["skipped"] = skipped
-                    log.warning(
-                        "Catalog repair: agent %d offline, skipping %d files",
-                        agent_id,
-                        remaining,
-                    )
-                    break
+                for i in range(0, len(paths), HASH_BATCH_SIZE):
+                    await asyncio.sleep(0)
 
-                # Process results
-                for item in result.get("results", []):
-                    file_id = path_to_id.get(item["path"])
-                    if file_id:
-                        pending_writes.append((file_id, item["hash_fast"]))
-                        affected_fast_hashes.add(item["hash_fast"])
-                        hashed += 1
+                    if agent_id in failed_agents:
+                        skipped += len(paths) - i
+                        _repair_progress["skipped"] = skipped
+                        break
 
-                for item in result.get("errors", []):
-                    errors += 1
+                    batch = paths[i : i + HASH_BATCH_SIZE]
+                    try:
+                        result = await hash_fast_batch(agent_id, batch)
+                    except ConnectionError:
+                        failed_agents.add(agent_id)
+                        remaining = len(paths) - i
+                        skipped += remaining
+                        _repair_progress["skipped"] = skipped
+                        log.warning(
+                            "Catalog repair: agent %d offline, skipping %d files",
+                            agent_id,
+                            remaining,
+                        )
+                        break
 
-                _repair_progress["hashed"] = hashed
-                _repair_progress["errors"] = errors
+                    for item in result.get("results", []):
+                        file_id = path_to_id.get(item["path"])
+                        if file_id:
+                            pending_writes.append((file_id, item["hash_fast"]))
+                            affected_fast_hashes.add(item["hash_fast"])
+                            hashed += 1
 
-                # Flush writes
-                if len(pending_writes) >= 50:
-                    async with db_writer() as wdb:
-                        for file_id, hash_fast in pending_writes:
-                            await wdb.execute(
-                                "UPDATE files SET hash_fast = ? WHERE id = ?",
-                                (hash_fast, file_id),
-                            )
-                    pending_writes.clear()
+                    for item in result.get("errors", []):
+                        errors += 1
 
-                done = hashed + errors + skipped
-                if done % 500 == 0 and done > 0:
-                    log.info(
-                        "Catalog repair: phase 1 — %d/%d "
-                        "(hashed=%d, errors=%d, skipped=%d)",
-                        done,
-                        total,
-                        hashed,
-                        errors,
-                        skipped,
-                    )
+                    _repair_progress["hashed"] = hashed
+                    _repair_progress["errors"] = errors
 
-        # Flush remaining writes
-        if pending_writes:
-            async with db_writer() as wdb:
-                for file_id, hash_fast in pending_writes:
-                    await wdb.execute(
-                        "UPDATE files SET hash_fast = ? WHERE id = ?",
-                        (hash_fast, file_id),
-                    )
-            pending_writes.clear()
+                    if len(pending_writes) >= 50:
+                        async with db_writer() as wdb:
+                            for file_id, hash_fast in pending_writes:
+                                await wdb.execute(
+                                    "UPDATE files SET hash_fast = ? WHERE id = ?",
+                                    (hash_fast, file_id),
+                                )
+                        pending_writes.clear()
 
-        log.info(
-            "Catalog repair: phase 1 complete — hashed=%d, errors=%d, skipped=%d of %d",
-            hashed,
-            errors,
-            skipped,
-            total,
-        )
+                    done = hashed + errors + skipped
+                    if done % 500 == 0 and done > 0:
+                        log.info(
+                            "Catalog repair: phase 1 — %d/%d "
+                            "(hashed=%d, errors=%d, skipped=%d)",
+                            done,
+                            total,
+                            hashed,
+                            errors,
+                            skipped,
+                        )
+
+            if pending_writes:
+                async with db_writer() as wdb:
+                    for file_id, hash_fast in pending_writes:
+                        await wdb.execute(
+                            "UPDATE files SET hash_fast = ? WHERE id = ?",
+                            (hash_fast, file_id),
+                        )
+                pending_writes.clear()
+
+            log.info(
+                "Catalog repair: phase 1 complete — hashed=%d, errors=%d, skipped=%d of %d",
+                hashed,
+                errors,
+                skipped,
+                total,
+            )
 
         # ── Phase 2: Full dup recount ────────────────────────────────
-        _repair_progress["phase"] = "dup_recount"
-        log.info("Catalog repair: phase 2 — full dup recount")
+        if "duplicates" not in phases:
+            log.info("Catalog repair: skipping phase 2 (duplicates)")
+        else:
+            _repair_progress["phase"] = "dup_recount"
+            log.info("Catalog repair: phase 2 — full dup recount")
 
-        # Collect all distinct hashes. Use dedicated connection for
-        # these full-table DISTINCT queries.
-        db = await open_connection()
-        try:
-            strong_rows = await db.execute_fetchall(
-                "SELECT DISTINCT hash_strong FROM files "
-                "WHERE hash_strong IS NOT NULL AND hash_strong != ''"
+            async def _on_dup_total(t):
+                _repair_progress["dup_hashes_total"] = t
+
+            async def _on_dup_progress(total_processed):
+                _repair_progress["dup_hashes_done"] = total_processed
+
+            dup_total = await full_dup_recount(
+                on_progress=_on_dup_progress, on_total=_on_dup_total
             )
-            strong_hashes = {r["hash_strong"] for r in strong_rows}
 
-            fast_rows = await db.execute_fetchall(
-                "SELECT DISTINCT hash_fast FROM files "
-                "WHERE hash_fast IS NOT NULL AND hash_fast != '' "
-                "AND hash_strong IS NULL"
+            rdb = await open_connection()
+            try:
+                all_locs = await rdb.execute_fetchall("SELECT id FROM locations")
+                loc_updates = []
+                for loc in all_locs:
+                    dc_rows = await rdb.execute_fetchall(
+                        "SELECT COUNT(*) as c FROM files "
+                        "WHERE location_id = ? AND stale = 0 AND hidden = 0 "
+                        "AND dup_exclude = 0 AND dup_count > 0",
+                        (loc["id"],),
+                    )
+                    loc_updates.append((dc_rows[0]["c"], loc["id"]))
+            finally:
+                await rdb.close()
+
+            async with db_writer() as wdb:
+                for dc, lid in loc_updates:
+                    await wdb.execute(
+                        "UPDATE locations SET duplicate_count = ? WHERE id = ?",
+                        (dc, lid),
+                    )
+
+            log.info(
+                "Catalog repair: phase 2 complete — %d hashes recounted", dup_total
             )
-            fast_hashes = {r["hash_fast"] for r in fast_rows}
-        finally:
-            await db.close()
-
-        dup_total = len(strong_hashes) + len(fast_hashes)
-        _repair_progress["dup_hashes_total"] = dup_total
-        log.info(
-            "Catalog repair: recounting dups for %d strong + %d fast hashes",
-            len(strong_hashes),
-            len(fast_hashes),
-        )
-
-        if dup_total:
-            progress_offset = 0
-
-            async def _on_dup_progress(processed, _batch_total):
-                actual = progress_offset + processed
-                _repair_progress["dup_hashes_done"] = actual
-
-            if strong_hashes:
-                await _batched_recalc(
-                    strong_hashes,
-                    hash_column="hash_strong",
-                    on_progress=_on_dup_progress,
-                )
-                progress_offset = len(strong_hashes)
-
-            if fast_hashes:
-                await _batched_recalc(
-                    fast_hashes,
-                    hash_column="hash_fast",
-                    on_progress=_on_dup_progress,
-                )
-
-        # Update stored duplicate_count for all locations
-        db = await open_connection()
-        try:
-            all_locs = await db.execute_fetchall("SELECT id FROM locations")
-            loc_updates = []
-            for loc in all_locs:
-                dc_rows = await db.execute_fetchall(
-                    "SELECT COUNT(*) as c FROM files "
-                    "WHERE location_id = ? AND stale = 0 AND hidden = 0 "
-                    "AND dup_exclude = 0 AND dup_count > 0",
-                    (loc["id"],),
-                )
-                loc_updates.append((dc_rows[0]["c"], loc["id"]))
-        finally:
-            await db.close()
-
-        async with db_writer() as wdb:
-            for dc, lid in loc_updates:
-                await wdb.execute(
-                    "UPDATE locations SET duplicate_count = ? WHERE id = ?",
-                    (dc, lid),
-                )
-
-        log.info("Catalog repair: phase 2 complete — %d hashes recounted", dup_total)
 
         # ── Phase 3: Recalculate sizes ───────────────────────────────
-        _repair_progress["phase"] = "sizes"
-        all_locs = await (await get_db()).execute_fetchall("SELECT id FROM locations")
-        _repair_progress["locations_total"] = len(all_locs)
-        log.info(
-            "Catalog repair: phase 3 — recalculating sizes for %d locations",
-            len(all_locs),
-        )
+        if "sizes" not in phases:
+            log.info("Catalog repair: skipping phase 3 (sizes)")
+        else:
+            _repair_progress["phase"] = "sizes"
+            all_locs = await (await get_db()).execute_fetchall(
+                "SELECT id FROM locations"
+            )
+            _repair_progress["locations_total"] = len(all_locs)
+            log.info(
+                "Catalog repair: phase 3 — recalculating sizes for %d locations",
+                len(all_locs),
+            )
 
-        for i, loc in enumerate(all_locs):
-            await recalculate_location_sizes(loc["id"])
-            _repair_progress["locations_done"] = i + 1
+            for i, loc in enumerate(all_locs):
+                await recalculate_location_sizes(loc["id"])
+                _repair_progress["locations_done"] = i + 1
 
-        invalidate_stats_cache()
-        log.info("Catalog repair: phase 3 complete")
+            invalidate_stats_cache()
+            log.info("Catalog repair: phase 3 complete")
 
         # ── Done ─────────────────────────────────────────────────────
         _repair_progress["status"] = "complete"
@@ -399,6 +389,7 @@ async def _bg_repair():
         await broadcast(
             {
                 "type": "repair_completed",
+                "phases": phases,
                 "hashed": hashed,
                 "skipped": skipped,
                 "errors": errors,
@@ -406,7 +397,7 @@ async def _bg_repair():
                 "locations": len(all_locs),
             }
         )
-        log.info("Catalog repair: all phases complete")
+        log.info("Catalog repair: phases %s complete", phases)
 
     except asyncio.CancelledError:
         log.info("Catalog repair: cancelled")

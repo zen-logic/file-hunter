@@ -51,6 +51,11 @@
     --color-stale-text: #b080c0;
     --opacity-stale: 0.55;
 
+    /* ── Status: pending op ── */
+    --color-pending-bg: #2a2a1a;
+    --color-pending-text: #e8a840;
+    --opacity-pending: 0.7;
+
     /* ── Status: duplicate ── */
     --color-dup-bg: #3a3a20;
     --color-dup-text: #e8c840;

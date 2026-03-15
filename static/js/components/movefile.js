@@ -76,10 +76,12 @@ const MoveFileModal = {
     },
 
     _renderTreeNode(container, node, depth) {
-        const isDisabled = node.online === false || this._isExcluded(node.id);
+        const isDisabled = this._isExcluded(node.id);
+        const isOffline = node.online === false;
         const div = document.createElement('div');
         div.className = 'ct-node';
         if (isDisabled) div.classList.add('ct-offline');
+        if (isOffline) div.classList.add('ct-offline-hint');
         if (this._selectedDest === node.id) div.classList.add('ct-selected');
 
         for (let i = 0; i < depth; i++) {
@@ -146,7 +148,9 @@ const MoveFileModal = {
         }
         const node = this._findNode(this._treeData, this._selectedDest);
         if (node) {
-            this.destDisplay.textContent = node.label;
+            this.destDisplay.textContent = node.online === false
+                ? `${node.label} (offline \u2014 will be queued)`
+                : node.label;
             this.submitBtn.disabled = false;
         }
     },

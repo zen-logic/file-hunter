@@ -48,6 +48,9 @@ const StatusBar = {
 
     _renderStats() {
         const s = this._stats;
+        const pendingHtml = s.pendingOps > 0
+            ? `<span class="status-item"><span>Pending:</span><span class="status-value" style="color:var(--color-pending-text)">${s.pendingOps}</span></span>`
+            : '';
         this.statsEl.innerHTML = `
             <span class="status-item">
                 <span>Files:</span>
@@ -65,6 +68,7 @@ const StatusBar = {
                 <span>Catalog:</span>
                 <span class="status-value">${s.totalSizeFormatted}</span>
             </span>
+            ${pendingHtml}
         `;
     },
 

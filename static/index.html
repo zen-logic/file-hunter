@@ -546,7 +546,21 @@
         <div id="repair-catalog-modal" class="modal-overlay hidden">
             <div class="modal-dialog modal-dialog-wide">
                 <h2 class="modal-title">Repair Catalog</h2>
-                <div id="repair-step-progress">
+                <div id="repair-step-choose">
+                    <div class="modal-field">
+                        <div class="modal-text" style="margin-bottom:0.75rem">Select which repairs to run. All operations pause the queue while running.</div>
+                        <div class="repair-options">
+                            <label class="repair-option"><input type="checkbox" id="repair-opt-hashes" checked> <strong>Hashes</strong> <span class="settings-hint">Compute missing hashes for files with partial matches</span></label>
+                            <label class="repair-option"><input type="checkbox" id="repair-opt-duplicates" checked> <strong>Duplicate files</strong> <span class="settings-hint">Recount all duplicate file groups</span></label>
+                            <label class="repair-option"><input type="checkbox" id="repair-opt-sizes" checked> <strong>Sizes</strong> <span class="settings-hint">Recalculate file counts and sizes for all locations</span></label>
+                        </div>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn" id="repair-choose-cancel">Cancel</button>
+                        <button class="btn btn-primary" id="repair-choose-start">Start Repair</button>
+                    </div>
+                </div>
+                <div id="repair-step-progress" class="hidden">
                     <div class="modal-field">
                         <label class="modal-label" id="repair-phase-label">Starting...</label>
                         <div class="import-progress-bar">

@@ -110,6 +110,162 @@ async def _batched_recalc(
     return processed
 
 
+FULL_RECOUNT_WRITE_BATCH = 5000
+
+
+async def full_dup_recount(
+    *, location_id: int | None = None, on_progress=None, on_total=None
+):
+    """Recount dup_count for hashes. Used by catalog repair and import.
+
+    Instead of thousands of small batches each with a commit (death on
+    spinning disk), this does:
+    1. One GROUP BY query per hash type on a dedicated connection
+    2. Builds complete count map in memory
+    3. Writes in large batches (5,000 hashes per commit)
+
+    location_id: when set, only recount hashes that appear on this location.
+    The GROUP BY is scoped to find those hashes, but the UPDATE targets all
+    files with those hashes (dups span locations).
+
+    on_progress(total_processed): called after each write batch.
+    on_total(total): called once after both GROUP BY queries, before writes.
+    """
+    from file_hunter.db import open_connection
+
+    scope_label = f"location #{location_id}" if location_id else "all"
+
+    # Query both hash types first to get total before writes start
+    hash_configs = [
+        ("hash_strong", "", ""),
+        ("hash_fast", " AND hash_strong IS NULL", " AND hash_strong IS NULL"),
+    ]
+    count_maps: list[dict[str, int]] = []
+
+    for hash_column, extra_where, _ in hash_configs:
+        log.info("full_dup_recount (%s): querying %s counts", scope_label, hash_column)
+        conn = await open_connection()
+        try:
+            if location_id:
+                # Find hashes on this location, then count across ALL locations
+                hash_rows = await conn.execute_fetchall(
+                    f"SELECT DISTINCT {hash_column} FROM files "
+                    f"WHERE location_id = ? AND {hash_column} IS NOT NULL "
+                    f"AND {hash_column} != ''{extra_where}",
+                    (location_id,),
+                )
+                target_hashes = [r[hash_column] for r in hash_rows]
+                if target_hashes:
+                    # Count globally for these hashes
+                    ph = ",".join("?" for _ in target_hashes)
+                    rows = await conn.execute_fetchall(
+                        f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
+                        f"WHERE {hash_column} IN ({ph}) "
+                        f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                        f"GROUP BY {hash_column}",
+                        target_hashes,
+                    )
+                else:
+                    rows = []
+            else:
+                rows = await conn.execute_fetchall(
+                    f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
+                    f"WHERE {hash_column} IS NOT NULL AND {hash_column} != '' "
+                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0{extra_where} "
+                    f"GROUP BY {hash_column}"
+                )
+        finally:
+            await conn.close()
+
+        cm: dict[str, int] = {}
+        for r in rows:
+            cnt = r["cnt"]
+            dc = cnt - 1 if cnt > 1 else 0
+            cm[r[hash_column]] = dc
+        count_maps.append(cm)
+        log.info(
+            "full_dup_recount (%s): %d distinct %s values",
+            scope_label,
+            len(cm),
+            hash_column,
+        )
+
+    grand_total = sum(len(cm) for cm in count_maps)
+    if on_total:
+        await on_total(grand_total)
+    log.info(
+        "full_dup_recount (%s): %d total hashes, writing", scope_label, grand_total
+    )
+
+    total_processed = 0
+
+    for (hash_column, _, update_extra), count_map in zip(hash_configs, count_maps):
+        total_hashes = len(count_map)
+        log.info(
+            "full_dup_recount: writing %s — %d hashes in batches of %d",
+            hash_column,
+            total_hashes,
+            FULL_RECOUNT_WRITE_BATCH,
+        )
+
+        # Group by dup_count value for efficient UPDATEs
+        by_dc: dict[int, list[str]] = defaultdict(list)
+        for h, dc in count_map.items():
+            by_dc[dc].append(h)
+
+        # Write in large batches — far fewer commits
+        written = 0
+        for dc, dc_hashes in by_dc.items():
+            for i in range(0, len(dc_hashes), FULL_RECOUNT_WRITE_BATCH):
+                batch = dc_hashes[i : i + FULL_RECOUNT_WRITE_BATCH]
+                ph = ",".join("?" for _ in batch)
+                async with db_writer() as wdb:
+                    await wdb.execute(
+                        f"UPDATE files SET dup_count = ? "
+                        f"WHERE {hash_column} IN ({ph}) "
+                        f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0"
+                        f"{update_extra}",
+                        [dc] + batch,
+                    )
+                written += len(batch)
+                total_processed += len(batch)
+                if on_progress:
+                    await on_progress(total_processed)
+                if written % 50000 < FULL_RECOUNT_WRITE_BATCH:
+                    log.info(
+                        "full_dup_recount: %s — %d / %d hashes written",
+                        hash_column,
+                        written,
+                        total_hashes,
+                    )
+                await asyncio.sleep(0)
+
+        # Zero out stale/hidden/excluded files in one pass
+        zero_hashes = [h for h, dc in count_map.items() if dc == 0]
+        if zero_hashes:
+            for i in range(0, len(zero_hashes), FULL_RECOUNT_WRITE_BATCH):
+                batch = zero_hashes[i : i + FULL_RECOUNT_WRITE_BATCH]
+                ph = ",".join("?" for _ in batch)
+                async with db_writer() as wdb:
+                    await wdb.execute(
+                        f"UPDATE files SET dup_count = 0 "
+                        f"WHERE {hash_column} IN ({ph}) "
+                        f"AND (stale = 1 OR hidden = 1 OR dup_exclude = 1)"
+                        f"{update_extra}",
+                        batch,
+                    )
+                await asyncio.sleep(0)
+
+        log.info(
+            "full_dup_recount: %s complete — %d hashes, %d rows written",
+            hash_column,
+            total_hashes,
+            written,
+        )
+
+    return total_processed
+
+
 def submit_hashes_for_recalc(
     *,
     strong_hashes: set[str] | None = None,
