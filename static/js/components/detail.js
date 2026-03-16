@@ -1,4 +1,5 @@
 import API from '../api.js';
+import ConfirmModal from './confirm.js';
 
 function _authUrl(url) {
     const token = localStorage.getItem('fh-token');
@@ -1569,8 +1570,33 @@ const Detail = {
 
         const dupExcludeCb = document.getElementById('detail-dup-exclude-cb');
         if (dupExcludeCb) {
-            dupExcludeCb.addEventListener('change', () => {
-                API.post(`/api/folders/${folderId}/dup-exclude`, { exclude: dupExcludeCb.checked });
+            dupExcludeCb.addEventListener('change', async () => {
+                const exclude = dupExcludeCb.checked;
+                // Phase 1: get counts for confirmation
+                const res = await API.post(`/api/folders/${folderId}/dup-exclude`, { exclude });
+                if (!res.ok) {
+                    dupExcludeCb.checked = !exclude; // revert
+                    return;
+                }
+                const d = res.data;
+                if (d.confirm) {
+                    const verb = d.direction === 'exclude' ? 'Exclude' : 'Include';
+                    const prep = d.direction === 'exclude' ? 'from' : 'in';
+                    const ok = await ConfirmModal.open({
+                        title: `${verb} ${prep} duplicates`,
+                        message: `${verb} ${d.fileCount.toLocaleString()} files in ${d.folderCount.toLocaleString()} folders ${prep} duplicate detection? This will pause queued operations.`,
+                        confirmLabel: verb,
+                    });
+                    if (!ok) {
+                        dupExcludeCb.checked = !exclude; // revert
+                        return;
+                    }
+                    // Phase 2: confirmed — start the operation
+                    const startRes = await API.post(`/api/folders/${folderId}/dup-exclude`, { exclude, confirmed: true });
+                    if (!startRes.ok) {
+                        dupExcludeCb.checked = !exclude;
+                    }
+                }
             });
         }
 

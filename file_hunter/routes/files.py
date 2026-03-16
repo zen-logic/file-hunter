@@ -435,18 +435,24 @@ async def file_cancel_pending(request: Request):
 
 
 async def folder_dup_exclude(request: Request):
-    """POST /api/folders/{id:int}/dup-exclude — toggle duplicate exclusion."""
+    """POST /api/folders/{id:int}/dup-exclude — toggle duplicate exclusion.
+
+    Two-phase: first call without confirmed=true returns file/folder counts
+    for a confirmation dialog. Second call with confirmed=true starts the
+    operation.
+    """
     folder_id = int(request.path_params["id"])
     body = await request.json()
     exclude = bool(body.get("exclude", False))
+    confirmed = bool(body.get("confirmed", False))
 
-    from file_hunter.db import db_writer
+    from file_hunter.services.dup_exclude import is_running
+
+    if is_running():
+        return json_error("A duplicate exclusion operation is already running.")
 
     db = await get_db()
-    flag = 1 if exclude else 0
 
-    # Update the folder flag immediately so the detail panel shows the
-    # correct checkbox state right away.
     row = await db.execute_fetchall(
         "SELECT name FROM folders WHERE id = ?", (folder_id,)
     )
@@ -454,24 +460,42 @@ async def folder_dup_exclude(request: Request):
         return json_error("Folder not found.", 404)
     folder_name = row[0]["name"]
 
-    async with db_writer() as wdb:
-        await wdb.execute(
-            "UPDATE folders SET dup_exclude = ? WHERE id = ?", (flag, folder_id)
+    # Recursive CTE to count affected folders and files
+    desc_rows = await db.execute_fetchall(
+        """WITH RECURSIVE descendants(id) AS (
+               SELECT ?
+               UNION ALL
+               SELECT fo.id FROM folders fo JOIN descendants d ON fo.parent_id = d.id
+           )
+           SELECT id FROM descendants""",
+        (folder_id,),
+    )
+    folder_count = len(desc_rows)
+
+    # Get file count from stored folder counters (O(1), no aggregate query)
+    folder_ids = [r["id"] for r in desc_rows]
+    file_count = 0
+    for fid in folder_ids:
+        fc_row = await db.execute_fetchall(
+            "SELECT file_count FROM folders WHERE id = ?", (fid,)
+        )
+        if fc_row and fc_row[0]["file_count"]:
+            file_count += fc_row[0]["file_count"]
+
+    if not confirmed:
+        # Return counts for confirmation dialog
+        return json_ok(
+            {
+                "confirm": True,
+                "folderName": folder_name,
+                "folderCount": folder_count,
+                "fileCount": file_count,
+                "direction": "exclude" if exclude else "include",
+            }
         )
 
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
-
-    # Broadcast immediately so the activity panel shows feedback
-    direction = "exclude" if exclude else "include"
-    await broadcast(
-        {
-            "type": "dup_exclude_started",
-            "folder": folder_name,
-            "direction": direction,
-        }
-    )
+    # --- Confirmed: start the operation ---
+    from file_hunter.db import db_writer
 
     # Persist pending operation so it survives restarts
     from file_hunter.services.settings import set_setting
@@ -481,11 +505,18 @@ async def folder_dup_exclude(request: Request):
             wdb, "dup_exclude_pending", f"{folder_id}:{1 if exclude else 0}"
         )
 
-    # Heavy work (descendant folders, files, dup_count recalc) in background
+    # Heavy work in background task
     from file_hunter.services.dup_exclude import toggle_dup_exclude
 
     asyncio.create_task(toggle_dup_exclude(folder_id, exclude))
-    return json_ok({"queued": True})
+    return json_ok({"started": True})
+
+
+async def dup_exclude_progress(request: Request):
+    """GET /api/dup-exclude/progress — poll dup_exclude operation progress."""
+    from file_hunter.services.dup_exclude import get_progress
+
+    return json_ok(get_progress())
 
 
 async def folder_delete(request: Request):

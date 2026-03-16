@@ -34,6 +34,7 @@ from file_hunter.routes.files import (
     location_download,
     folder_delete,
     folder_dup_exclude,
+    dup_exclude_progress,
 )
 from file_hunter.routes.search import (
     search,
@@ -260,6 +261,7 @@ app = Starlette(
         Route(
             "/api/folders/{id:int}/dup-exclude", folder_dup_exclude, methods=["POST"]
         ),
+        Route("/api/dup-exclude/progress", dup_exclude_progress, methods=["GET"]),
         Route("/api/folders/{id:int}", folder_delete, methods=["DELETE"]),
         Route("/api/search", search, methods=["GET"]),
         Route("/api/searches", list_saved_searches, methods=["GET"]),

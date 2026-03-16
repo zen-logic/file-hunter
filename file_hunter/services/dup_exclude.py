@@ -1,15 +1,40 @@
-"""Toggle duplicate exclusion for a folder and all its descendants."""
+"""Toggle duplicate exclusion for a folder and all its descendants.
+
+Pause queue → flag folders/files → recount affected hashes → zero excluded
+files (exclude only) → rebuild location sizes → resume queue.
+
+Progress is stored in a module-level dict, pollable via GET /api/dup-exclude/progress.
+"""
 
 import asyncio
 import logging
 
 from file_hunter.db import db_writer, get_db
+from file_hunter.services.dup_counts import SQL_VAR_LIMIT
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
 
-FLAG_UPDATE_BATCH = 5000
+# Pollable progress — any client can query at any time
+_progress = {
+    "status": "idle",
+    "direction": None,
+    "folder": None,
+    "files_total": 0,
+    "files_done": 0,
+    "hashes_total": 0,
+    "hashes_done": 0,
+    "error": None,
+}
+
+
+def get_progress() -> dict:
+    return dict(_progress)
+
+
+def is_running() -> bool:
+    return _progress["status"] not in ("idle", "complete", "error")
 
 
 async def restore_pending():
@@ -53,13 +78,6 @@ async def restore_pending():
         folder_name,
         folder_id,
     )
-    await broadcast(
-        {
-            "type": "dup_exclude_started",
-            "folder": folder_name,
-            "direction": direction,
-        }
-    )
 
     asyncio.create_task(toggle_dup_exclude(folder_id, exclude))
 
@@ -67,30 +85,59 @@ async def restore_pending():
 async def toggle_dup_exclude(folder_id: int, exclude: bool):
     """Set dup_exclude on a folder subtree and recalculate affected dup_counts.
 
-    The route handler has already updated the top-level folder flag and
-    broadcast dup_exclude_started, so this function handles descendant
-    folders, files, and dup_count recalc.
-
-    Heavy reads via open_connection(). Writes via db_writer() in large batches.
+    Pauses queue and stops coalesced writer for exclusive db_writer access.
+    All IN clauses are batched at SQL_VAR_LIMIT (500).
+    Heavy reads via open_connection(). Writes via db_writer().
+    Zeroes excluded files AFTER recalc succeeds (not before).
     """
     from file_hunter.db import open_connection
+    from file_hunter.services.dup_counts import _batched_recalc, stop_writer
+    from file_hunter.services.queue_manager import pause, resume
+    from file_hunter.services.sizes import recalculate_location_sizes
 
     flag = 1 if exclude else 0
     direction = "exclude" if exclude else "include"
 
+    _progress.update(
+        status="pausing",
+        direction=direction,
+        folder=None,
+        files_total=0,
+        files_done=0,
+        hashes_total=0,
+        hashes_done=0,
+        error=None,
+    )
+
     try:
+        # --- Pause queue and stop coalesced writer ---
+        await pause()
+        await stop_writer()
+        await broadcast(
+            {"type": "queue_paused", "reason": "dup_exclude", "direction": direction}
+        )
+
         db = await get_db()
 
-        # Get folder name for logging (fast indexed lookup on shared reader)
+        # Get folder name
         folder_row = await db.execute_fetchall(
-            "SELECT name FROM folders WHERE id = ?", (folder_id,)
+            "SELECT name, location_id FROM folders WHERE id = ?", (folder_id,)
         )
         if not folder_row:
             log.warning("toggle_dup_exclude: folder %d not found", folder_id)
+            _progress.update(status="error", error="Folder not found")
             return
         folder_name = folder_row[0]["name"]
+        location_id = folder_row[0]["location_id"]
+        _progress["folder"] = folder_name
 
-        # Recursive CTE on folders table (small — ~100K rows max, not files)
+        # --- Phase 1: Flag folders ---
+        _progress["status"] = "flagging"
+        log.info(
+            "dup_exclude %s: flagging folder tree for '%s'", direction, folder_name
+        )
+
+        # Recursive CTE on folders table (small — ~100K rows max)
         desc_rows = await db.execute_fetchall(
             """WITH RECURSIVE descendants(id) AS (
                    SELECT ?
@@ -101,67 +148,100 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
             (folder_id,),
         )
         folder_ids = [r["id"] for r in desc_rows]
-        placeholders = ",".join("?" for _ in folder_ids)
 
-        # Update all descendant folders (top-level already done by route)
-        async with db_writer() as wdb:
-            await wdb.execute(
-                f"UPDATE folders SET dup_exclude = ? WHERE id IN ({placeholders})",
-                [flag] + folder_ids,
-            )
+        # Batch folder flag updates
+        for i in range(0, len(folder_ids), SQL_VAR_LIMIT):
+            batch = folder_ids[i : i + SQL_VAR_LIMIT]
+            ph = ",".join("?" for _ in batch)
+            async with db_writer() as wdb:
+                await wdb.execute(
+                    f"UPDATE folders SET dup_exclude = ? WHERE id IN ({ph})",
+                    [flag] + batch,
+                )
+
+        log.info("dup_exclude %s: %d folders flagged", direction, len(folder_ids))
         invalidate_stats_cache()
 
-        # Fetch file IDs on a dedicated connection (could be millions)
+        # --- Phase 2: Flag files ---
+        # Fetch file IDs and hashes on a dedicated connection
         conn = await open_connection()
         try:
-            count_row = await conn.execute_fetchall(
-                f"SELECT COUNT(*) as cnt FROM files "
-                f"WHERE folder_id IN ({placeholders}) AND stale = 0",
-                folder_ids,
-            )
-            file_count = count_row[0]["cnt"] if count_row else 0
+            # Get file count
+            count_rows = []
+            for i in range(0, len(folder_ids), SQL_VAR_LIMIT):
+                batch = folder_ids[i : i + SQL_VAR_LIMIT]
+                ph = ",".join("?" for _ in batch)
+                cr = await conn.execute_fetchall(
+                    f"SELECT COUNT(*) as cnt FROM files "
+                    f"WHERE folder_id IN ({ph}) AND stale = 0",
+                    batch,
+                )
+                count_rows.append(cr[0]["cnt"])
+            file_count = sum(count_rows)
+            _progress["files_total"] = file_count
 
-            file_id_rows = await conn.execute_fetchall(
-                f"SELECT id FROM files WHERE folder_id IN ({placeholders}) AND stale = 0",
-                folder_ids,
-            )
+            # Get file IDs
+            all_file_ids = []
+            for i in range(0, len(folder_ids), SQL_VAR_LIMIT):
+                batch = folder_ids[i : i + SQL_VAR_LIMIT]
+                ph = ",".join("?" for _ in batch)
+                id_rows = await conn.execute_fetchall(
+                    f"SELECT id FROM files WHERE folder_id IN ({ph}) AND stale = 0",
+                    batch,
+                )
+                all_file_ids.extend(r["id"] for r in id_rows)
+
+            # Get distinct hashes from files in the folder tree
+            all_strong = set()
+            all_fast = set()
+            for i in range(0, len(folder_ids), SQL_VAR_LIMIT):
+                batch = folder_ids[i : i + SQL_VAR_LIMIT]
+                ph = ",".join("?" for _ in batch)
+                strong_rows = await conn.execute_fetchall(
+                    f"SELECT DISTINCT hash_strong FROM files "
+                    f"WHERE folder_id IN ({ph}) AND stale = 0 "
+                    f"AND hash_strong IS NOT NULL AND hash_strong != ''",
+                    batch,
+                )
+                all_strong.update(r["hash_strong"] for r in strong_rows)
+
+                fast_rows = await conn.execute_fetchall(
+                    f"SELECT DISTINCT hash_fast FROM files "
+                    f"WHERE folder_id IN ({ph}) AND stale = 0 "
+                    f"AND hash_fast IS NOT NULL AND hash_fast != '' "
+                    f"AND hash_strong IS NULL",
+                    batch,
+                )
+                all_fast.update(r["hash_fast"] for r in fast_rows)
         finally:
             await conn.close()
 
-        all_file_ids = [r["id"] for r in file_id_rows]
-
         log.info(
-            "dup_exclude %s: folder '%s' (%d folders, %d files)",
+            "dup_exclude %s: folder '%s' — %d folders, %d files, %d strong + %d fast hashes",
             direction,
             folder_name,
             len(folder_ids),
             file_count,
+            len(all_strong),
+            len(all_fast),
         )
 
-        # --- Phase 1: Batch-update files dup_exclude flag ---
+        # Batch-update files dup_exclude flag
         updated = 0
-        last_pct_step = -1
-
-        for i in range(0, len(all_file_ids), FLAG_UPDATE_BATCH):
-            batch = all_file_ids[i : i + FLAG_UPDATE_BATCH]
-            batch_ph = ",".join("?" for _ in batch)
+        for i in range(0, len(all_file_ids), SQL_VAR_LIMIT):
+            batch = all_file_ids[i : i + SQL_VAR_LIMIT]
+            ph = ",".join("?" for _ in batch)
             async with db_writer() as wdb:
                 await wdb.execute(
-                    f"UPDATE files SET dup_exclude = ? WHERE id IN ({batch_ph})",
+                    f"UPDATE files SET dup_exclude = ? WHERE id IN ({ph})",
                     [flag] + batch,
                 )
             updated += len(batch)
+            _progress["files_done"] = updated
 
-            # Broadcast progress at 5% intervals (phase 1 = 0-50%)
-            if file_count > 0:
-                step = updated * 50 // file_count // 5
-                if step > last_pct_step:
-                    last_pct_step = step
-                    await broadcast({"type": "dup_exclude_progress", "pct": step * 5})
-
-            if updated % 50000 < FLAG_UPDATE_BATCH:
+            if updated % 50000 < SQL_VAR_LIMIT:
                 log.info(
-                    "dup_exclude %s: phase 1 — %d / %d files flagged",
+                    "dup_exclude %s: %d / %d files flagged",
                     direction,
                     updated,
                     file_count,
@@ -169,110 +249,90 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
 
             await asyncio.sleep(0)
 
-        # Bulk-set dup_count=0 on all files in affected folders
-        for i in range(0, len(all_file_ids), FLAG_UPDATE_BATCH):
-            batch = all_file_ids[i : i + FLAG_UPDATE_BATCH]
-            batch_ph = ",".join("?" for _ in batch)
-            async with db_writer() as wdb:
-                await wdb.execute(
-                    f"UPDATE files SET dup_count = 0 WHERE id IN ({batch_ph})",
-                    batch,
-                )
-            await asyncio.sleep(0)
-
         invalidate_stats_cache()
+        await broadcast({"type": "stats_changed"})
 
-        # --- Phase 2: Recalculate dup_counts for shared hashes ---
-        # Find hashes that have files BOTH inside and outside the affected
-        # folders. Hashes unique to the affected folders are already correct
-        # (dup_count=0 from the bulk set above).
-        # Use dedicated connection for these heavy queries.
-        conn = await open_connection()
-        try:
-            shared_strong_rows = await conn.execute_fetchall(
-                f"""SELECT DISTINCT f.hash_strong FROM files f
-                    WHERE f.folder_id IN ({placeholders})
-                      AND f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                      AND EXISTS (
-                          SELECT 1 FROM files f2
-                          WHERE f2.hash_strong = f.hash_strong
-                            AND f2.folder_id NOT IN ({placeholders})
-                            AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
-                      )""",
-                folder_ids + folder_ids,
-            )
-            shared_strong = {r["hash_strong"] for r in shared_strong_rows}
+        # --- Phase 3: Recount affected hashes ---
+        _progress["status"] = "recounting"
+        total_hashes = len(all_strong) + len(all_fast)
+        _progress["hashes_total"] = total_hashes
 
-            shared_fast_rows = await conn.execute_fetchall(
-                f"""SELECT DISTINCT f.hash_fast FROM files f
-                    WHERE f.folder_id IN ({placeholders})
-                      AND f.hash_fast IS NOT NULL AND f.hash_fast != ''
-                      AND f.hash_strong IS NULL
-                      AND EXISTS (
-                          SELECT 1 FROM files f2
-                          WHERE f2.hash_fast = f.hash_fast
-                            AND f2.folder_id NOT IN ({placeholders})
-                            AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
-                      )""",
-                folder_ids + folder_ids,
-            )
-            shared_fast = {r["hash_fast"] for r in shared_fast_rows}
-        finally:
-            await conn.close()
-
-        shared_total = len(shared_strong) + len(shared_fast)
         log.info(
-            "dup_exclude %s: %d strong + %d fast shared hashes to recalculate",
+            "dup_exclude %s: recounting %d hashes",
             direction,
-            len(shared_strong),
-            len(shared_fast),
+            total_hashes,
         )
 
         recalculated = 0
-        if shared_total > 0:
-            from file_hunter.services.dup_counts import _batched_recalc
+        if total_hashes > 0:
 
-            # Use large batch size for >10K hashes to reduce commit frequency
-            bs = 5000 if shared_total > 10000 else 0
-            last_hash_step = -1
+            async def _on_progress(processed, _batch_total):
+                nonlocal recalculated
+                recalculated = processed
+                _progress["hashes_done"] = processed
+                # Invalidate stats periodically for real-time UI
+                if processed % 1000 < SQL_VAR_LIMIT:
+                    invalidate_stats_cache()
 
-            async def _on_progress(processed, total):
-                nonlocal last_hash_step
-                if total > 0:
-                    step = (processed * 50 // total) // 5
-                    if step > last_hash_step:
-                        last_hash_step = step
-                        await broadcast(
-                            {"type": "dup_exclude_progress", "pct": 50 + step * 5}
-                        )
-
-            if shared_strong:
-                recalculated += await _batched_recalc(
-                    shared_strong,
+            if all_strong:
+                await _batched_recalc(
+                    all_strong,
                     hash_column="hash_strong",
                     on_progress=_on_progress,
-                    batch_size=bs,
                 )
-            if shared_fast:
-                recalculated += await _batched_recalc(
-                    shared_fast,
+                recalculated = len(all_strong)
+                _progress["hashes_done"] = recalculated
+
+            if all_fast:
+                strong_offset = len(all_strong)
+
+                async def _on_fast_progress(processed, _batch_total):
+                    nonlocal recalculated
+                    recalculated = strong_offset + processed
+                    _progress["hashes_done"] = recalculated
+                    if processed % 1000 < SQL_VAR_LIMIT:
+                        invalidate_stats_cache()
+
+                await _batched_recalc(
+                    all_fast,
                     hash_column="hash_fast",
-                    on_progress=_on_progress,
-                    batch_size=bs,
+                    on_progress=_on_fast_progress,
                 )
 
+        _progress["hashes_done"] = total_hashes
+
+        # --- Phase 4 (EXCLUDE only): Zero dup_count on excluded files ---
+        # AFTER recalc so if anything above fails, old counts are preserved
+        if exclude:
+            _progress["status"] = "zeroing"
+            log.info("dup_exclude: zeroing dup_count on %d excluded files", file_count)
+            for i in range(0, len(all_file_ids), SQL_VAR_LIMIT):
+                batch = all_file_ids[i : i + SQL_VAR_LIMIT]
+                ph = ",".join("?" for _ in batch)
+                async with db_writer() as wdb:
+                    await wdb.execute(
+                        f"UPDATE files SET dup_count = 0 WHERE id IN ({ph})",
+                        batch,
+                    )
+                await asyncio.sleep(0)
+
+        # --- Phase 5: Rebuild location sizes ---
+        _progress["status"] = "rebuilding"
+        log.info("dup_exclude: rebuilding location sizes for location %d", location_id)
+        await recalculate_location_sizes(location_id)
         invalidate_stats_cache()
 
         # Clear the pending marker — operation completed successfully
         async with db_writer() as wdb:
             await wdb.execute("DELETE FROM settings WHERE key = 'dup_exclude_pending'")
 
+        _progress["status"] = "complete"
         log.info(
-            "dup_exclude %s complete: folder '%s', %d files, %d shared hashes recalculated",
+            "dup_exclude %s complete: folder '%s', %d files, %d hashes recalculated",
             direction,
             folder_name,
             updated,
-            recalculated,
+            total_hashes,
         )
         await broadcast(
             {
@@ -280,7 +340,7 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
                 "folder": folder_name,
                 "direction": direction,
                 "fileCount": updated,
-                "hashCount": recalculated,
+                "hashCount": total_hashes,
             }
         )
 
@@ -288,5 +348,11 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
         log.info(
             "dup_exclude %s cancelled (shutdown) for folder %d", direction, folder_id
         )
-    except Exception:
+        _progress.update(status="error", error="Cancelled")
+    except Exception as e:
         log.exception("toggle_dup_exclude failed for folder %d", folder_id)
+        _progress.update(status="error", error=str(e))
+    finally:
+        resume()
+        await broadcast({"type": "queue_resumed"})
+        await broadcast({"type": "stats_changed"})

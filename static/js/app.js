@@ -1133,7 +1133,14 @@ WS.on('scan_queue_skipped', (msg) => {
 WS.on('queue_paused', (msg) => {
     Tree._paused = true;
     Tree.render();
-    ActivityLog.add(`Operations paused: importing <b>${msg.location}</b>`);
+    if (msg.reason === 'dup_exclude') {
+        const verb = msg.direction === 'exclude' ? 'Excluding' : 'Including';
+        const prep = msg.direction === 'exclude' ? 'from' : 'in';
+        ActivityLog.add(`Operations paused: ${verb.toLowerCase()} folder ${prep} duplicates`);
+        _startDupExcludePoll();
+    } else {
+        ActivityLog.add(`Operations paused: importing <b>${msg.location}</b>`);
+    }
 });
 
 WS.on('queue_resumed', () => {
@@ -1221,15 +1228,43 @@ WS.on('dup_recalc_completed', msg => {
     StatusBar.loadStats();
 });
 
-WS.on('dup_exclude_started', msg => {
-    const verb = msg.direction === 'exclude' ? 'Excluding' : 'Including';
-    const prep = msg.direction === 'exclude' ? 'from' : 'in';
-    ActivityLog.add(`${verb} folder ${prep} duplicates: <b>${msg.folder}</b>...`);
-});
-WS.on('dup_exclude_progress', msg => {
-    ActivityLog.add(`Updating duplicate exclusion... ${msg.pct}%`);
-});
+// --- Dup exclude progress polling ---
+let _dupExcludePollTimer = null;
+function _startDupExcludePoll() {
+    if (_dupExcludePollTimer) return;
+    _dupExcludePollTimer = setInterval(async () => {
+        const res = await API.get('/api/dup-exclude/progress');
+        if (!res.ok) return;
+        const p = res.data;
+        if (p.status === 'flagging') {
+            const pct = p.files_total > 0 ? Math.round((p.files_done / p.files_total) * 100) : 0;
+            StatusBar.renderActivity('scanning', `Flagging files... ${p.files_done.toLocaleString()} / ${p.files_total.toLocaleString()} (${pct}%)`);
+        } else if (p.status === 'recounting') {
+            const pct = p.hashes_total > 0 ? Math.round((p.hashes_done / p.hashes_total) * 100) : 0;
+            StatusBar.renderActivity('scanning', `Recounting duplicates... ${p.hashes_done.toLocaleString()} / ${p.hashes_total.toLocaleString()} (${pct}%)`);
+        } else if (p.status === 'zeroing') {
+            StatusBar.renderActivity('scanning', 'Zeroing excluded file counts...');
+        } else if (p.status === 'rebuilding') {
+            StatusBar.renderActivity('scanning', 'Rebuilding location sizes...');
+        } else if (p.status === 'pausing') {
+            StatusBar.renderActivity('scanning', 'Pausing operations...');
+        } else if (p.status === 'complete' || p.status === 'error' || p.status === 'idle') {
+            _stopDupExcludePoll();
+        }
+        // Refresh stats on every poll for real-time UI
+        await StatusBar.loadStats();
+    }, 500);
+}
+function _stopDupExcludePoll() {
+    if (_dupExcludePollTimer) {
+        clearInterval(_dupExcludePollTimer);
+        _dupExcludePollTimer = null;
+        StatusBar.renderActivity('idle');
+    }
+}
+
 WS.on('dup_exclude_completed', async msg => {
+    _stopDupExcludePoll();
     const verb = msg.direction === 'exclude' ? 'excluded' : 'included';
     ActivityLog.add(`Duplicate exclusion updated: <b>${msg.folder}</b> ${verb} — ${(msg.fileCount || 0).toLocaleString()} files, ${(msg.hashCount || 0).toLocaleString()} hashes recalculated`);
     await Tree.reload();
