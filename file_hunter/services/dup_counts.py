@@ -282,6 +282,106 @@ async def full_dup_recount(
     return total_processed
 
 
+async def optimized_dup_recount(
+    *, location_id: int | None = None, on_progress=None, on_total=None
+):
+    """Recount dup_count using expression index on COALESCE(hash_strong, hash_fast).
+
+    Only processes hashes with COUNT > 1 (actual duplicates). Files with
+    unique hashes are skipped entirely.
+
+    location_id: when set, only find hashes on this location. The UPDATE
+    still targets all files with those hashes (dups span locations).
+
+    Uses a single GROUP BY HAVING COUNT > 1 instead of batched IN queries.
+    """
+    from file_hunter.db import open_connection
+
+    scope_label = f"location #{location_id}" if location_id else "all"
+    log.info("optimized_dup_recount (%s): finding duplicate hashes", scope_label)
+
+    conn = await open_connection()
+    try:
+        if location_id:
+            # Get hashes on this location, then find which are duplicates globally
+            hash_rows = await conn.execute_fetchall(
+                "SELECT DISTINCT COALESCE(hash_strong, hash_fast) as effective_hash "
+                "FROM files WHERE location_id = ? "
+                "AND COALESCE(hash_strong, hash_fast) IS NOT NULL",
+                (location_id,),
+            )
+            location_hashes = [r["effective_hash"] for r in hash_rows]
+            log.info(
+                "optimized_dup_recount (%s): %d distinct hashes on location",
+                scope_label,
+                len(location_hashes),
+            )
+
+            # Batch-check which of these are duplicates
+            dup_hashes: list[tuple[str, int]] = []
+            for i in range(0, len(location_hashes), SQL_VAR_LIMIT):
+                chunk = location_hashes[i : i + SQL_VAR_LIMIT]
+                ph = ",".join("?" for _ in chunk)
+                rows = await conn.execute_fetchall(
+                    f"SELECT COALESCE(hash_strong, hash_fast) as h, COUNT(*) as cnt "
+                    f"FROM files "
+                    f"WHERE COALESCE(hash_strong, hash_fast) IN ({ph}) "
+                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                    f"GROUP BY h HAVING COUNT(*) > 1",
+                    chunk,
+                )
+                for r in rows:
+                    dup_hashes.append((r["h"], r["cnt"] - 1))
+        else:
+            # Global — one GROUP BY across all files
+            rows = await conn.execute_fetchall(
+                "SELECT COALESCE(hash_strong, hash_fast) as h, COUNT(*) as cnt "
+                "FROM files "
+                "WHERE COALESCE(hash_strong, hash_fast) IS NOT NULL "
+                "AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                "GROUP BY h HAVING COUNT(*) > 1"
+            )
+            dup_hashes = [(r["h"], r["cnt"] - 1) for r in rows]
+    finally:
+        await conn.close()
+
+    total = len(dup_hashes)
+    log.info(
+        "optimized_dup_recount (%s): %d duplicate hashes to update", scope_label, total
+    )
+    if on_total:
+        await on_total(total)
+
+    # Update dup_count for duplicate files only
+    processed = 0
+    for i in range(0, total, SQL_VAR_LIMIT):
+        batch = dup_hashes[i : i + SQL_VAR_LIMIT]
+        async with db_writer() as wdb:
+            for h, dc in batch:
+                await wdb.execute(
+                    "UPDATE files SET dup_count = ? "
+                    "WHERE COALESCE(hash_strong, hash_fast) = ? "
+                    "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+                    (dc, h),
+                )
+        processed += len(batch)
+        if on_progress:
+            await on_progress(processed)
+        if processed % 5000 < SQL_VAR_LIMIT:
+            log.info(
+                "optimized_dup_recount (%s): %d / %d hashes written",
+                scope_label,
+                processed,
+                total,
+            )
+        await asyncio.sleep(0)
+
+    log.info(
+        "optimized_dup_recount (%s): complete — %d duplicate hashes", scope_label, total
+    )
+    return total
+
+
 def submit_hashes_for_recalc(
     *,
     strong_hashes: set[str] | None = None,

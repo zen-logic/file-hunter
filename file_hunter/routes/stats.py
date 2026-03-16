@@ -149,7 +149,7 @@ async def _bg_repair(phases: list[str] | None = None):
 
     from file_hunter.db import db_writer, open_connection
     from file_hunter.services.agent_ops import hash_fast_batch
-    from file_hunter.services.dup_counts import full_dup_recount
+    from file_hunter.services.dup_counts import optimized_dup_recount
     from file_hunter.services.online_check import agent_online_check
     from file_hunter.services.queue_manager import pause, resume
     from file_hunter.services.sizes import recalculate_location_sizes
@@ -331,7 +331,7 @@ async def _bg_repair(phases: list[str] | None = None):
             async def _on_dup_progress(total_processed):
                 _repair_progress["dup_hashes_done"] = total_processed
 
-            dup_total = await full_dup_recount(
+            dup_total = await optimized_dup_recount(
                 on_progress=_on_dup_progress, on_total=_on_dup_total
             )
 

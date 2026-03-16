@@ -160,7 +160,7 @@ async def _run_and_notify(
             location_id,
         )
         if _progress["status"] == "complete":
-            from file_hunter.services.dup_counts import full_dup_recount
+            from file_hunter.services.dup_counts import optimized_dup_recount
 
             _progress["status"] = "dup_recount"
             _progress["dup_hashes_done"] = 0
@@ -172,7 +172,7 @@ async def _run_and_notify(
             async def _on_dup_progress(total_processed):
                 _progress["dup_hashes_done"] = total_processed
 
-            await full_dup_recount(
+            await optimized_dup_recount(
                 location_id=location_id,
                 on_progress=_on_dup_progress,
                 on_total=_on_dup_total,
