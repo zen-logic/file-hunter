@@ -51,8 +51,14 @@ async def warm_stats_cache():
 
 
 async def _refresh_all():
-    """Refresh dashboard and all location caches in the background."""
+    """Clear cache and refresh dashboard and location entries.
+
+    Folder entries are cleared but not repopulated — they are lazily
+    re-fetched on next access.
+    """
     from file_hunter.db import open_connection
+
+    _cache.clear()
 
     try:
         conn = await open_connection()
