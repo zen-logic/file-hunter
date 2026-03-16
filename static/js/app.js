@@ -1304,7 +1304,9 @@ function _startFastScanPoll() {
         const res = await API.get('/api/scan/fast/progress');
         if (!res.ok) return;
         const p = res.data;
-        if (p.phase === 'walking') {
+        if (p.phase === 'deleting') {
+            StatusBar.renderActivity('scanning', 'Fast Scan: deleting existing data...');
+        } else if (p.phase === 'walking') {
             StatusBar.renderActivity('scanning', `Fast Scan: ${p.files_found.toLocaleString()} files found`);
         } else if (p.phase === 'hashing') {
             const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;

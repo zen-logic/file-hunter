@@ -198,6 +198,7 @@ def _sync_walk_and_hash(location_id: int, root_path: str, location_name: str):
             "SELECT COUNT(*) FROM files WHERE location_id = ?", (location_id,)
         ).fetchone()[0]
         if existing > 0:
+            _progress["phase"] = "deleting"
             log.info(
                 "Fast scan: deleting %d existing files for location %d",
                 existing,

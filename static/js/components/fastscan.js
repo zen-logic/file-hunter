@@ -54,6 +54,10 @@ const FastScan = {
                 this.phaseEl.textContent = 'Pausing operations...';
                 this.fillEl.style.width = '0%';
                 this.textEl.textContent = '';
+            } else if (p.phase === 'deleting') {
+                this.phaseEl.textContent = 'Deleting existing data...';
+                this.fillEl.style.width = '0%';
+                this.textEl.textContent = '';
             } else if (p.phase === 'walking') {
                 this.phaseEl.textContent = 'Walking filesystem';
                 this.fillEl.style.width = '0%'; // indeterminate — no total known
