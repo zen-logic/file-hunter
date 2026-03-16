@@ -189,12 +189,33 @@ async def full_dup_recount(
                 else:
                     rows = []
             else:
-                rows = await conn.execute_fetchall(
-                    f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
-                    f"WHERE {hash_column} IS NOT NULL AND {hash_column} != '' "
-                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0{extra_where} "
-                    f"GROUP BY {hash_column}"
+                # Collect all distinct hashes, then batch the COUNT queries
+                hash_rows = await conn.execute_fetchall(
+                    f"SELECT DISTINCT {hash_column} FROM files "
+                    f"WHERE {hash_column} IS NOT NULL AND {hash_column} != ''"
+                    f"{extra_where}",
                 )
+                all_hashes = [r[hash_column] for r in hash_rows]
+                rows = []
+                if all_hashes:
+                    for bi in range(0, len(all_hashes), SQL_VAR_LIMIT):
+                        chunk = all_hashes[bi : bi + SQL_VAR_LIMIT]
+                        ph = ",".join("?" for _ in chunk)
+                        chunk_rows = await conn.execute_fetchall(
+                            f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
+                            f"WHERE {hash_column} IN ({ph}) "
+                            f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                            f"GROUP BY {hash_column}",
+                            chunk,
+                        )
+                        rows.extend(chunk_rows)
+                    log.info(
+                        "full_dup_recount (%s): counted %d %s hashes in %d batches",
+                        scope_label,
+                        len(all_hashes),
+                        hash_column,
+                        (len(all_hashes) + SQL_VAR_LIMIT - 1) // SQL_VAR_LIMIT,
+                    )
         finally:
             await conn.close()
 
