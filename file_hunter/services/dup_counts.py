@@ -69,13 +69,10 @@ async def _batched_recalc(
 
         # Group hashes by their dup_count value for batched UPDATEs
         by_dup_count = defaultdict(list)
-        zero_hashes = []
         for h in batch:
             cnt = count_map.get(h, 0)
             dc = cnt - 1 if cnt > 1 else 0
             by_dup_count[dc].append(h)
-            if dc == 0:
-                zero_hashes.append(h)
 
         # Write phase: db_writer() per batch
         async with db_writer() as wdb:
@@ -88,17 +85,6 @@ async def _batched_recalc(
                     f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0"
                     f"{update_extra}",
                     [dc] + dc_hashes,
-                )
-
-            # Zero out inactive files (stale/hidden/excluded) for hashes with no dups
-            if zero_hashes:
-                z_ph = ",".join("?" for _ in zero_hashes)
-                await wdb.execute(
-                    f"UPDATE files SET dup_count = 0 "
-                    f"WHERE {hash_column} IN ({z_ph}) "
-                    f"AND (stale = 1 OR hidden = 1 OR dup_exclude = 1)"
-                    f"{update_extra}",
-                    zero_hashes,
                 )
 
         processed += len(batch)
@@ -232,10 +218,7 @@ async def full_dup_recount(
             hash_column,
         )
 
-    # Total includes zero hashes twice: once in main write (setting active files),
-    # once in zero-out (clearing inactive files)
-    zero_count = sum(1 for cm in count_maps for dc in cm.values() if dc == 0)
-    grand_total = sum(len(cm) for cm in count_maps) + zero_count
+    grand_total = sum(len(cm) for cm in count_maps)
     if on_total:
         await on_total(grand_total)
     log.info(
@@ -285,31 +268,9 @@ async def full_dup_recount(
                     )
                 await asyncio.sleep(0)
 
-        # Zero out stale/hidden/excluded files in one pass
-        zero_hashes = [h for h, dc in count_map.items() if dc == 0]
-        if zero_hashes:
-            log.info(
-                "full_dup_recount: %s — zeroing %d hashes for inactive files",
-                hash_column,
-                len(zero_hashes),
-            )
-            zeroed = 0
-            for i in range(0, len(zero_hashes), FULL_RECOUNT_WRITE_BATCH):
-                batch = zero_hashes[i : i + FULL_RECOUNT_WRITE_BATCH]
-                ph = ",".join("?" for _ in batch)
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        f"UPDATE files SET dup_count = 0 "
-                        f"WHERE {hash_column} IN ({ph}) "
-                        f"AND (stale = 1 OR hidden = 1 OR dup_exclude = 1)"
-                        f"{update_extra}",
-                        batch,
-                    )
-                zeroed += len(batch)
-                total_processed += len(batch)
-                if on_progress:
-                    await on_progress(total_processed)
-                await asyncio.sleep(0)
+        # No zero-out for inactive files (stale/hidden/excluded) — their
+        # dup_count is never read. If they become active again, their hash
+        # gets recounted at that point.
 
         log.info(
             "full_dup_recount: %s complete — %d hashes, %d rows written",
