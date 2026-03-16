@@ -6,6 +6,7 @@ import StatusBar from './components/statusbar.js';
 import Search from './components/search.js';
 import AddLocationModal from './components/addlocation.js';
 import ScanConfirm from './components/scanconfirm.js';
+import FastScan from './components/fastscan.js';
 import ConfirmModal from './components/confirm.js';
 import Consolidate from './components/consolidate.js';
 import Merge from './components/merge.js';
@@ -431,7 +432,7 @@ ScanConfirm.init(async (locationNode, folderNode) => {
     }
     const startRes = await API.post('/api/scan/fast', { location_id: locationNode.id, confirmed: true });
     if (!startRes.ok) { Toast.error(startRes.error || 'Failed to start fast scan.'); return; }
-    _startFastScanPoll();
+    FastScan.open();
 });
 
 scanBtn.addEventListener('click', () => {
@@ -458,6 +459,7 @@ SlideshowTriage.init();
 Detail.slideshowTriage = SlideshowTriage;
 ImportCatalog.init();
 RepairCatalog.init();
+FastScan.init();
 
 Merge.init(async ({ source_id, destination_id }) => {
     await API.post('/api/merge', { source_id, destination_id });
