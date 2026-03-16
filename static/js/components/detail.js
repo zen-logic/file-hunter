@@ -925,7 +925,7 @@ const Detail = {
                         verifyBtn.textContent = 'Queued';
                     } else {
                         this._lastDetail = res.data;
-                        this.showFile(detail.id);
+                        this.renderFile({ id: detail.id, type: 'file' });
                     }
                 } else {
                     verifyBtn.textContent = res.error || 'Failed';
