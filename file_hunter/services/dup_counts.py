@@ -232,7 +232,10 @@ async def full_dup_recount(
             hash_column,
         )
 
-    grand_total = sum(len(cm) for cm in count_maps)
+    # Total includes zero hashes twice: once in main write (setting active files),
+    # once in zero-out (clearing inactive files)
+    zero_count = sum(1 for cm in count_maps for dc in cm.values() if dc == 0)
+    grand_total = sum(len(cm) for cm in count_maps) + zero_count
     if on_total:
         await on_total(grand_total)
     log.info(
@@ -285,6 +288,12 @@ async def full_dup_recount(
         # Zero out stale/hidden/excluded files in one pass
         zero_hashes = [h for h, dc in count_map.items() if dc == 0]
         if zero_hashes:
+            log.info(
+                "full_dup_recount: %s — zeroing %d hashes for inactive files",
+                hash_column,
+                len(zero_hashes),
+            )
+            zeroed = 0
             for i in range(0, len(zero_hashes), FULL_RECOUNT_WRITE_BATCH):
                 batch = zero_hashes[i : i + FULL_RECOUNT_WRITE_BATCH]
                 ph = ",".join("?" for _ in batch)
@@ -296,6 +305,10 @@ async def full_dup_recount(
                         f"{update_extra}",
                         batch,
                     )
+                zeroed += len(batch)
+                total_processed += len(batch)
+                if on_progress:
+                    await on_progress(total_processed)
                 await asyncio.sleep(0)
 
         log.info(
