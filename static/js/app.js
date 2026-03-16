@@ -416,6 +416,22 @@ ScanConfirm.init(async (locationNode, folderNode) => {
     if (folderNode) payload.folder_id = folderNode.id;
     const res = await API.post('/api/scan', payload);
     if (!res.ok) Toast.error(res.error || 'Failed to start scan.');
+}, async (locationNode) => {
+    // Fast scan — two-phase confirmation
+    const checkRes = await API.post('/api/scan/fast', { location_id: locationNode.id });
+    if (!checkRes.ok) { Toast.error(checkRes.error || 'Fast scan not available.'); return; }
+    const info = checkRes.data;
+    if (info.previouslyScanned) {
+        const ok = await ConfirmModal.open({
+            title: 'Replace catalog data?',
+            message: `Fast Scan will delete all existing catalog data for "${info.locationName}" and rescan from scratch. This cannot be undone.`,
+            confirmLabel: 'Replace and Scan',
+        });
+        if (!ok) return;
+    }
+    const startRes = await API.post('/api/scan/fast', { location_id: locationNode.id, confirmed: true });
+    if (!startRes.ok) { Toast.error(startRes.error || 'Failed to start fast scan.'); return; }
+    _startFastScanPoll();
 });
 
 scanBtn.addEventListener('click', () => {
@@ -1138,6 +1154,9 @@ WS.on('queue_paused', (msg) => {
         const prep = msg.direction === 'exclude' ? 'from' : 'in';
         ActivityLog.add(`Operations paused: ${verb.toLowerCase()} folder ${prep} duplicates`);
         _startDupExcludePoll();
+    } else if (msg.reason === 'fast_scan') {
+        ActivityLog.add(`Operations paused: fast scanning <b>${msg.location}</b>`);
+        _startFastScanPoll();
     } else {
         ActivityLog.add(`Operations paused: importing <b>${msg.location}</b>`);
     }
@@ -1275,6 +1294,47 @@ WS.on('dup_exclude_completed', async msg => {
     await Detail.refreshStats();
     await StatusBar.loadStats();
 });
+
+// --- Fast scan progress polling ---
+let _fastScanPollTimer = null;
+function _startFastScanPoll() {
+    if (_fastScanPollTimer) return;
+    _fastScanPollTimer = setInterval(async () => {
+        const res = await API.get('/api/scan/fast/progress');
+        if (!res.ok) return;
+        const p = res.data;
+        if (p.phase === 'walking') {
+            StatusBar.renderActivity('scanning', `Fast Scan: ${p.files_found.toLocaleString()} files found`);
+        } else if (p.phase === 'hashing') {
+            const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;
+            StatusBar.renderActivity('scanning', `Fast Scan: hashing ${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} (${pct}%)`);
+        } else if (p.phase === 'recounting') {
+            StatusBar.renderActivity('scanning', 'Fast Scan: recounting duplicates...');
+        } else if (p.phase === 'rebuilding') {
+            StatusBar.renderActivity('scanning', 'Fast Scan: rebuilding sizes...');
+        } else if (p.phase === 'pausing') {
+            StatusBar.renderActivity('scanning', 'Fast Scan: pausing operations...');
+        } else if (p.status === 'complete' || p.status === 'error' || p.status === 'idle') {
+            _stopFastScanPoll();
+            if (p.status === 'complete') {
+                ActivityLog.add(`Fast Scan complete: <b>${p.location}</b> — ${p.files_found.toLocaleString()} files`);
+                await Tree.reload();
+                if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
+                await Detail.refreshStats();
+            } else if (p.status === 'error') {
+                ActivityLog.add(`Fast Scan failed: ${p.error}`);
+            }
+        }
+        await StatusBar.loadStats();
+    }, 500);
+}
+function _stopFastScanPoll() {
+    if (_fastScanPollTimer) {
+        clearInterval(_fastScanPollTimer);
+        _fastScanPollTimer = null;
+        StatusBar.renderActivity('idle');
+    }
+}
 
 WS.on('location_changed', async (msg) => {
     ActivityLog.add(`Location ${msg.action}: <b>${msg.location?.label || msg.locationId || ''}</b>`);

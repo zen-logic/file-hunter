@@ -143,3 +143,70 @@ async def cancel_scan(request: Request):
 
 async def get_scan_queue(request: Request):
     return json_ok(await get_queue_status_for_broadcast())
+
+
+async def start_fast_scan(request: Request):
+    """POST /api/scan/fast — start a fast scan for a local location.
+
+    Two-phase: first call without confirmed=true returns location info
+    for a confirmation dialog. Second call with confirmed=true starts the scan.
+    """
+    import asyncio
+
+    from file_hunter.services.fast_scan import is_running
+
+    if is_running():
+        return json_error("A fast scan is already running.")
+
+    db = await get_db()
+    body = await request.json()
+    raw_id = body.get("location_id", "")
+    loc_id = int(str(raw_id).replace("loc-", ""))
+    confirmed = bool(body.get("confirmed", False))
+
+    # Verify location exists and is local
+    rows = await db.execute_fetchall(
+        "SELECT l.id, l.name, l.root_path, l.agent_id, l.date_last_scanned, "
+        "a.name as agent_name "
+        "FROM locations l "
+        "LEFT JOIN agents a ON a.id = l.agent_id "
+        "WHERE l.id = ?",
+        (loc_id,),
+    )
+    if not rows:
+        return json_error("Location not found.", 404)
+
+    loc = rows[0]
+    if loc["agent_name"] != "Local Agent":
+        return json_error("Fast scan is only available for local locations.")
+
+    # Check if location has a pending queue operation
+    status = await get_queue_status()
+    for item in status:
+        if item.get("location_id") == loc_id:
+            return json_error(f"'{loc['name']}' already has a pending operation.", 409)
+
+    previously_scanned = bool(loc["date_last_scanned"])
+
+    if not confirmed:
+        return json_ok(
+            {
+                "confirm": True,
+                "locationName": loc["name"],
+                "rootPath": loc["root_path"],
+                "previouslyScanned": previously_scanned,
+            }
+        )
+
+    # Confirmed — start the fast scan
+    from file_hunter.services.fast_scan import run_fast_scan
+
+    asyncio.create_task(run_fast_scan(loc_id, loc["root_path"], loc["name"]))
+    return json_ok({"started": True})
+
+
+async def fast_scan_progress(request: Request):
+    """GET /api/scan/fast/progress — poll fast scan progress."""
+    from file_hunter.services.fast_scan import get_progress
+
+    return json_ok(get_progress())
