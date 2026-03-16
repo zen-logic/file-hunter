@@ -895,7 +895,6 @@ AddLocationModal.init(async ({ name, path }) => {
     ActivityLog.add(`Location added: <b>${name}</b>`);
     Toast.success(`Location added: ${name}`);
     await Tree.reload();
-    API.post('/api/scan', { location_id: res.data.id });
     return { ok: true };
 });
 
