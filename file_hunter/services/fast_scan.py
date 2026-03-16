@@ -112,6 +112,8 @@ async def run_fast_scan(location_id: int, root_path: str, location_name: str):
 
         # Dup recount for this location
         _progress["phase"] = "recounting"
+        _progress["files_to_hash"] = 0
+        _progress["files_hashed"] = 0
         log.info("Fast scan: recounting duplicates for location %d", location_id)
 
         async def _on_dup_total(total):

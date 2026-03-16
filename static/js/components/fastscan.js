@@ -69,8 +69,11 @@ const FastScan = {
                 this.textEl.textContent = `${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} (${pct}%)`;
             } else if (p.phase === 'recounting') {
                 this.phaseEl.textContent = 'Recounting duplicates';
-                this.fillEl.style.width = '100%';
-                this.textEl.textContent = '';
+                const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;
+                this.fillEl.style.width = pct + '%';
+                this.textEl.textContent = p.files_to_hash > 0
+                    ? `${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} hashes (${pct}%)`
+                    : 'Collecting hashes...';
             } else if (p.phase === 'rebuilding') {
                 this.phaseEl.textContent = 'Rebuilding sizes';
                 this.fillEl.style.width = '100%';
