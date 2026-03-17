@@ -128,13 +128,25 @@ async def run_import(
         offset = 0
 
         while True:
-            rows = cat.execute(
-                "SELECT folder_id, filename, rel_path, file_size, "
-                "file_type_high, file_type_low, hash_partial, "
-                "created_date, modified_date, hidden "
-                "FROM files LIMIT ? OFFSET ?",
-                (BATCH_SIZE, offset),
-            ).fetchall()
+            # hash_fast may not exist in older catalogs
+            try:
+                rows = cat.execute(
+                    "SELECT folder_id, filename, rel_path, file_size, "
+                    "file_type_high, file_type_low, hash_partial, hash_fast, "
+                    "created_date, modified_date, hidden "
+                    "FROM files LIMIT ? OFFSET ?",
+                    (BATCH_SIZE, offset),
+                ).fetchall()
+                has_hash_fast = True
+            except Exception:
+                rows = cat.execute(
+                    "SELECT folder_id, filename, rel_path, file_size, "
+                    "file_type_high, file_type_low, hash_partial, "
+                    "created_date, modified_date, hidden "
+                    "FROM files LIMIT ? OFFSET ?",
+                    (BATCH_SIZE, offset),
+                ).fetchall()
+                has_hash_fast = False
 
             if not rows:
                 break
@@ -158,6 +170,7 @@ async def run_import(
                         r["file_type_low"],
                         r["file_size"],
                         r["hash_partial"],
+                        r["hash_fast"] if has_hash_fast else None,
                         "",  # description
                         "",  # tags
                         r["created_date"],
@@ -173,10 +186,10 @@ async def run_import(
                     "INSERT INTO files "
                     "(filename, full_path, rel_path, location_id, folder_id, "
                     "file_type_high, file_type_low, file_size, "
-                    "hash_partial, "
+                    "hash_partial, hash_fast, "
                     "description, tags, created_date, modified_date, "
                     "date_cataloged, date_last_seen, hidden) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(location_id, rel_path) DO UPDATE SET "
                     "filename=excluded.filename, full_path=excluded.full_path, "
                     "folder_id=excluded.folder_id, "
@@ -184,6 +197,7 @@ async def run_import(
                     "file_type_low=excluded.file_type_low, "
                     "file_size=excluded.file_size, "
                     "hash_partial=excluded.hash_partial, "
+                    "hash_fast=COALESCE(excluded.hash_fast, hash_fast), "
                     "created_date=excluded.created_date, "
                     "modified_date=excluded.modified_date, "
                     "date_last_seen=excluded.date_last_seen, "

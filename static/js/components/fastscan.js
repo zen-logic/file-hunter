@@ -63,10 +63,17 @@ const FastScan = {
                 this.fillEl.style.width = '0%'; // indeterminate — no total known
                 this.textEl.textContent = `${p.files_found.toLocaleString()} files found in ${p.folders_found.toLocaleString()} folders`;
             } else if (p.phase === 'hashing') {
-                this.phaseEl.textContent = 'Hashing files';
+                this.phaseEl.textContent = 'Partial hashing';
                 const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;
                 this.fillEl.style.width = pct + '%';
                 this.textEl.textContent = `${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} (${pct}%)`;
+            } else if (p.phase === 'confirming') {
+                this.phaseEl.textContent = 'Confirming duplicates';
+                const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;
+                this.fillEl.style.width = pct + '%';
+                this.textEl.textContent = p.files_to_hash > 0
+                    ? `${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} candidates (${pct}%)`
+                    : 'Finding candidates...';
             } else if (p.phase === 'recounting') {
                 this.phaseEl.textContent = 'Recounting duplicates';
                 const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;

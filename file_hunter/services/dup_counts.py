@@ -285,83 +285,91 @@ async def full_dup_recount(
 async def optimized_dup_recount(
     *, location_id: int | None = None, on_progress=None, on_total=None
 ):
-    """Recount dup_count using expression index on COALESCE(hash_strong, hash_fast).
+    """Recount dup_count using two-pass: hash_strong then hash_fast.
 
     Only processes hashes with COUNT > 1 (actual duplicates). Files with
-    unique hashes are skipped entirely.
+    only hash_partial (no hash_fast or hash_strong) get dup_count = 0.
 
     location_id: when set, only find hashes on this location. The UPDATE
     still targets all files with those hashes (dups span locations).
-
-    Uses a single GROUP BY HAVING COUNT > 1 instead of batched IN queries.
     """
     from file_hunter.db import open_connection
 
     scope_label = f"location #{location_id}" if location_id else "all"
     log.info("optimized_dup_recount (%s): finding duplicate hashes", scope_label)
 
+    hash_configs = [
+        ("hash_strong", ""),
+        ("hash_fast", " AND hash_strong IS NULL"),
+    ]
+    all_dup_hashes: list[tuple[str, str, int]] = []  # (hash_col, hash_val, dup_count)
+
     conn = await open_connection()
     try:
-        if location_id:
-            # Get hashes on this location, then find which are duplicates globally
-            hash_rows = await conn.execute_fetchall(
-                "SELECT DISTINCT COALESCE(hash_strong, hash_fast) as effective_hash "
-                "FROM files WHERE location_id = ? "
-                "AND COALESCE(hash_strong, hash_fast) IS NOT NULL",
-                (location_id,),
-            )
-            location_hashes = [r["effective_hash"] for r in hash_rows]
-            log.info(
-                "optimized_dup_recount (%s): %d distinct hashes on location",
-                scope_label,
-                len(location_hashes),
-            )
+        for hash_column, update_extra in hash_configs:
+            if location_id:
+                hash_rows = await conn.execute_fetchall(
+                    f"SELECT DISTINCT {hash_column} FROM files "
+                    f"WHERE location_id = ? AND {hash_column} IS NOT NULL "
+                    f"AND {hash_column} != ''",
+                    (location_id,),
+                )
+                location_hashes = [r[hash_column] for r in hash_rows]
 
-            # Batch-check which of these are duplicates
-            dup_hashes: list[tuple[str, int]] = []
-            for i in range(0, len(location_hashes), SQL_VAR_LIMIT):
-                chunk = location_hashes[i : i + SQL_VAR_LIMIT]
-                ph = ",".join("?" for _ in chunk)
+                for i in range(0, len(location_hashes), SQL_VAR_LIMIT):
+                    chunk = location_hashes[i : i + SQL_VAR_LIMIT]
+                    ph = ",".join("?" for _ in chunk)
+                    rows = await conn.execute_fetchall(
+                        f"SELECT {hash_column}, COUNT(*) as cnt "
+                        f"FROM files "
+                        f"WHERE {hash_column} IN ({ph}) "
+                        f"AND stale = 0 AND dup_exclude = 0 "
+                        f"GROUP BY {hash_column} HAVING COUNT(*) > 1",
+                        chunk,
+                    )
+                    for r in rows:
+                        all_dup_hashes.append(
+                            (hash_column, r[hash_column], r["cnt"] - 1)
+                        )
+            else:
                 rows = await conn.execute_fetchall(
-                    f"SELECT COALESCE(hash_strong, hash_fast) as h, COUNT(*) as cnt "
+                    f"SELECT {hash_column}, COUNT(*) as cnt "
                     f"FROM files "
-                    f"WHERE COALESCE(hash_strong, hash_fast) IN ({ph}) "
-                    f"AND stale = 0 AND dup_exclude = 0 "
-                    f"GROUP BY h HAVING COUNT(*) > 1",
-                    chunk,
+                    f"WHERE {hash_column} IS NOT NULL AND {hash_column} != '' "
+                    f"AND stale = 0 AND dup_exclude = 0{update_extra} "
+                    f"GROUP BY {hash_column} HAVING COUNT(*) > 1"
                 )
                 for r in rows:
-                    dup_hashes.append((r["h"], r["cnt"] - 1))
-        else:
-            # Global — one GROUP BY across all files
-            rows = await conn.execute_fetchall(
-                "SELECT COALESCE(hash_strong, hash_fast) as h, COUNT(*) as cnt "
-                "FROM files "
-                "WHERE COALESCE(hash_strong, hash_fast) IS NOT NULL "
-                "AND stale = 0 AND dup_exclude = 0 "
-                "GROUP BY h HAVING COUNT(*) > 1"
+                    all_dup_hashes.append((hash_column, r[hash_column], r["cnt"] - 1))
+
+            log.info(
+                "optimized_dup_recount (%s): %s — %d duplicate groups",
+                scope_label,
+                hash_column,
+                sum(1 for h in all_dup_hashes if h[0] == hash_column),
             )
-            dup_hashes = [(r["h"], r["cnt"] - 1) for r in rows]
     finally:
         await conn.close()
 
-    total = len(dup_hashes)
+    total = len(all_dup_hashes)
     log.info(
-        "optimized_dup_recount (%s): %d duplicate hashes to update", scope_label, total
+        "optimized_dup_recount (%s): %d total duplicate hash groups", scope_label, total
     )
     if on_total:
         await on_total(total)
 
-    # Update dup_count for duplicate files only
     processed = 0
     for i in range(0, total, SQL_VAR_LIMIT):
-        batch = dup_hashes[i : i + SQL_VAR_LIMIT]
+        batch = all_dup_hashes[i : i + SQL_VAR_LIMIT]
         async with db_writer() as wdb:
-            for h, dc in batch:
+            for hash_column, h, dc in batch:
+                update_extra = (
+                    " AND hash_strong IS NULL" if hash_column == "hash_fast" else ""
+                )
                 await wdb.execute(
-                    "UPDATE files SET dup_count = ? "
-                    "WHERE COALESCE(hash_strong, hash_fast) = ? "
-                    "AND stale = 0 AND dup_exclude = 0",
+                    f"UPDATE files SET dup_count = ? "
+                    f"WHERE {hash_column} = ? "
+                    f"AND stale = 0 AND dup_exclude = 0{update_extra}",
                     (dc, h),
                 )
         processed += len(batch)

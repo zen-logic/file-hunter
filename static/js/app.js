@@ -1310,7 +1310,10 @@ function _startFastScanPoll() {
             StatusBar.renderActivity('scanning', `Fast Scan: ${p.files_found.toLocaleString()} files found`);
         } else if (p.phase === 'hashing') {
             const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;
-            StatusBar.renderActivity('scanning', `Fast Scan: hashing ${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} (${pct}%)`);
+            StatusBar.renderActivity('scanning', `Fast Scan: partial hashing ${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} (${pct}%)`);
+        } else if (p.phase === 'confirming') {
+            const pct = p.files_to_hash > 0 ? Math.round((p.files_hashed / p.files_to_hash) * 100) : 0;
+            StatusBar.renderActivity('scanning', `Fast Scan: confirming ${p.files_hashed.toLocaleString()} / ${p.files_to_hash.toLocaleString()} candidates (${pct}%)`);
         } else if (p.phase === 'recounting') {
             StatusBar.renderActivity('scanning', 'Fast Scan: recounting duplicates...');
         } else if (p.phase === 'rebuilding') {
