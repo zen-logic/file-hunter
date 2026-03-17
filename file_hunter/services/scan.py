@@ -1179,6 +1179,23 @@ async def _run_first_scan_streamed(
         "Streamed first scan starting for location #%d (%s)", location_id, location_name
     )
 
+    # Clean any leftover data from interrupted previous scans
+    async with db_writer() as db:
+        existing = await db.execute_fetchall(
+            "SELECT COUNT(*) as cnt FROM files WHERE location_id = ?",
+            (location_id,),
+        )
+        if existing[0]["cnt"] > 0:
+            logger.info(
+                "Streamed first scan: deleting %d leftover files for location %d",
+                existing[0]["cnt"],
+                location_id,
+            )
+            await db.execute("DELETE FROM files WHERE location_id = ?", (location_id,))
+            await db.execute(
+                "DELETE FROM folders WHERE location_id = ?", (location_id,)
+            )
+
     # --- Phase 1: Stream metadata, bulk insert ---
     folder_cache: dict[str, int] = {}  # rel_dir -> folder_id
     file_batch: list[tuple] = []
