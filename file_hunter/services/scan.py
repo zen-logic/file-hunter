@@ -1390,10 +1390,16 @@ async def _run_first_scan_streamed(
 
     # Batch-check which pairs have duplicates globally
     dup_groups = []
+    total_batches = (len(local_pairs) + 499) // 500
     _debug_log.debug(
-        "CANDIDATE: batch-checking %d pairs for duplicates", len(local_pairs)
+        "CANDIDATE: batch-checking %d pairs in %d batches",
+        len(local_pairs),
+        total_batches,
     )
+    batch_num = 0
     for i in range(0, len(local_pairs), 500):
+        batch_num += 1
+        t_batch = time.monotonic()
         chunk = local_pairs[i : i + 500]
         conditions = " OR ".join("(hash_partial = ? AND file_size = ?)" for _ in chunk)
         params = []
@@ -1406,6 +1412,17 @@ async def _run_first_scan_streamed(
             params,
         )
         dup_groups.extend(rows)
+        _debug_log.debug(
+            "CANDIDATE: batch %d/%d done in %.3fs (%d dup groups so far)",
+            batch_num,
+            total_batches,
+            time.monotonic() - t_batch,
+            len(dup_groups),
+        )
+
+    _debug_log.debug(
+        "CANDIDATE: batch-check complete, %d dup groups found", len(dup_groups)
+    )
 
     # Fetch files in those groups that need hash_fast
     candidates = []
