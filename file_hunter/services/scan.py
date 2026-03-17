@@ -1426,7 +1426,16 @@ async def _run_first_scan_streamed(
 
     # Fetch files in those groups that need hash_fast
     candidates = []
+    total_fetch_batches = (len(dup_groups) + 499) // 500
+    _debug_log.debug(
+        "FETCH_CANDIDATES: fetching files for %d dup groups in %d batches",
+        len(dup_groups),
+        total_fetch_batches,
+    )
+    fetch_num = 0
     for i in range(0, len(dup_groups), 500):
+        fetch_num += 1
+        t_fetch = time.monotonic()
         chunk = dup_groups[i : i + 500]
         conditions = " OR ".join("(hash_partial = ? AND file_size = ?)" for _ in chunk)
         params = []
@@ -1438,6 +1447,15 @@ async def _run_first_scan_streamed(
             params,
         )
         candidates.extend(rows)
+        _debug_log.debug(
+            "FETCH_CANDIDATES: batch %d/%d done in %.3fs (%d candidates so far)",
+            fetch_num,
+            total_fetch_batches,
+            time.monotonic() - t_fetch,
+            len(candidates),
+        )
+
+    _debug_log.debug("FETCH_CANDIDATES: complete, %d candidates total", len(candidates))
 
     total_candidates = len(candidates)
     confirmed = 0
