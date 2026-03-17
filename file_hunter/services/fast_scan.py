@@ -235,59 +235,61 @@ async def run_fast_scan(location_id: int, root_path: str, location_name: str):
             }
         )
 
-        from file_hunter.db import open_connection
         from file_hunter_core.hasher import hash_fast_only_sync
 
-        conn = await open_connection()
-        try:
-            # Step 1: get this location's distinct (hash_partial, file_size) pairs
-            local_pairs = await conn.execute_fetchall(
-                "SELECT DISTINCT hash_partial, file_size FROM files "
-                "WHERE location_id = ? AND hash_partial IS NOT NULL "
-                "AND file_size > 0 AND stale = 0",
-                (location_id,),
-            )
-            log.info(
-                "Fast scan pass 3: %d distinct (hash_partial, file_size) pairs",
-                len(local_pairs),
-            )
+        # Use shared reader (get_db) — open_connection() can hang on WAL
+        # checkpoint after the sync thread's large write batch.
+        from file_hunter.db import get_db
 
-            # Step 2: batch-check which pairs have duplicates globally
-            dup_groups = []
-            for i in range(0, len(local_pairs), SQL_VAR_LIMIT):
-                chunk = local_pairs[i : i + SQL_VAR_LIMIT]
-                conditions = " OR ".join(
-                    "(hash_partial = ? AND file_size = ?)" for _ in chunk
-                )
-                params = []
-                for g in chunk:
-                    params.extend([g["hash_partial"], g["file_size"]])
-                rows = await conn.execute_fetchall(
-                    f"SELECT hash_partial, file_size FROM files "
-                    f"WHERE ({conditions}) AND stale = 0 "
-                    f"GROUP BY hash_partial, file_size HAVING COUNT(*) > 1",
-                    params,
-                )
-                dup_groups.extend(rows)
+        read_db = await get_db()
+        await read_db.commit()  # refresh read snapshot to see sync thread's writes
 
-            # Step 3: fetch files in those groups that need hash_fast
-            candidates = []
-            for i in range(0, len(dup_groups), SQL_VAR_LIMIT):
-                chunk = dup_groups[i : i + SQL_VAR_LIMIT]
-                conditions = " OR ".join(
-                    "(hash_partial = ? AND file_size = ?)" for _ in chunk
-                )
-                params = []
-                for g in chunk:
-                    params.extend([g["hash_partial"], g["file_size"]])
-                rows = await conn.execute_fetchall(
-                    f"SELECT id, full_path FROM files "
-                    f"WHERE ({conditions}) AND hash_fast IS NULL AND stale = 0",
-                    params,
-                )
-                candidates.extend(rows)
-        finally:
-            await conn.close()
+        # Step 1: get this location's distinct (hash_partial, file_size) pairs
+        local_pairs = await read_db.execute_fetchall(
+            "SELECT DISTINCT hash_partial, file_size FROM files "
+            "WHERE location_id = ? AND hash_partial IS NOT NULL "
+            "AND file_size > 0 AND stale = 0",
+            (location_id,),
+        )
+        log.info(
+            "Fast scan pass 3: %d distinct (hash_partial, file_size) pairs",
+            len(local_pairs),
+        )
+
+        # Step 2: batch-check which pairs have duplicates globally
+        dup_groups = []
+        for i in range(0, len(local_pairs), SQL_VAR_LIMIT):
+            chunk = local_pairs[i : i + SQL_VAR_LIMIT]
+            conditions = " OR ".join(
+                "(hash_partial = ? AND file_size = ?)" for _ in chunk
+            )
+            params = []
+            for g in chunk:
+                params.extend([g["hash_partial"], g["file_size"]])
+            rows = await read_db.execute_fetchall(
+                f"SELECT hash_partial, file_size FROM files "
+                f"WHERE ({conditions}) AND stale = 0 "
+                f"GROUP BY hash_partial, file_size HAVING COUNT(*) > 1",
+                params,
+            )
+            dup_groups.extend(rows)
+
+        # Step 3: fetch files in those groups that need hash_fast
+        candidates = []
+        for i in range(0, len(dup_groups), SQL_VAR_LIMIT):
+            chunk = dup_groups[i : i + SQL_VAR_LIMIT]
+            conditions = " OR ".join(
+                "(hash_partial = ? AND file_size = ?)" for _ in chunk
+            )
+            params = []
+            for g in chunk:
+                params.extend([g["hash_partial"], g["file_size"]])
+            rows = await read_db.execute_fetchall(
+                f"SELECT id, full_path FROM files "
+                f"WHERE ({conditions}) AND hash_fast IS NULL AND stale = 0",
+                params,
+            )
+            candidates.extend(rows)
 
         total_candidates = len(candidates)
         _progress["phase"] = "confirming"
