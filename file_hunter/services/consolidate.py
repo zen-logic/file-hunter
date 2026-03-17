@@ -99,7 +99,7 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
                       l.name as location_name, l.root_path
                FROM files f
                JOIN locations l ON l.id = f.location_id
-               WHERE f.{hash_col} = ? AND f.hidden = 0""",
+               WHERE f.{hash_col} = ?""",
             (effective_hash,),
         )
         all_copies = [dict(r) for r in all_copies]

@@ -61,7 +61,7 @@ async def _batched_recalc(
         rows = await db.execute_fetchall(
             f"""SELECT {hash_column}, COUNT(*) as cnt FROM files
                 WHERE {hash_column} IN ({ph})
-                  AND stale = 0 AND hidden = 0 AND dup_exclude = 0
+                  AND stale = 0 AND dup_exclude = 0
                 GROUP BY {hash_column}""",
             batch,
         )
@@ -82,7 +82,7 @@ async def _batched_recalc(
                 await wdb.execute(
                     f"UPDATE files SET dup_count = ? "
                     f"WHERE {hash_column} IN ({dc_ph}) "
-                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0"
+                    f"AND stale = 0 AND dup_exclude = 0"
                     f"{update_extra}",
                     [dc] + dc_hashes,
                 )
@@ -160,7 +160,7 @@ async def full_dup_recount(
                         chunk_rows = await conn.execute_fetchall(
                             f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
                             f"WHERE {hash_column} IN ({ph}) "
-                            f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                            f"AND stale = 0 AND dup_exclude = 0 "
                             f"GROUP BY {hash_column}",
                             chunk,
                         )
@@ -190,7 +190,7 @@ async def full_dup_recount(
                         chunk_rows = await conn.execute_fetchall(
                             f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
                             f"WHERE {hash_column} IN ({ph}) "
-                            f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                            f"AND stale = 0 AND dup_exclude = 0 "
                             f"GROUP BY {hash_column}",
                             chunk,
                         )
@@ -251,7 +251,7 @@ async def full_dup_recount(
                     await wdb.execute(
                         f"UPDATE files SET dup_count = ? "
                         f"WHERE {hash_column} IN ({ph}) "
-                        f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0"
+                        f"AND stale = 0 AND dup_exclude = 0"
                         f"{update_extra}",
                         [dc] + batch,
                     )
@@ -326,7 +326,7 @@ async def optimized_dup_recount(
                     f"SELECT COALESCE(hash_strong, hash_fast) as h, COUNT(*) as cnt "
                     f"FROM files "
                     f"WHERE COALESCE(hash_strong, hash_fast) IN ({ph}) "
-                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                    f"AND stale = 0 AND dup_exclude = 0 "
                     f"GROUP BY h HAVING COUNT(*) > 1",
                     chunk,
                 )
@@ -338,7 +338,7 @@ async def optimized_dup_recount(
                 "SELECT COALESCE(hash_strong, hash_fast) as h, COUNT(*) as cnt "
                 "FROM files "
                 "WHERE COALESCE(hash_strong, hash_fast) IS NOT NULL "
-                "AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                "AND stale = 0 AND dup_exclude = 0 "
                 "GROUP BY h HAVING COUNT(*) > 1"
             )
             dup_hashes = [(r["h"], r["cnt"] - 1) for r in rows]
@@ -361,7 +361,7 @@ async def optimized_dup_recount(
                 await wdb.execute(
                     "UPDATE files SET dup_count = ? "
                     "WHERE COALESCE(hash_strong, hash_fast) = ? "
-                    "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+                    "AND stale = 0 AND dup_exclude = 0",
                     (dc, h),
                 )
         processed += len(batch)
@@ -506,7 +506,7 @@ async def _dup_recalc_writer():
             for lid in affected:
                 dc_rows = await db.execute_fetchall(
                     "SELECT COUNT(*) as c FROM files "
-                    "WHERE location_id = ? AND stale = 0 AND hidden = 0 "
+                    "WHERE location_id = ? AND stale = 0 "
                     "AND dup_exclude = 0 AND dup_count > 0",
                     (lid,),
                 )
@@ -548,7 +548,7 @@ async def batch_dup_counts(
         ph = ",".join("?" for _ in unique_strong)
         rows = await db.execute_fetchall(
             f"""SELECT hash_strong, COUNT(*) as cnt FROM files
-                WHERE hash_strong IN ({ph}) AND stale = 0 AND hidden = 0 AND dup_exclude = 0
+                WHERE hash_strong IN ({ph}) AND stale = 0 AND dup_exclude = 0
                 GROUP BY hash_strong HAVING COUNT(*) > 1""",
             list(unique_strong),
         )
@@ -560,7 +560,7 @@ async def batch_dup_counts(
         ph = ",".join("?" for _ in unique_fast)
         rows = await db.execute_fetchall(
             f"""SELECT hash_fast, COUNT(*) as cnt FROM files
-                WHERE hash_fast IN ({ph}) AND stale = 0 AND hidden = 0 AND dup_exclude = 0
+                WHERE hash_fast IN ({ph}) AND stale = 0 AND dup_exclude = 0
                 GROUP BY hash_fast HAVING COUNT(*) > 1""",
             list(unique_fast),
         )
@@ -629,11 +629,11 @@ async def backfill_dup_counts():
         stale_strong_check = await db.execute_fetchall(
             """SELECT 1 FROM files f
                WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                 AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
                  AND EXISTS (
                      SELECT 1 FROM files f2
                      WHERE f2.hash_strong = f.hash_strong
-                       AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                       AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
                  )
                LIMIT 1"""
         )
@@ -642,11 +642,11 @@ async def backfill_dup_counts():
             """SELECT 1 FROM files f
                WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
                  AND f.hash_strong IS NULL
-                 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                 AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
                  AND EXISTS (
                      SELECT 1 FROM files f2
                      WHERE f2.hash_fast = f.hash_fast
-                       AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                       AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
                  )
                LIMIT 1"""
         )
@@ -663,11 +663,11 @@ async def backfill_dup_counts():
                 """SELECT DISTINCT f.hash_strong
                    FROM files f
                    WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                     AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                     AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
                      AND EXISTS (
                          SELECT 1 FROM files f2
                          WHERE f2.hash_strong = f.hash_strong
-                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
                      )"""
             )
             strong_hashes = {r["hash_strong"] for r in rows}
@@ -677,11 +677,11 @@ async def backfill_dup_counts():
                 """SELECT DISTINCT f.hash_strong
                    FROM files f
                    WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                     AND f.dup_count > 0 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0
+                     AND f.dup_count > 0 AND f.stale = 0 AND f.dup_exclude = 0
                      AND NOT EXISTS (
                          SELECT 1 FROM files f2
                          WHERE f2.hash_strong = f.hash_strong
-                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
                      )"""
             )
             strong_hashes |= {r["hash_strong"] for r in fp_rows}
@@ -694,11 +694,11 @@ async def backfill_dup_counts():
                    FROM files f
                    WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
                      AND f.hash_strong IS NULL
-                     AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                     AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
                      AND EXISTS (
                          SELECT 1 FROM files f2
                          WHERE f2.hash_fast = f.hash_fast
-                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
                      )"""
             )
             fast_hashes = {r["hash_fast"] for r in rows}
@@ -709,11 +709,11 @@ async def backfill_dup_counts():
                    FROM files f
                    WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
                      AND f.hash_strong IS NULL
-                     AND f.dup_count > 0 AND f.stale = 0 AND f.hidden = 0 AND f.dup_exclude = 0
+                     AND f.dup_count > 0 AND f.stale = 0 AND f.dup_exclude = 0
                      AND NOT EXISTS (
                          SELECT 1 FROM files f2
                          WHERE f2.hash_fast = f.hash_fast
-                           AND f2.id != f.id AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0
+                           AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
                      )"""
             )
             fast_hashes |= {r["hash_fast"] for r in fp_rows}

@@ -98,7 +98,7 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
         f"""SELECT f.id, f.full_path, f.location_id, l.root_path
            FROM files f
            JOIN locations l ON l.id = f.location_id
-           WHERE f.{hash_col} = ? AND f.hidden = 0""",
+           WHERE f.{hash_col} = ?""",
         (effective_hash,),
     )
 

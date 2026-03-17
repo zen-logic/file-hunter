@@ -244,7 +244,7 @@ async def get_file_detail(db, file_id: int):
     if effective_hash:
         count_row = await db.execute_fetchall(
             f"SELECT COUNT(*) as cnt FROM files "
-            f"WHERE {hash_col} = ? AND id != ? AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+            f"WHERE {hash_col} = ? AND id != ? AND stale = 0 AND dup_exclude = 0",
             (effective_hash, file_id),
         )
         dup_total = count_row[0]["cnt"] if count_row else 0
@@ -253,7 +253,7 @@ async def get_file_detail(db, file_id: int):
             f"SELECT f2.id, f2.filename, f2.rel_path, l.name as location_name "
             f"FROM files f2 "
             f"JOIN locations l ON l.id = f2.location_id "
-            f"WHERE f2.{hash_col} = ? AND f2.id != ? AND f2.stale = 0 AND f2.hidden = 0 AND f2.dup_exclude = 0 "
+            f"WHERE f2.{hash_col} = ? AND f2.id != ? AND f2.stale = 0 AND f2.dup_exclude = 0 "
             f"LIMIT 10",
             (effective_hash, file_id),
         )

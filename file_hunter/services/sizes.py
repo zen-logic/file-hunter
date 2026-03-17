@@ -83,7 +83,7 @@ async def recalculate_location_sizes(location_id: int):
     dup_rows = await db.execute_fetchall(
         "SELECT folder_id, COUNT(*) AS cnt "
         "FROM files WHERE location_id = ? AND stale = 0 "
-        "AND hidden = 0 AND dup_exclude = 0 AND dup_count > 0 "
+        "AND dup_exclude = 0 AND dup_count > 0 "
         "GROUP BY folder_id",
         (location_id,),
     )

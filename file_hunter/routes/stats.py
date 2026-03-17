@@ -342,7 +342,7 @@ async def _bg_repair(phases: list[str] | None = None):
                 for loc in all_locs:
                     dc_rows = await rdb.execute_fetchall(
                         "SELECT COUNT(*) as c FROM files "
-                        "WHERE location_id = ? AND stale = 0 AND hidden = 0 "
+                        "WHERE location_id = ? AND stale = 0 "
                         "AND dup_exclude = 0 AND dup_count > 0",
                         (loc["id"],),
                     )

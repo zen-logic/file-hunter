@@ -145,7 +145,7 @@ async def _resume_post_processing(location_id: int, location_name: str):
                 rows = await conn.execute_fetchall(
                     f"SELECT COALESCE(hash_strong, hash_fast) as h, COUNT(*) as cnt "
                     f"FROM files WHERE COALESCE(hash_strong, hash_fast) IN ({ph}) "
-                    f"AND stale = 0 AND hidden = 0 AND dup_exclude = 0 "
+                    f"AND stale = 0 AND dup_exclude = 0 "
                     f"GROUP BY h HAVING COUNT(*) > 1",
                     chunk,
                 )
@@ -163,7 +163,7 @@ async def _resume_post_processing(location_id: int, location_name: str):
                 await wdb.execute(
                     "UPDATE files SET dup_count = ? "
                     "WHERE COALESCE(hash_strong, hash_fast) = ? "
-                    "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+                    "AND stale = 0 AND dup_exclude = 0",
                     (dc, h),
                 )
 
@@ -557,7 +557,7 @@ def _sync_walk_and_hash(location_id: int, root_path: str, location_name: str):
             cnt = conn.execute(
                 "SELECT COUNT(*) FROM files "
                 "WHERE COALESCE(hash_strong, hash_fast) = ? "
-                "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+                "AND stale = 0 AND dup_exclude = 0",
                 (h,),
             ).fetchone()[0]
             if cnt > 1:
@@ -609,14 +609,14 @@ def _sync_walk_and_hash(location_id: int, root_path: str, location_name: str):
             cnt = conn.execute(
                 "SELECT COUNT(*) FROM files "
                 "WHERE COALESCE(hash_strong, hash_fast) = ? "
-                "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+                "AND stale = 0 AND dup_exclude = 0",
                 (h,),
             ).fetchone()[0]
             dc = cnt - 1 if cnt > 1 else 0
             conn.execute(
                 "UPDATE files SET dup_count = ? "
                 "WHERE COALESCE(hash_strong, hash_fast) = ? "
-                "AND stale = 0 AND hidden = 0 AND dup_exclude = 0",
+                "AND stale = 0 AND dup_exclude = 0",
                 (dc, h),
             )
             processed += 1

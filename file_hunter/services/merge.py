@@ -700,7 +700,7 @@ async def _load_source_files(db, source_id, source_info):
 async def _build_dest_hash_index(db, location_id):
     """Build a hash->file dict for all hashed files in the destination location."""
     rows = await db.execute_fetchall(
-        "SELECT id, hash_strong, full_path FROM files WHERE location_id = ? AND hash_strong IS NOT NULL AND hidden = 0",
+        "SELECT id, hash_strong, full_path FROM files WHERE location_id = ? AND hash_strong IS NOT NULL",
         (location_id,),
     )
     return {
