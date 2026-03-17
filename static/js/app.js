@@ -995,20 +995,39 @@ WS.on('scan_started', (msg) => {
 
 WS.on('scan_progress', (msg) => {
     let statusText;
+    let logText;
     if (msg.phase === 'tree_diff') {
         const changedSuffix = msg.dirsChanged ? ` (${msg.dirsChanged.toLocaleString()} changed)` : '';
         statusText = `${msg.location} — Comparing: ${msg.dirsProcessed.toLocaleString()} dirs checked, ${msg.filesFound.toLocaleString()} files${changedSuffix}`;
+        logText = statusText;
+    } else if (msg.phase === 'streaming') {
+        statusText = `${msg.location} — Cataloging: ${msg.filesFound.toLocaleString()} files`;
+        logText = `${msg.location} — ${msg.filesFound.toLocaleString()} files cataloged`;
+    } else if (msg.phase === 'hashing_partial') {
+        const total = msg.filesToHash || 0;
+        const done = msg.filesHashed || 0;
+        const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
+        statusText = `${msg.location} — Partial hashing: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        logText = `${msg.location} — ${msg.filesFound.toLocaleString()} found, ${done.toLocaleString()} partial hashed`;
+    } else if (msg.phase === 'confirming') {
+        const total = msg.filesToHash || 0;
+        const done = msg.filesHashed || 0;
+        const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
+        statusText = `${msg.location} — Confirming duplicates: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        logText = `${msg.location} — confirming ${done.toLocaleString()} / ${total.toLocaleString()} candidates`;
+    } else if (msg.phase === 'recounting') {
+        statusText = `${msg.location} — Recounting duplicates...`;
+        logText = `${msg.location} — recounting duplicates`;
     } else {
         const skippedSuffix = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
         const matchesSuffix = msg.potentialMatches ? `, ${msg.potentialMatches.toLocaleString()} matches` : '';
-        statusText = `${msg.location} — ${msg.filesHashed.toLocaleString()} hashed${skippedSuffix}${matchesSuffix}`;
+        statusText = `${msg.location} — ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedSuffix}${matchesSuffix}`;
+        logText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} found, ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedSuffix}${matchesSuffix}`;
     }
     StatusBar.renderActivity('scanning', statusText, msg.locationId);
     StatusBar.updateStatsFromProgress(msg);
     Detail.updateFromScanProgress(msg);
-    const skippedLog = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
-    const matchesPart = msg.potentialMatches ? `, ${msg.potentialMatches.toLocaleString()} matches` : '';
-    ActivityLog.add(`${msg.location} — ${msg.filesFound.toLocaleString()} found, ${msg.filesHashed.toLocaleString()} hashed${skippedLog}${matchesPart}`);
+    ActivityLog.add(logText);
     updateLocationOnline(msg.locationId, true);
     Tree.setScanningLocation(msg.locationId);
 });
