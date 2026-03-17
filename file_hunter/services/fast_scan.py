@@ -286,7 +286,7 @@ async def run_fast_scan(location_id: int, root_path: str, location_name: str):
                 params.extend([g["hash_partial"], g["file_size"]])
             rows = await read_db.execute_fetchall(
                 f"SELECT id, full_path FROM files "
-                f"WHERE ({conditions}) AND hash_fast IS NULL AND stale = 0",
+                f"WHERE ({conditions}) AND stale = 0",
                 params,
             )
             candidates.extend(rows)

@@ -1424,38 +1424,33 @@ async def _run_first_scan_streamed(
         "CANDIDATE: batch-check complete, %d dup groups found", len(dup_groups)
     )
 
-    # Fetch files in those groups that need hash_fast
-    candidates = []
-    total_fetch_batches = (len(dup_groups) + 499) // 500
+    # Fetch candidate files — we already have the dup (hash_partial, file_size)
+    # pairs. Query files matching those pairs. Use batched lookups on the
+    # (file_size, hash_partial) index — but without the hash_fast IS NULL
+    # filter that caused full table scans.
     _debug_log.debug(
-        "FETCH_CANDIDATES: fetching files for %d dup groups in %d batches",
-        len(dup_groups),
-        total_fetch_batches,
+        "FETCH_CANDIDATES: fetching files for %d dup groups", len(dup_groups)
     )
-    fetch_num = 0
+    t_fetch = time.monotonic()
+
+    candidates = []
     for i in range(0, len(dup_groups), 500):
-        fetch_num += 1
-        t_fetch = time.monotonic()
         chunk = dup_groups[i : i + 500]
         conditions = " OR ".join("(hash_partial = ? AND file_size = ?)" for _ in chunk)
         params = []
         for g in chunk:
             params.extend([g["hash_partial"], g["file_size"]])
         rows = await read_db.execute_fetchall(
-            f"SELECT id, full_path FROM files "
-            f"WHERE ({conditions}) AND hash_fast IS NULL AND stale = 0",
+            f"SELECT id, full_path FROM files WHERE ({conditions}) AND stale = 0",
             params,
         )
         candidates.extend(rows)
-        _debug_log.debug(
-            "FETCH_CANDIDATES: batch %d/%d done in %.3fs (%d candidates so far)",
-            fetch_num,
-            total_fetch_batches,
-            time.monotonic() - t_fetch,
-            len(candidates),
-        )
 
-    _debug_log.debug("FETCH_CANDIDATES: complete, %d candidates total", len(candidates))
+    _debug_log.debug(
+        "FETCH_CANDIDATES: %d candidates fetched in %.3fs",
+        len(candidates),
+        time.monotonic() - t_fetch,
+    )
 
     total_candidates = len(candidates)
     confirmed = 0

@@ -238,7 +238,7 @@ async def _run_and_notify(
                     params.extend([g["hash_partial"], g["file_size"]])
                 rows = await db.execute_fetchall(
                     f"SELECT id, full_path FROM files "
-                    f"WHERE ({conditions}) AND hash_fast IS NULL AND stale = 0",
+                    f"WHERE ({conditions}) AND stale = 0",
                     params,
                 )
                 candidates.extend(rows)
