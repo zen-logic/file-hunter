@@ -972,143 +972,153 @@ async def _tree_diff(
 ) -> set[str] | None:
     """Stream the agent tree and diff against catalog.
 
-    Uses a dedicated reader with a single query to load all catalog files
-    for the location, indexed by (rel_path). Avoids per-directory DB queries.
+    Populates a temp table with catalog data for the location, then diffs
+    against the agent stream using indexed lookups on the temp table.
+    Memory is bounded by SQLite's temp storage (in-memory for small locations,
+    spills to disk for large ones).
 
     Returns set of changed rel_dir strings (directories needing reconcile),
     or None if tree streaming is not supported (agent returned 404).
     """
     from file_hunter.db import open_connection
 
-    # Load catalog data on a dedicated reader — one query, grouped by directory.
-    # Uses a cursor-based approach: fetch rows sorted by folder rel_path,
-    # build per-directory dicts on demand as the stream arrives.
     conn = await open_connection()
     try:
-        # Folder lookup: folder_id -> rel_path
-        folder_rows = await conn.execute_fetchall(
-            "SELECT id, rel_path FROM folders WHERE location_id = ?",
+        # Create temp table and populate from catalog in one bulk INSERT
+        await conn.execute(
+            "CREATE TEMP TABLE _diff_catalog ("
+            "  rel_path TEXT PRIMARY KEY,"
+            "  dir_path TEXT NOT NULL,"
+            "  file_size INTEGER NOT NULL,"
+            "  modified_date TEXT NOT NULL"
+            ")"
+        )
+        await conn.execute("CREATE INDEX _diff_catalog_dir ON _diff_catalog(dir_path)")
+
+        # Populate: join files with folders to get dir_path
+        await conn.execute(
+            "INSERT INTO _diff_catalog (rel_path, dir_path, file_size, modified_date) "
+            "SELECT f.rel_path, COALESCE(fld.rel_path, ''), f.file_size, f.modified_date "
+            "FROM files f "
+            "LEFT JOIN folders fld ON fld.id = f.folder_id "
+            "WHERE f.location_id = ? AND f.stale = 0",
             (location_id,),
         )
-        folder_rel_by_id: dict[int, str] = {r["id"]: r["rel_path"] for r in folder_rows}
-        catalog_dir_set = {r["rel_path"] for r in folder_rows}
+        await conn.commit()
 
-        # Load all files sorted by folder_id for sequential access.
-        # We build per-directory dicts lazily as the stream progresses.
-        all_cat_rows = await conn.execute_fetchall(
-            "SELECT rel_path, file_size, modified_date, folder_id FROM files "
-            "WHERE location_id = ? AND stale = 0 "
-            "ORDER BY folder_id",
+        # Get catalog directory set
+        dir_rows = await conn.execute_fetchall(
+            "SELECT DISTINCT rel_path FROM folders WHERE location_id = ?",
             (location_id,),
         )
-    finally:
-        await conn.close()
+        catalog_dir_set = {r["rel_path"] for r in dir_rows}
 
-    # Build per-directory catalog: dir_rel_path -> {rel_path: (size, mtime)}
-    catalog_by_dir: dict[str, dict[str, tuple[int, str]]] = {}
-    for r in all_cat_rows:
-        fid = r["folder_id"]
-        dir_path = folder_rel_by_id.get(fid, "") if fid else ""
-        if dir_path not in catalog_by_dir:
-            catalog_by_dir[dir_path] = {}
-        catalog_by_dir[dir_path][r["rel_path"]] = (
-            r["file_size"],
-            r["modified_date"],
-        )
-    # Free the raw rows
-    del all_cat_rows
-    del folder_rel_by_id
+        changed_dirs: set[str] = set()
+        all_dirs: list[str] = []
+        current_rel_dir: str | None = None
+        current_files: list[dict] = []
+        dirs_done = 0
+        files_seen = 0
+        last_broadcast = time.monotonic()
 
-    changed_dirs: set[str] = set()
-    all_dirs: list[str] = []
-    current_rel_dir: str | None = None
-    current_files: list[dict] = []
-    dirs_done = 0
-    files_seen = 0
-    last_broadcast = time.monotonic()
-
-    def _flush_dir():
-        """Diff the buffered directory against the catalog lookup."""
-        nonlocal dirs_done
-        if current_rel_dir is None:
-            return
-
-        cat_dir = catalog_by_dir.get(current_rel_dir, {})
-
-        # Quick check: different file count = changed
-        if len(current_files) != len(cat_dir):
-            changed_dirs.add(current_rel_dir)
-            dirs_done += 1
-            return
-
-        # Detailed check: compare each file
-        for af in current_files:
-            entry = cat_dir.get(af["rel_path"])
-            if entry is None:
-                changed_dirs.add(current_rel_dir)
-                dirs_done += 1
+        async def _flush_dir():
+            """Diff the buffered directory against the temp table."""
+            nonlocal dirs_done
+            if current_rel_dir is None:
                 return
-            cat_size, cat_mtime = entry
-            if af["size"] != cat_size or af["mtime"] != cat_mtime:
+
+            # Count catalog files in this directory
+            count_row = await conn.execute_fetchall(
+                "SELECT COUNT(*) as cnt FROM _diff_catalog WHERE dir_path = ?",
+                (current_rel_dir,),
+            )
+            cat_count = count_row[0]["cnt"] if count_row else 0
+
+            # Quick check: different file count = changed
+            if len(current_files) != cat_count:
                 changed_dirs.add(current_rel_dir)
                 dirs_done += 1
                 return
 
-        dirs_done += 1
-
-    got_records = False
-    async for record in stream_tree(agent_id, root_path):
-        got_records = True
-        rtype = record.get("type")
-
-        if rtype == "dir":
-            _flush_dir()
-            # Broadcast periodically
-            now = time.monotonic()
-            if now - last_broadcast >= 2.0:
-                logger.info(
-                    "Tree diff: %d dirs diffed, %d files seen, %d changed so far — %s",
-                    dirs_done,
-                    files_seen,
-                    len(changed_dirs),
-                    location_name,
+            # Detailed check: compare each file
+            for af in current_files:
+                row = await conn.execute_fetchall(
+                    "SELECT file_size, modified_date FROM _diff_catalog "
+                    "WHERE rel_path = ?",
+                    (af["rel_path"],),
                 )
-                if broadcast_fn:
-                    await broadcast_fn(dirs_done, files_seen, len(changed_dirs))
-                last_broadcast = now
-            current_rel_dir = record["rel_dir"]
-            current_files = []
-            all_dirs.append(current_rel_dir)
+                if not row:
+                    changed_dirs.add(current_rel_dir)
+                    dirs_done += 1
+                    return
+                if (
+                    af["size"] != row[0]["file_size"]
+                    or af["mtime"] != row[0]["modified_date"]
+                ):
+                    changed_dirs.add(current_rel_dir)
+                    dirs_done += 1
+                    return
 
-        elif rtype == "file":
-            current_files.append(record)
-            files_seen += 1
+            dirs_done += 1
 
-        elif rtype == "end":
-            _flush_dir()
+        got_records = False
+        async for record in stream_tree(agent_id, root_path):
+            got_records = True
+            rtype = record.get("type")
 
-    if not got_records:
-        return None
+            if rtype == "dir":
+                await _flush_dir()
+                now = time.monotonic()
+                if now - last_broadcast >= 2.0:
+                    logger.info(
+                        "Tree diff: %d dirs diffed, %d files seen, %d changed so far — %s",
+                        dirs_done,
+                        files_seen,
+                        len(changed_dirs),
+                        location_name,
+                    )
+                    if broadcast_fn:
+                        await broadcast_fn(dirs_done, files_seen, len(changed_dirs))
+                    last_broadcast = now
+                current_rel_dir = record["rel_dir"]
+                current_files = []
+                all_dirs.append(current_rel_dir)
 
-    logger.info(
-        "Tree diff complete: %d dirs, %d files, %d changed — %s",
-        dirs_done,
-        files_seen,
-        len(changed_dirs),
-        location_name,
-    )
+            elif rtype == "file":
+                current_files.append(record)
+                files_seen += 1
 
-    # Detect deleted directories: catalog dirs not in agent tree
-    agent_dir_set = set(all_dirs)
-    for d in catalog_dir_set:
-        if d not in agent_dir_set:
-            changed_dirs.add(d)
+            elif rtype == "end":
+                await _flush_dir()
 
-    # Also check root-level files if root ("") wasn't already changed
-    if "" not in agent_dir_set:
-        changed_dirs.add("")
+        if not got_records:
+            return None
 
-    return changed_dirs
+        logger.info(
+            "Tree diff complete: %d dirs, %d files, %d changed — %s",
+            dirs_done,
+            files_seen,
+            len(changed_dirs),
+            location_name,
+        )
+
+        # Detect deleted directories
+        agent_dir_set = set(all_dirs)
+        for d in catalog_dir_set:
+            if d not in agent_dir_set:
+                changed_dirs.add(d)
+
+        if "" not in agent_dir_set:
+            changed_dirs.add("")
+
+        return changed_dirs
+
+    finally:
+        try:
+            await conn.execute("DROP TABLE IF EXISTS _diff_catalog")
+        except Exception:
+            pass
+        await conn.close()
 
 
 def _now() -> str:
