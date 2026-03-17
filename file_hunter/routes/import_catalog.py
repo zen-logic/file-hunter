@@ -115,6 +115,27 @@ async def import_catalog_run(request: Request):
                 (location_name, root_path, agent_id, now),
             )
             location_id = cursor.lastrowid
+
+        # Push location to agent config so it knows about the new path
+        from file_hunter.services.agent_ops import _resolve_agent, _post
+
+        resolved = _resolve_agent(agent_id)
+        if resolved:
+            host, port, token = resolved
+            try:
+                await _post(
+                    host,
+                    port,
+                    token,
+                    "/locations/add",
+                    {"name": location_name, "path": root_path},
+                )
+            except Exception:
+                import logging
+
+                logging.getLogger("file_hunter").warning(
+                    "Failed to push imported location to agent"
+                )
     else:
         return json_error(
             "Must specify location_id or agent_id + root_path + location_name"
