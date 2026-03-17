@@ -150,7 +150,7 @@ async def _refresh_all_locations(db):
     """Refresh cached stats for all locations from stored counters."""
     loc_rows = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, "
-        "total_size, file_count, duplicate_count, type_counts, "
+        "total_size, file_count, duplicate_count, hidden_count, type_counts, "
         "scan_schedule_enabled, scan_schedule_days, scan_schedule_time, "
         "scan_schedule_last_run FROM locations"
     )
@@ -191,6 +191,7 @@ async def _refresh_location(db, loc):
         "totalSize": total_size,
         "totalSizeFormatted": format_size(total_size),
         "duplicateFiles": dup_count,
+        "hiddenFiles": loc["hidden_count"] or 0,
         "typeBreakdown": type_breakdown,
         "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
         "scheduleDays": schedule_days,
