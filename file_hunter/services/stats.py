@@ -56,15 +56,35 @@ async def _refresh_all():
     Folder entries are cleared but not repopulated — they are lazily
     re-fetched on next access.
     """
+    import time as _time
+
     from file_hunter.db import get_db
+
+    _debug = logging.getLogger("scan_debug")
+    _debug.debug("STATS_REFRESH: starting _refresh_all")
 
     _cache.clear()
 
     try:
+        _t0 = _time.monotonic()
+        _debug.debug("STATS_REFRESH: getting get_db()")
         conn = await get_db()
-        await conn.commit()  # refresh read snapshot
+        _debug.debug("STATS_REFRESH: get_db() in %.3fs", _time.monotonic() - _t0)
+
+        _t0 = _time.monotonic()
+        _debug.debug("STATS_REFRESH: commit()")
+        await conn.commit()
+        _debug.debug("STATS_REFRESH: commit() in %.3fs", _time.monotonic() - _t0)
+
+        _t0 = _time.monotonic()
+        _debug.debug("STATS_REFRESH: _refresh_dashboard")
         await _refresh_dashboard(conn)
+        _debug.debug("STATS_REFRESH: dashboard in %.3fs", _time.monotonic() - _t0)
+
+        _t0 = _time.monotonic()
+        _debug.debug("STATS_REFRESH: _refresh_all_locations")
         await _refresh_all_locations(conn)
+        _debug.debug("STATS_REFRESH: locations in %.3fs", _time.monotonic() - _t0)
 
         # Notify connected browsers that cached stats have been updated
         from file_hunter.ws.scan import broadcast

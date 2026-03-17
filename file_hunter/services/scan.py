@@ -31,6 +31,20 @@ from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
 
+# Dedicated debug log for diagnosing scan hangs — writes to data/scan_debug.log
+_debug_log = logging.getLogger("scan_debug")
+_debug_log.setLevel(logging.DEBUG)
+if not _debug_log.handlers:
+    from pathlib import Path as _P
+
+    _debug_path = (
+        _P(__file__).resolve().parent.parent.parent / "data" / "scan_debug.log"
+    )
+    _debug_path.parent.mkdir(parents=True, exist_ok=True)
+    _fh = logging.FileHandler(str(_debug_path), mode="a")
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+    _debug_log.addHandler(_fh)
+
 
 async def run_scan(op_id: int, agent_id: int, params: dict):
     """Execute a server-driven scan operation.
@@ -1321,6 +1335,9 @@ async def _run_first_scan_streamed(
         hashed,
         location_name,
     )
+    _debug_log.debug(
+        "PHASE2_COMPLETE: %d partial hashes done, entering candidate detection", hashed
+    )
 
     # --- Phase 3: Candidate detection + hash_fast ---
     await broadcast(
@@ -1336,20 +1353,34 @@ async def _run_first_scan_streamed(
 
     # Find candidate groups: get this location's (hash_partial, file_size) pairs,
     # then check which have matches elsewhere in the catalog
+    _debug_log.debug("CANDIDATE: getting get_db()")
+    t_cand = time.monotonic()
     read_db = await get_db()
-    await read_db.commit()  # refresh snapshot to see hash_partial writes
-    logger.info(
-        "Streamed first scan: querying distinct (hash_partial, file_size) pairs"
-    )
+    _debug_log.debug("CANDIDATE: get_db() returned in %.3fs", time.monotonic() - t_cand)
+
+    _debug_log.debug("CANDIDATE: commit() to refresh snapshot")
+    t_cand = time.monotonic()
+    await read_db.commit()
+    _debug_log.debug("CANDIDATE: commit() done in %.3fs", time.monotonic() - t_cand)
+
+    _debug_log.debug("CANDIDATE: executing DISTINCT query")
+    t_cand = time.monotonic()
     local_pairs = await read_db.execute_fetchall(
         "SELECT DISTINCT hash_partial, file_size FROM files "
         "WHERE location_id = ? AND hash_partial IS NOT NULL AND file_size > 0 AND stale = 0",
         (location_id,),
     )
-    logger.info("Streamed first scan: %d distinct pairs found", len(local_pairs))
+    _debug_log.debug(
+        "CANDIDATE: DISTINCT query returned %d rows in %.3fs",
+        len(local_pairs),
+        time.monotonic() - t_cand,
+    )
 
     # Batch-check which pairs have duplicates globally
     dup_groups = []
+    _debug_log.debug(
+        "CANDIDATE: batch-checking %d pairs for duplicates", len(local_pairs)
+    )
     for i in range(0, len(local_pairs), 500):
         chunk = local_pairs[i : i + 500]
         conditions = " OR ".join("(hash_partial = ? AND file_size = ?)" for _ in chunk)
