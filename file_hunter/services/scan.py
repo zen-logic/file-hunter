@@ -1082,7 +1082,6 @@ async def _run_first_scan_streamed(
         hash_partial_batch,
         stream_tree,
     )
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
     from file_hunter.services.sizes import recalculate_location_sizes
 
     logger.info(
@@ -1345,15 +1344,23 @@ async def _run_first_scan_streamed(
         location_name,
     )
 
-    # Submit new hash_fast values for dup recalc
+    # --- Phase 4: Dup recount (synchronous, must complete before size rebuild) ---
     if new_fast_hashes:
-        submit_hashes_for_recalc(
-            fast_hashes=new_fast_hashes,
-            source=f"first_scan {location_name}",
-            location_ids={location_id},
+        await broadcast(
+            {
+                "type": "scan_progress",
+                "locationId": location_id,
+                "location": location_name,
+                "phase": "recounting",
+                "filesFound": files_found,
+                "filesHashed": 0,
+            }
         )
+        from file_hunter.services.dup_counts import optimized_dup_recount
 
-    # --- Phase 4: Finalize ---
+        await optimized_dup_recount(location_id=location_id)
+
+    # --- Phase 5: Finalize ---
     await recalculate_location_sizes(location_id)
     invalidate_stats_cache()
 
