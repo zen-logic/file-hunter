@@ -539,44 +539,64 @@ async def find_dup_candidates(
 
     conn = await open_connection()
     try:
-        # One GROUP BY to find all dup groups
+        # Step 1: get distinct (hash_partial, file_size) pairs for the scope
         if location_id is not None:
-            # Scoped: only groups involving this location
-            dup_groups = await conn.execute_fetchall(
-                "SELECT hash_partial, file_size "
-                "FROM files "
-                "WHERE hash_partial IS NOT NULL AND file_size > 0 AND stale = 0 "
-                "GROUP BY hash_partial, file_size "
-                "HAVING COUNT(*) > 1 "
-                "AND SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END) > 0",
+            local_pairs = await conn.execute_fetchall(
+                "SELECT DISTINCT hash_partial, file_size FROM files "
+                "WHERE location_id = ? AND hash_partial IS NOT NULL "
+                "AND file_size > 0 AND stale = 0",
                 (location_id,),
             )
         else:
-            dup_groups = await conn.execute_fetchall(
-                "SELECT hash_partial, file_size "
-                "FROM files "
-                "WHERE hash_partial IS NOT NULL AND file_size > 0 AND stale = 0 "
-                "GROUP BY hash_partial, file_size "
-                "HAVING COUNT(*) > 1"
+            local_pairs = await conn.execute_fetchall(
+                "SELECT DISTINCT hash_partial, file_size FROM files "
+                "WHERE hash_partial IS NOT NULL AND file_size > 0 AND stale = 0"
             )
 
         log.info(
-            "find_dup_candidates: %d dup groups (scope=%s)",
-            len(dup_groups),
+            "find_dup_candidates: %d distinct pairs (scope=%s)",
+            len(local_pairs),
             f"location {location_id}" if location_id else "global",
+        )
+
+        if not local_pairs:
+            return []
+
+        # Step 2: which of those pairs have COUNT > 1 globally?
+        # Batched to stay under SQL variable limit.
+        dup_groups = []
+        for i in range(0, len(local_pairs), SQL_VAR_LIMIT):
+            chunk = local_pairs[i : i + SQL_VAR_LIMIT]
+            conditions = " OR ".join(
+                "(hash_partial = ? AND file_size = ?)" for _ in chunk
+            )
+            params: list = []
+            for g in chunk:
+                params.extend([g["hash_partial"], g["file_size"]])
+            rows = await conn.execute_fetchall(
+                f"SELECT hash_partial, file_size FROM files "
+                f"WHERE ({conditions}) AND stale = 0 "
+                f"GROUP BY hash_partial, file_size HAVING COUNT(*) > 1",
+                params,
+            )
+            dup_groups.extend(rows)
+
+        log.info(
+            "find_dup_candidates: %d dup groups",
+            len(dup_groups),
         )
 
         if not dup_groups:
             return []
 
-        # Batch-fetch files needing hash_fast in those groups
+        # Step 3: fetch files needing hash_fast in those groups
         candidates = []
         for i in range(0, len(dup_groups), SQL_VAR_LIMIT):
             chunk = dup_groups[i : i + SQL_VAR_LIMIT]
             conditions = " OR ".join(
                 "(hash_partial = ? AND file_size = ?)" for _ in chunk
             )
-            params: list = []
+            params = []
             for g in chunk:
                 params.extend([g["hash_partial"], g["file_size"]])
             rows = await conn.execute_fetchall(
