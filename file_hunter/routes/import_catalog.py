@@ -197,7 +197,7 @@ async def _run_and_notify(
                 from file_hunter.services.settings import is_turbo_mode
 
                 turbo = await is_turbo_mode(await get_db())
-                HASH_BATCH = 10000 if turbo else 2000
+                HASH_BATCH = 2000 if turbo else 200
                 hashed = 0
                 if candidates and agent_id:
                     _progress["status"] = "hashing"
