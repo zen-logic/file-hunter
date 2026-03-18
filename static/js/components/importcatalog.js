@@ -328,12 +328,10 @@ const ImportCatalog = {
         if (p.status === 'error') {
             el.innerHTML = `<span style="color:var(--color-status-error)">Import failed: ${p.error}</span>`;
         } else {
-            const newPart = p.files_new > 0
-                ? `, ${p.files_new.toLocaleString()} new`
-                : '';
             el.innerHTML =
                 `Import complete.<br>` +
-                `${p.files_imported.toLocaleString()} files processed${newPart}.`;
+                `${p.files_imported.toLocaleString()} files processed, ` +
+                `${(p.files_new || 0).toLocaleString()} new.`;
         }
         this._showStep('done');
     },
