@@ -510,11 +510,18 @@ async def _handle_rehash_partial(op_id: int, agent_id: int | None, params: dict)
     await run_rehash_partial(op_id, agent_id, params)
 
 
+async def _handle_hash_file(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.dup_counts import run_hash_file
+
+    await run_hash_file(op_id, agent_id, params)
+
+
 _HANDLERS = {
     "scan_dir": _handle_scan_dir,
     "backfill_location": _handle_backfill_location,
     "delete_location": _handle_delete_location,
     "rehash_partial": _handle_rehash_partial,
+    "hash_file": _handle_hash_file,
 }
 
 
@@ -537,7 +544,7 @@ async def get_queue_status_for_broadcast() -> dict:
         op_type = item.get("type", "")
         if op_type == "scan_dir":
             scanning_ids.append(loc_id)
-        elif op_type == "backfill_location":
+        elif op_type in ("backfill_location", "hash_file"):
             backfilling_ids.append(loc_id)
         elif op_type == "delete_location":
             deleting_ids.append(loc_id)

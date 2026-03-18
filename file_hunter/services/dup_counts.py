@@ -507,8 +507,6 @@ async def _dup_recalc_writer():
 
             await update_location_dup_counts(affected)
 
-            invalidate_stats_cache()
-
             total_hashes = len(merged_strong) + len(merged_fast)
             await broadcast({"type": "dup_recalc_completed", "hashCount": total_hashes})
     except Exception:
@@ -932,3 +930,157 @@ async def backfill_dup_counts():
 
     except Exception:
         log.exception("dup_count backfill failed")
+
+
+SMALL_FILE_THRESHOLD = 128 * 1024  # 128KB
+MAX_RETRIES = 3
+RETRY_DELAY = 5
+
+
+async def hash_candidates_for_location(
+    location_id: int,
+    agent_id: int,
+    on_progress=None,
+) -> tuple[int, int, set[str]]:
+    """Find and hash dup candidates for a location.
+
+    Finds files needing hash_fast that share (size, hash_partial) with other
+    files.  Small files (<=128KB): copy hash_partial to hash_fast.  Large
+    files: per-file dispatch("file_hash") via agent with retry.
+
+    on_progress(hashed, total): called after each file/batch.
+
+    Returns (total_candidates, total_hashed, new_fast_hashes).
+    """
+    import asyncio
+
+    from file_hunter.db import db_writer, get_db
+    from file_hunter.services.agent_ops import dispatch
+
+    candidates = await find_dup_candidates(location_id=location_id)
+
+    log.info(
+        "hash_candidates_for_location: %d raw candidates for location %d",
+        len(candidates),
+        location_id,
+    )
+
+    # Filter to files on this agent's locations only
+    db = await get_db()
+    agent_loc_rows = await db.execute_fetchall(
+        "SELECT id FROM locations WHERE agent_id = ?",
+        (agent_id,),
+    )
+    agent_loc_ids = {r["id"] for r in agent_loc_rows}
+    candidates = [c for c in candidates if c["location_id"] in agent_loc_ids]
+
+    log.info(
+        "hash_candidates_for_location: %d candidates on agent %d for location %d",
+        len(candidates),
+        agent_id,
+        location_id,
+    )
+
+    total = len(candidates)
+    if total == 0:
+        return 0, 0, set()
+
+    small_files = [c for c in candidates if c["file_size"] <= SMALL_FILE_THRESHOLD]
+    large_files = [c for c in candidates if c["file_size"] > SMALL_FILE_THRESHOLD]
+
+    hashed = 0
+    new_fast_hashes: set[str] = set()
+
+    # Small files: hash_partial == hash_fast, bulk copy
+    if small_files:
+        async with db_writer() as wdb:
+            for c in small_files:
+                await wdb.execute(
+                    "UPDATE files SET hash_fast = ? WHERE id = ?",
+                    (c["hash_partial"], c["id"]),
+                )
+                new_fast_hashes.add(c["hash_partial"])
+        hashed += len(small_files)
+        log.info(
+            "hash_candidates_for_location: %d small files hash_fast copied from hash_partial",
+            len(small_files),
+        )
+        if on_progress:
+            await on_progress(hashed, total)
+
+    # Large files: one at a time via agent, retry on failure
+    for c in large_files:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                result = await dispatch(
+                    "file_hash",
+                    c["location_id"],
+                    path=c["full_path"],
+                )
+                async with db_writer() as wdb:
+                    await wdb.execute(
+                        "UPDATE files SET hash_fast = ? WHERE id = ?",
+                        (result["hash_fast"], c["id"]),
+                    )
+                new_fast_hashes.add(result["hash_fast"])
+                hashed += 1
+                break
+            except Exception as e:
+                if attempt < MAX_RETRIES:
+                    log.warning(
+                        "hash_candidates attempt %d/%d failed for %s: %s — retrying in %ds",
+                        attempt,
+                        MAX_RETRIES,
+                        c["full_path"],
+                        e,
+                        RETRY_DELAY,
+                    )
+                    await asyncio.sleep(RETRY_DELAY)
+                else:
+                    log.error(
+                        "hash_candidates FAILED after %d attempts for %s: %s",
+                        MAX_RETRIES,
+                        c["full_path"],
+                        e,
+                    )
+        if on_progress:
+            await on_progress(hashed, total)
+
+    log.info(
+        "hash_candidates_for_location: %d/%d hashed (%d small, %d large) for location %d",
+        hashed,
+        total,
+        len(small_files),
+        len(large_files),
+        location_id,
+    )
+
+    return total, hashed, new_fast_hashes
+
+
+async def run_hash_file(op_id: int, agent_id: int, params: dict):
+    """Queue operation handler: hash a single file via agent dispatch.
+
+    Called by queue_manager for the 'hash_file' operation type.
+    Dispatches file_hash to the agent, writes hash_fast, submits to dup recalc.
+    """
+    from file_hunter.services.agent_ops import dispatch
+
+    file_id = params["file_id"]
+    location_id = params["location_id"]
+    full_path = params["full_path"]
+
+    result = await dispatch("file_hash", location_id, path=full_path)
+    hash_fast = result["hash_fast"]
+
+    async with db_writer() as wdb:
+        await wdb.execute(
+            "UPDATE files SET hash_fast = ? WHERE id = ?",
+            (hash_fast, file_id),
+        )
+
+    submit_hashes_for_recalc(
+        fast_hashes={hash_fast},
+        source="hash_file",
+        location_ids={location_id},
+    )

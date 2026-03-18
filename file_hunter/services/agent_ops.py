@@ -406,21 +406,27 @@ async def rename_agent_location(agent_id: int, root_path: str, new_name: str):
 
 
 def _parse_tsv_line(line: str) -> dict | None:
-    """Parse a TSV tree line into a dict matching the JSON format."""
+    """Parse a TSV tree line into a dict.
+
+    Format:
+        D\trel_dir
+        F\trel_path\tsize\tmtime\tctime\tinode\thash_partial
+        E\ttotal_dirs\ttotal_files
+    """
     parts = line.split("\t")
     if not parts:
         return None
     t = parts[0]
-    if t == "F" and len(parts) >= 4:
-        rec = {
+    if t == "F" and len(parts) >= 7:
+        return {
             "type": "file",
             "rel_path": parts[1],
             "size": int(parts[2]),
             "mtime": parts[3],
+            "ctime": parts[4],
+            "inode": int(parts[5]),
+            "hash_partial": parts[6] or None,
         }
-        if len(parts) >= 5:
-            rec["ctime"] = parts[4]
-        return rec
     if t == "D" and len(parts) >= 2:
         return {"type": "dir", "rel_dir": parts[1]}
     if t == "E" and len(parts) >= 3:
@@ -431,31 +437,21 @@ def _parse_tsv_line(line: str) -> dict | None:
 async def stream_tree(agent_id: int, root_path: str, prefix: str | None = None):
     """Stream the full metadata tree from an agent as parsed dicts.
 
+    Each directory arrives as a batch: one "dir" dict followed by all "file"
+    dicts for that directory (inode-sorted, with partial hashes).
+
     Yields dicts: {"type":"dir",...}, {"type":"file",...}, {"type":"end",...}
-    Returns None (instead of yielding) if the agent doesn't support /tree (404).
     Raises ConnectionError if the agent is offline.
-
-    Uses TSV format if the agent advertises the tsv_tree capability.
-    Falls back to JSON for older agents.
     """
-    import json as _json
-
-    from file_hunter.ws.agent import get_agent_capabilities
-
     resolved = _resolve_agent(agent_id)
     if not resolved:
         raise ConnectionError(f"Agent {agent_id} is offline")
     host, port, token = resolved
 
-    capabilities = get_agent_capabilities(agent_id)
-    use_tsv = "tsv_tree" in capabilities
-
     url = f"http://{host}:{port}/tree"
     body = {"path": root_path}
     if prefix:
         body["prefix"] = prefix
-    if use_tsv:
-        body["format"] = "tsv"
 
     timeout = httpx.Timeout(1800.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -465,8 +461,6 @@ async def stream_tree(agent_id: int, root_path: str, prefix: str | None = None):
             json=body,
             headers={"Authorization": f"Bearer {token}"},
         ) as resp:
-            if resp.status_code == 404:
-                return
             if resp.status_code != 200:
                 text = ""
                 async for chunk in resp.aiter_text():
@@ -480,12 +474,9 @@ async def stream_tree(agent_id: int, root_path: str, prefix: str | None = None):
                 line = line.strip()
                 if not line:
                     continue
-                if use_tsv:
-                    parsed = _parse_tsv_line(line)
-                    if parsed:
-                        yield parsed
-                else:
-                    yield _json.loads(line)
+                parsed = _parse_tsv_line(line)
+                if parsed:
+                    yield parsed
 
 
 async def delete_agent_location(agent_id: int, root_path: str, location_id: int = None):

@@ -109,6 +109,7 @@ async def _upsert_file(
     now_iso: str,
     hidden: int = 0,
     dup_exclude: int = 0,
+    inode: int = 0,
 ) -> int:
     """Insert or update a file record. Preserves description and tags on update."""
     row = await db.execute_fetchall(
@@ -125,7 +126,8 @@ async def _upsert_file(
                 hash_fast=COALESCE(?, hash_fast),
                 hash_strong=COALESCE(?, hash_strong),
                 created_date=?, modified_date=?,
-                date_last_seen=?, scan_id=?, stale=0, hidden=?, dup_exclude=?
+                date_last_seen=?, scan_id=?, stale=0, hidden=?, dup_exclude=?,
+                inode=?
                WHERE id=?""",
             (
                 filename,
@@ -143,6 +145,7 @@ async def _upsert_file(
                 scan_id,
                 hidden,
                 dup_exclude,
+                inode,
                 file_id,
             ),
         )
@@ -155,8 +158,8 @@ async def _upsert_file(
                 hash_partial, hash_fast, hash_strong,
                 description, tags,
                 created_date, modified_date, date_cataloged, date_last_seen,
-                scan_id, stale, hidden, dup_exclude)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, ?, 0, ?, ?)""",
+                scan_id, stale, hidden, dup_exclude, inode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
             (
                 filename,
                 full_path,
@@ -176,6 +179,7 @@ async def _upsert_file(
                 scan_id,
                 hidden,
                 dup_exclude,
+                inode,
             ),
         )
         return cursor.lastrowid

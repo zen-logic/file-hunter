@@ -86,7 +86,7 @@ async function refreshDetailPanel() {
 function updateLocationOnline(locationId, online) {
     if (!locationId || online === undefined) return;
     const locNode = Tree.getLocation(locationId);
-    if (locNode && locNode.online !== online) {
+    if (locNode && !!locNode.online !== !!online) {
         locNode.online = online;
         Tree.render();
     }

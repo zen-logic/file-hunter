@@ -179,117 +179,18 @@ async def _run_and_notify(
             )
             if _progress["status"] == "complete":
                 # --- Candidate detection + hash_fast ---
-                from file_hunter.services.dup_counts import find_dup_candidates
+                from file_hunter.services.dup_counts import hash_candidates_for_location
 
-                _progress["status"] = "candidates"
-                candidates = await find_dup_candidates(location_id=location_id)
-
-                log.info(
-                    "Import: %d candidates to full-hash for location %d",
-                    len(candidates),
-                    location_id,
-                )
-
-                # Filter to files on this agent's locations only
-                from file_hunter.db import get_db
-
-                db = await get_db()
-                agent_loc_rows = await db.execute_fetchall(
-                    "SELECT id FROM locations WHERE agent_id = ?",
-                    (agent_id,),
-                )
-                agent_loc_ids = {r["id"] for r in agent_loc_rows}
-                candidates = [
-                    c for c in candidates if c["location_id"] in agent_loc_ids
-                ]
-                log.info(
-                    "Import: %d candidates on this agent for location %d",
-                    len(candidates),
-                    location_id,
-                )
-
-                # Hash candidates: small files copied from hash_partial,
-                # large files sent to agent one at a time
-                from file_hunter.db import db_writer
-                from file_hunter.services.agent_ops import dispatch
-
-                SMALL_FILE_THRESHOLD = 128 * 1024  # 128KB
-
-                small_files = [
-                    c for c in candidates if c["file_size"] <= SMALL_FILE_THRESHOLD
-                ]
-                large_files = [
-                    c for c in candidates if c["file_size"] > SMALL_FILE_THRESHOLD
-                ]
-
-                total = len(candidates)
-                hashed = 0
-
-                if candidates and agent_id:
-                    _progress["status"] = "hashing"
+                async def _on_hash_progress(hashed, total):
+                    _progress["dup_hashes_done"] = hashed
                     _progress["dup_hashes_total"] = total
-                    _progress["dup_hashes_done"] = 0
 
-                    # Small files: hash_partial == hash_fast, bulk copy
-                    if small_files:
-                        async with db_writer() as wdb:
-                            for c in small_files:
-                                await wdb.execute(
-                                    "UPDATE files SET hash_fast = ? WHERE id = ?",
-                                    (c["hash_partial"], c["id"]),
-                                )
-                        hashed += len(small_files)
-                        _progress["dup_hashes_done"] = hashed
-                        log.info(
-                            "Import: %d small files hash_fast copied from hash_partial",
-                            len(small_files),
-                        )
-
-                    # Large files: one at a time via agent, retry on failure
-                    MAX_RETRIES = 3
-                    RETRY_DELAY = 5
-                    for c in large_files:
-                        for attempt in range(1, MAX_RETRIES + 1):
-                            try:
-                                result = await dispatch(
-                                    "file_hash",
-                                    c["location_id"],
-                                    path=c["full_path"],
-                                )
-                                async with db_writer() as wdb:
-                                    await wdb.execute(
-                                        "UPDATE files SET hash_fast = ? WHERE id = ?",
-                                        (result["hash_fast"], c["id"]),
-                                    )
-                                hashed += 1
-                                break
-                            except Exception as e:
-                                if attempt < MAX_RETRIES:
-                                    log.warning(
-                                        "Import hash_fast attempt %d/%d failed for %s: %s — retrying in %ds",
-                                        attempt,
-                                        MAX_RETRIES,
-                                        c["full_path"],
-                                        e,
-                                        RETRY_DELAY,
-                                    )
-                                    await asyncio.sleep(RETRY_DELAY)
-                                else:
-                                    log.error(
-                                        "Import hash_fast FAILED after %d attempts for %s: %s",
-                                        MAX_RETRIES,
-                                        c["full_path"],
-                                        e,
-                                    )
-                        _progress["dup_hashes_done"] = hashed
-
-                    log.info(
-                        "Import: %d files hashed (%d small, %d large) for location %d",
-                        hashed,
-                        len(small_files),
-                        len(large_files),
-                        location_id,
-                    )
+                _progress["status"] = "hashing"
+                total, hashed, _ = await hash_candidates_for_location(
+                    location_id=location_id,
+                    agent_id=agent_id,
+                    on_progress=_on_hash_progress,
+                )
 
                 # --- Dup recount ---
                 from file_hunter.services.dup_counts import optimized_dup_recount

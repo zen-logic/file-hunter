@@ -196,6 +196,7 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_files_partial_size ON files(file_size, hash_partial)",
     "ALTER TABLE folders ADD COLUMN hidden_count INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE locations ADD COLUMN hidden_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE files ADD COLUMN inode INTEGER NOT NULL DEFAULT 0",
 ]
 
 _OPERATION_QUEUE_SCHEMA = """
@@ -301,6 +302,28 @@ async def init_db(db: aiosqlite.Connection):
         stmt = stmt.strip()
         if stmt:
             await db.execute(stmt)
+    await db.commit()
+
+    # Pending hashes table — persists hash_fast work across restarts
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS pending_hashes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER NOT NULL,
+            location_id INTEGER NOT NULL,
+            agent_id INTEGER NOT NULL,
+            full_path TEXT NOT NULL,
+            inode INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )"""
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pending_hashes_location "
+        "ON pending_hashes(location_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pending_hashes_agent "
+        "ON pending_hashes(agent_id)"
+    )
     await db.commit()
 
     # Post-migration indexes (columns may not exist until migrations run)
