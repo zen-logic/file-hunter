@@ -9,26 +9,24 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
+from file_hunter.core import ProgressTracker
 from file_hunter.db import db_writer, get_db
 
 logger = logging.getLogger("file_hunter")
 
-# In-memory progress — polled by the route
-_progress = {
-    "status": "idle",
-    "files_total": 0,
-    "files_imported": 0,
-    "folders_created": 0,
-    "dup_hashes_done": 0,
-    "dup_hashes_total": 0,
-    "error": None,
-}
+_progress = ProgressTracker(
+    files_total=0,
+    files_imported=0,
+    folders_created=0,
+    dup_hashes_done=0,
+    dup_hashes_total=0,
+)
 
 BATCH_SIZE = 2000
 
 
 def get_progress() -> dict:
-    return dict(_progress)
+    return _progress.snapshot()
 
 
 def read_catalog_meta(path: str) -> dict:

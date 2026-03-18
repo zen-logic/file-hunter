@@ -179,31 +179,17 @@ async def run_backfill(
             }
         )
 
-        db = await get_db()
+        from file_hunter.services.dup_counts import find_dup_candidates
 
-        prefix_clause = ""
-        params = [location_id]
-        if scan_prefix:
-            prefix_clause = "AND f.rel_path LIKE ?"
-            params.append(scan_prefix + "/%")
+        all_candidates = await find_dup_candidates(location_id=location_id)
 
-        candidates = await db.execute_fetchall(
-            f"""SELECT f.id, f.full_path, f.file_size, f.hash_partial
-               FROM files f
-               WHERE f.location_id = ?
-                 AND f.hash_fast IS NULL
-                 AND f.hash_partial IS NOT NULL
-                 AND f.file_size > 0
-                 AND f.stale = 0
-                 {prefix_clause}
-                 AND EXISTS (
-                     SELECT 1 FROM files f2
-                     WHERE f2.file_size = f.file_size
-                       AND f2.hash_partial = f.hash_partial
-                       AND f2.id != f.id
-                 )""",
-            params,
-        )
+        # Filter to this location + optional prefix
+        candidates = [
+            c
+            for c in all_candidates
+            if c["location_id"] == location_id
+            and (not scan_prefix or c["full_path"].startswith(scan_prefix + "/"))
+        ]
 
         if not candidates:
             logger.info(

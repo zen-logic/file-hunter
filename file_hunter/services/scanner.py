@@ -181,6 +181,35 @@ async def _upsert_file(
         return cursor.lastrowid
 
 
+async def write_hash_results(
+    results: list[dict], path_to_id: dict[str, int]
+) -> tuple[int, set[str]]:
+    """Write hash_fast results from an agent call to the files table.
+
+    results: from hash_fast_batch()["results"], each {"path": ..., "hash_fast": ...}
+    path_to_id: mapping of full_path -> file id
+
+    Returns (count_written, set_of_hash_fast_values).
+    """
+    from file_hunter.db import db_writer
+
+    hash_map = {r["path"]: r["hash_fast"] for r in results}
+    written = 0
+    hashes: set[str] = set()
+    if hash_map:
+        async with db_writer() as wdb:
+            for path, h in hash_map.items():
+                fid = path_to_id.get(path)
+                if fid:
+                    await wdb.execute(
+                        "UPDATE files SET hash_fast = ? WHERE id = ?",
+                        (h, fid),
+                    )
+                    hashes.add(h)
+                    written += 1
+    return written, hashes
+
+
 # Public aliases for pro/extension reuse (keep _-prefixed originals intact)
 ensure_folder_hierarchy = _ensure_folder_hierarchy
 upsert_file = _upsert_file

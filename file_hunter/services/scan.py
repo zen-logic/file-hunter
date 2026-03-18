@@ -1386,93 +1386,15 @@ async def _run_first_scan_streamed(
         }
     )
 
-    # Find candidate groups: get this location's (hash_partial, file_size) pairs,
-    # then check which have matches elsewhere in the catalog
-    _debug_log.debug("CANDIDATE: getting get_db()")
+    _debug_log.debug("PHASE3_START: finding candidates")
     t_cand = time.monotonic()
-    read_db = await get_db()
-    _debug_log.debug("CANDIDATE: get_db() returned in %.3fs", time.monotonic() - t_cand)
+    from file_hunter.services.dup_counts import find_dup_candidates
 
-    _debug_log.debug("CANDIDATE: commit() to refresh snapshot")
-    t_cand = time.monotonic()
-    await read_db.commit()
-    _debug_log.debug("CANDIDATE: commit() done in %.3fs", time.monotonic() - t_cand)
-
-    _debug_log.debug("CANDIDATE: executing DISTINCT query")
-    t_cand = time.monotonic()
-    local_pairs = await read_db.execute_fetchall(
-        "SELECT DISTINCT hash_partial, file_size FROM files "
-        "WHERE location_id = ? AND hash_partial IS NOT NULL AND file_size > 0 AND stale = 0",
-        (location_id,),
-    )
+    candidates = await find_dup_candidates(location_id=location_id)
     _debug_log.debug(
-        "CANDIDATE: DISTINCT query returned %d rows in %.3fs",
-        len(local_pairs),
-        time.monotonic() - t_cand,
-    )
-
-    # Batch-check which pairs have duplicates globally
-    dup_groups = []
-    total_batches = (len(local_pairs) + 499) // 500
-    _debug_log.debug(
-        "CANDIDATE: batch-checking %d pairs in %d batches",
-        len(local_pairs),
-        total_batches,
-    )
-    batch_num = 0
-    for i in range(0, len(local_pairs), 500):
-        batch_num += 1
-        t_batch = time.monotonic()
-        chunk = local_pairs[i : i + 500]
-        conditions = " OR ".join("(hash_partial = ? AND file_size = ?)" for _ in chunk)
-        params = []
-        for g in chunk:
-            params.extend([g["hash_partial"], g["file_size"]])
-        rows = await read_db.execute_fetchall(
-            f"SELECT hash_partial, file_size, COUNT(*) as cnt FROM files "
-            f"WHERE ({conditions}) AND stale = 0 "
-            f"GROUP BY hash_partial, file_size HAVING COUNT(*) > 1",
-            params,
-        )
-        dup_groups.extend(rows)
-        _debug_log.debug(
-            "CANDIDATE: batch %d/%d done in %.3fs (%d dup groups so far)",
-            batch_num,
-            total_batches,
-            time.monotonic() - t_batch,
-            len(dup_groups),
-        )
-
-    _debug_log.debug(
-        "CANDIDATE: batch-check complete, %d dup groups found", len(dup_groups)
-    )
-
-    # Fetch candidate files — we already have the dup (hash_partial, file_size)
-    # pairs. Query files matching those pairs. Use batched lookups on the
-    # (file_size, hash_partial) index — but without the hash_fast IS NULL
-    # filter that caused full table scans.
-    _debug_log.debug(
-        "FETCH_CANDIDATES: fetching files for %d dup groups", len(dup_groups)
-    )
-    t_fetch = time.monotonic()
-
-    candidates = []
-    for i in range(0, len(dup_groups), 500):
-        chunk = dup_groups[i : i + 500]
-        conditions = " OR ".join("(hash_partial = ? AND file_size = ?)" for _ in chunk)
-        params = []
-        for g in chunk:
-            params.extend([g["hash_partial"], g["file_size"]])
-        rows = await read_db.execute_fetchall(
-            f"SELECT id, full_path FROM files WHERE ({conditions}) AND stale = 0",
-            params,
-        )
-        candidates.extend(rows)
-
-    _debug_log.debug(
-        "FETCH_CANDIDATES: %d candidates fetched in %.3fs",
+        "PHASE3_CANDIDATES: %d candidates found in %.1fs",
         len(candidates),
-        time.monotonic() - t_fetch,
+        time.monotonic() - t_cand,
     )
 
     total_candidates = len(candidates)

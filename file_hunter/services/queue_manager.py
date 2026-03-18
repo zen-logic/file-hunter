@@ -255,6 +255,39 @@ async def wait_if_paused():
     await _pause_event.wait()
 
 
+class paused_queue:
+    """Async context manager: pause queue, broadcast, yield, resume on exit.
+
+    Usage:
+        async with paused_queue("import", location_name):
+            await do_work()
+    """
+
+    def __init__(self, reason: str, location: str = ""):
+        self.reason = reason
+        self.location = location
+
+    async def __aenter__(self):
+        await pause()
+        from file_hunter.ws.scan import broadcast
+
+        await broadcast(
+            {
+                "type": "queue_paused",
+                "reason": self.reason,
+                "location": self.location,
+            }
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        resume()
+        from file_hunter.ws.scan import broadcast
+
+        await broadcast({"type": "queue_resumed"})
+        return False
+
+
 async def _recover_interrupted():
     """On startup, reset any 'running' operations back to 'pending'
     and mark orphaned scan records as 'interrupted'."""

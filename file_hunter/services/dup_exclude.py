@@ -9,6 +9,7 @@ Progress is stored in a module-level dict, pollable via GET /api/dup-exclude/pro
 import asyncio
 import logging
 
+from file_hunter.core import ProgressTracker
 from file_hunter.db import db_writer, get_db
 from file_hunter.services.dup_counts import SQL_VAR_LIMIT
 from file_hunter.services.stats import invalidate_stats_cache
@@ -16,25 +17,22 @@ from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
 
-# Pollable progress — any client can query at any time
-_progress = {
-    "status": "idle",
-    "direction": None,
-    "folder": None,
-    "files_total": 0,
-    "files_done": 0,
-    "hashes_total": 0,
-    "hashes_done": 0,
-    "error": None,
-}
+_progress = ProgressTracker(
+    direction=None,
+    folder=None,
+    files_total=0,
+    files_done=0,
+    hashes_total=0,
+    hashes_done=0,
+)
 
 
 def get_progress() -> dict:
-    return dict(_progress)
+    return _progress.snapshot()
 
 
 def is_running() -> bool:
-    return _progress["status"] not in ("idle", "complete", "error")
+    return _progress.is_running
 
 
 async def restore_pending():

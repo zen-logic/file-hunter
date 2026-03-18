@@ -509,23 +509,7 @@ async def _dup_recalc_writer():
                 )
                 affected |= {r["location_id"] for r in rows}
 
-            # Read counts per location, then batch-write
-            loc_updates = []
-            for lid in affected:
-                dc_rows = await db.execute_fetchall(
-                    "SELECT COUNT(*) as c FROM files "
-                    "WHERE location_id = ? AND stale = 0 "
-                    "AND dup_exclude = 0 AND dup_count > 0",
-                    (lid,),
-                )
-                loc_updates.append((dc_rows[0]["c"], lid))
-
-            async with db_writer() as wdb:
-                for dc, lid in loc_updates:
-                    await wdb.execute(
-                        "UPDATE locations SET duplicate_count = ? WHERE id = ?",
-                        (dc, lid),
-                    )
+            await update_location_dup_counts(affected)
 
             invalidate_stats_cache()
 
@@ -533,6 +517,113 @@ async def _dup_recalc_writer():
             await broadcast({"type": "dup_recalc_completed", "hashCount": total_hashes})
     except Exception:
         log.error("Coalesced dup recalc writer failed", exc_info=True)
+
+
+async def find_dup_candidates(
+    location_id: int | None = None,
+) -> list[dict]:
+    """Find files needing hash_fast that are in duplicate (hash_partial, file_size) groups.
+
+    Single GROUP BY query on a dedicated connection — replaces the old
+    3-step batched approach.  Never uses get_db().
+
+    location_id: when set, only returns candidates from dup groups that
+    involve at least one file in this location.  None = all dup groups
+    globally (for repair).
+
+    Returns [{id, full_path, location_id}, ...]
+    """
+    from file_hunter.db import open_connection
+
+    SQL_VAR_LIMIT = 500
+
+    conn = await open_connection()
+    try:
+        # One GROUP BY to find all dup groups
+        if location_id is not None:
+            # Scoped: only groups involving this location
+            dup_groups = await conn.execute_fetchall(
+                "SELECT hash_partial, file_size "
+                "FROM files "
+                "WHERE hash_partial IS NOT NULL AND file_size > 0 AND stale = 0 "
+                "GROUP BY hash_partial, file_size "
+                "HAVING COUNT(*) > 1 "
+                "AND SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END) > 0",
+                (location_id,),
+            )
+        else:
+            dup_groups = await conn.execute_fetchall(
+                "SELECT hash_partial, file_size "
+                "FROM files "
+                "WHERE hash_partial IS NOT NULL AND file_size > 0 AND stale = 0 "
+                "GROUP BY hash_partial, file_size "
+                "HAVING COUNT(*) > 1"
+            )
+
+        log.info(
+            "find_dup_candidates: %d dup groups (scope=%s)",
+            len(dup_groups),
+            f"location {location_id}" if location_id else "global",
+        )
+
+        if not dup_groups:
+            return []
+
+        # Batch-fetch files needing hash_fast in those groups
+        candidates = []
+        for i in range(0, len(dup_groups), SQL_VAR_LIMIT):
+            chunk = dup_groups[i : i + SQL_VAR_LIMIT]
+            conditions = " OR ".join(
+                "(hash_partial = ? AND file_size = ?)" for _ in chunk
+            )
+            params: list = []
+            for g in chunk:
+                params.extend([g["hash_partial"], g["file_size"]])
+            rows = await conn.execute_fetchall(
+                f"SELECT id, full_path, location_id "
+                f"FROM files "
+                f"WHERE ({conditions}) AND hash_fast IS NULL AND stale = 0",
+                params,
+            )
+            candidates.extend(rows)
+
+        log.info("find_dup_candidates: %d candidate files", len(candidates))
+        return [dict(r) for r in candidates]
+
+    finally:
+        await conn.close()
+
+
+async def update_location_dup_counts(location_ids: set[int]):
+    """Recount and write locations.duplicate_count for the given locations.
+
+    Reads file counts on a dedicated connection, writes via db_writer().
+    Safe to call with an empty set (no-op).
+    """
+    if not location_ids:
+        return
+    from file_hunter.db import open_connection
+
+    conn = await open_connection()
+    try:
+        loc_updates = []
+        for lid in location_ids:
+            rows = await conn.execute_fetchall(
+                "SELECT COUNT(*) as c FROM files "
+                "WHERE location_id = ? AND stale = 0 "
+                "AND dup_exclude = 0 AND dup_count > 0",
+                (lid,),
+            )
+            loc_updates.append((rows[0]["c"], lid))
+    finally:
+        await conn.close()
+
+    async with db_writer() as wdb:
+        for dc, lid in loc_updates:
+            await wdb.execute(
+                "UPDATE locations SET duplicate_count = ? WHERE id = ?",
+                (dc, lid),
+            )
 
 
 async def batch_dup_counts(
