@@ -558,6 +558,9 @@ async def find_dup_candidates(
                 "AND file_size > 0 AND stale = 0",
                 (location_id,),
             )
+            await conn.execute(
+                "CREATE INDEX _dup_pairs_idx ON _dup_pairs(hash_partial, file_size)"
+            )
             await conn.commit()
             pair_count = (
                 await conn.execute_fetchall("SELECT COUNT(*) as c FROM _dup_pairs")
@@ -619,6 +622,9 @@ async def find_dup_candidates(
         await conn.executemany(
             "INSERT INTO _dup_groups VALUES (?, ?)",
             list(dup_pairs),
+        )
+        await conn.execute(
+            "CREATE INDEX _dup_groups_idx ON _dup_groups(hash_partial, file_size)"
         )
         await conn.commit()
 
