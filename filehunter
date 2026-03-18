@@ -160,6 +160,14 @@ if [ -d "$AGENT_SIBLING/file_hunter_agent" ] && ! "$VENV_PYTHON" -c "import file
     "$VENV_PYTHON" -m pip install --quiet -e "$AGENT_SIBLING"
 fi
 
+# Install pro extension if present
+if [ -d "$SCRIPT_DIR/file-hunter-pro/file_hunter_pro" ]; then
+    if ! "$VENV_PYTHON" -c "import file_hunter_pro" 2>/dev/null; then
+        info "Installing Pro extension..."
+        "$VENV_PYTHON" -m pip install --quiet -e "$SCRIPT_DIR/file-hunter-pro"
+    fi
+fi
+
 # ── Pre-flight (DB init + local agent config) ───────────────────────
 
 "$VENV_PYTHON" -m file_hunter.preflight || error "Pre-flight setup failed."

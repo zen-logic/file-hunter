@@ -410,14 +410,16 @@ def _parse_tsv_line(line: str) -> dict | None:
 
     Format:
         D\trel_dir
-        F\trel_path\tsize\tmtime\tctime\tinode\thash_partial
+        F\trel_path\tsize\tmtime\tctime\tinode
+        P\thashing\ttotal_files
+        H\trel_path\thash_partial
         E\ttotal_dirs\ttotal_files
     """
     parts = line.split("\t")
     if not parts:
         return None
     t = parts[0]
-    if t == "F" and len(parts) >= 7:
+    if t == "F" and len(parts) >= 6:
         return {
             "type": "file",
             "rel_path": parts[1],
@@ -425,10 +427,17 @@ def _parse_tsv_line(line: str) -> dict | None:
             "mtime": parts[3],
             "ctime": parts[4],
             "inode": int(parts[5]),
-            "hash_partial": parts[6] or None,
         }
     if t == "D" and len(parts) >= 2:
         return {"type": "dir", "rel_dir": parts[1]}
+    if t == "H" and len(parts) >= 3:
+        return {
+            "type": "hash",
+            "rel_path": parts[1],
+            "hash_partial": parts[2],
+        }
+    if t == "P" and len(parts) >= 3:
+        return {"type": "phase", "phase": parts[1], "total": int(parts[2])}
     if t == "E" and len(parts) >= 3:
         return {"type": "end", "dirs": int(parts[1]), "files": int(parts[2])}
     return None
