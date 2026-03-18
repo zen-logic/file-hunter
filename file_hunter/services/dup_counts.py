@@ -538,7 +538,6 @@ async def find_dup_candidates(
 
     from file_hunter.db import open_connection
 
-    SQL_VAR_LIMIT = 500
     scope = f"location {location_id}" if location_id else "global"
 
     log.info("find_dup_candidates: starting (scope=%s)", scope)
@@ -612,31 +611,29 @@ async def find_dup_candidates(
             )
             return []
 
-        # Step 3: fetch files needing hash_fast in those groups
+        # Step 3: fetch files needing hash_fast via temp table JOIN
         t4 = time.monotonic()
-        dup_list = list(dup_pairs)
-        candidates = []
-        batches = (len(dup_list) + SQL_VAR_LIMIT - 1) // SQL_VAR_LIMIT
-        for i in range(0, len(dup_list), SQL_VAR_LIMIT):
-            chunk = dup_list[i : i + SQL_VAR_LIMIT]
-            conditions = " OR ".join(
-                "(hash_partial = ? AND file_size = ?)" for _ in chunk
-            )
-            params: list = []
-            for hp, fs in chunk:
-                params.extend([hp, fs])
-            rows = await conn.execute_fetchall(
-                f"SELECT id, full_path, location_id "
-                f"FROM files "
-                f"WHERE ({conditions}) AND hash_fast IS NULL AND stale = 0",
-                params,
-            )
-            candidates.extend(rows)
+        await conn.execute(
+            "CREATE TEMP TABLE _dup_groups (hash_partial TEXT, file_size INTEGER)"
+        )
+        await conn.executemany(
+            "INSERT INTO _dup_groups VALUES (?, ?)",
+            list(dup_pairs),
+        )
+        await conn.commit()
+
+        candidates = await conn.execute_fetchall(
+            "SELECT f.id, f.full_path, f.location_id "
+            "FROM files f "
+            "INNER JOIN _dup_groups g "
+            "ON f.hash_partial = g.hash_partial AND f.file_size = g.file_size "
+            "WHERE f.hash_fast IS NULL AND f.stale = 0"
+        )
+        await conn.execute("DROP TABLE IF EXISTS _dup_groups")
 
         log.info(
-            "find_dup_candidates: fetched %d candidate files in %d batches in %.1fs",
+            "find_dup_candidates: fetched %d candidate files in %.1fs",
             len(candidates),
-            batches,
             time.monotonic() - t4,
         )
         log.info(
@@ -649,6 +646,7 @@ async def find_dup_candidates(
     finally:
         try:
             await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
+            await conn.execute("DROP TABLE IF EXISTS _dup_groups")
         except Exception:
             pass
         await conn.close()
