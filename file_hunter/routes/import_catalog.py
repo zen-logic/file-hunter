@@ -245,24 +245,42 @@ async def _run_and_notify(
                             len(small_files),
                         )
 
-                    # Large files: one at a time via agent
+                    # Large files: one at a time via agent, retry on failure
+                    MAX_RETRIES = 3
+                    RETRY_DELAY = 5
                     for c in large_files:
-                        try:
-                            result = await dispatch(
-                                "file_hash", c["location_id"], path=c["full_path"]
-                            )
-                            async with db_writer() as wdb:
-                                await wdb.execute(
-                                    "UPDATE files SET hash_fast = ? WHERE id = ?",
-                                    (result["hash_fast"], c["id"]),
+                        for attempt in range(1, MAX_RETRIES + 1):
+                            try:
+                                result = await dispatch(
+                                    "file_hash",
+                                    c["location_id"],
+                                    path=c["full_path"],
                                 )
-                            hashed += 1
-                        except (ConnectionError, OSError, Exception) as e:
-                            log.warning(
-                                "Import hash_fast failed for %s: %s",
-                                c["full_path"],
-                                e,
-                            )
+                                async with db_writer() as wdb:
+                                    await wdb.execute(
+                                        "UPDATE files SET hash_fast = ? WHERE id = ?",
+                                        (result["hash_fast"], c["id"]),
+                                    )
+                                hashed += 1
+                                break
+                            except Exception as e:
+                                if attempt < MAX_RETRIES:
+                                    log.warning(
+                                        "Import hash_fast attempt %d/%d failed for %s: %s — retrying in %ds",
+                                        attempt,
+                                        MAX_RETRIES,
+                                        c["full_path"],
+                                        e,
+                                        RETRY_DELAY,
+                                    )
+                                    await asyncio.sleep(RETRY_DELAY)
+                                else:
+                                    log.error(
+                                        "Import hash_fast FAILED after %d attempts for %s: %s",
+                                        MAX_RETRIES,
+                                        c["full_path"],
+                                        e,
+                                    )
                         _progress["dup_hashes_done"] = hashed
 
                     log.info(
