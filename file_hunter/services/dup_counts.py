@@ -533,15 +533,21 @@ async def find_dup_candidates(
 
     Returns [{id, full_path, location_id}, ...]
     """
-    from file_hunter.db import open_connection
-
+    import time
     from collections import Counter
 
+    from file_hunter.db import open_connection
+
     SQL_VAR_LIMIT = 500
+    scope = f"location {location_id}" if location_id else "global"
+
+    log.info("find_dup_candidates: starting (scope=%s)", scope)
+    t0 = time.monotonic()
 
     conn = await open_connection()
     try:
-        # Step 1: location's pairs into temp table, then JOIN to count globally
+        # Step 1: get matching rows for counting
+        t1 = time.monotonic()
         if location_id is not None:
             await conn.execute(
                 "CREATE TEMP TABLE _dup_pairs (hash_partial TEXT, file_size INTEGER)"
@@ -554,12 +560,26 @@ async def find_dup_candidates(
                 (location_id,),
             )
             await conn.commit()
+            pair_count = (
+                await conn.execute_fetchall("SELECT COUNT(*) as c FROM _dup_pairs")
+            )[0]["c"]
+            log.info(
+                "find_dup_candidates: %d distinct pairs inserted into temp table in %.1fs",
+                pair_count,
+                time.monotonic() - t1,
+            )
 
+            t2 = time.monotonic()
             rows = await conn.execute_fetchall(
                 "SELECT f.hash_partial, f.file_size FROM files f "
                 "INNER JOIN _dup_pairs p "
                 "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size "
                 "WHERE f.stale = 0"
+            )
+            log.info(
+                "find_dup_candidates: JOIN returned %d rows in %.1fs",
+                len(rows),
+                time.monotonic() - t2,
             )
             await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
         else:
@@ -567,24 +587,36 @@ async def find_dup_candidates(
                 "SELECT hash_partial, file_size FROM files "
                 "WHERE hash_partial IS NOT NULL AND file_size > 0 AND stale = 0"
             )
+            log.info(
+                "find_dup_candidates: global query returned %d rows in %.1fs",
+                len(rows),
+                time.monotonic() - t1,
+            )
 
         # Step 2: count in Python — find pairs with more than one file
+        t3 = time.monotonic()
         pair_counts = Counter((r["hash_partial"], r["file_size"]) for r in rows)
         dup_pairs = {k for k, v in pair_counts.items() if v > 1}
-
         log.info(
-            "find_dup_candidates: %d dup groups from %d rows (scope=%s)",
+            "find_dup_candidates: Python counting done in %.1fs — "
+            "%d total pairs, %d with duplicates",
+            time.monotonic() - t3,
+            len(pair_counts),
             len(dup_pairs),
-            len(rows),
-            f"location {location_id}" if location_id else "global",
         )
 
         if not dup_pairs:
+            log.info(
+                "find_dup_candidates: no dup groups, done in %.1fs",
+                time.monotonic() - t0,
+            )
             return []
 
         # Step 3: fetch files needing hash_fast in those groups
+        t4 = time.monotonic()
         dup_list = list(dup_pairs)
         candidates = []
+        batches = (len(dup_list) + SQL_VAR_LIMIT - 1) // SQL_VAR_LIMIT
         for i in range(0, len(dup_list), SQL_VAR_LIMIT):
             chunk = dup_list[i : i + SQL_VAR_LIMIT]
             conditions = " OR ".join(
@@ -601,7 +633,17 @@ async def find_dup_candidates(
             )
             candidates.extend(rows)
 
-        log.info("find_dup_candidates: %d candidate files", len(candidates))
+        log.info(
+            "find_dup_candidates: fetched %d candidate files in %d batches in %.1fs",
+            len(candidates),
+            batches,
+            time.monotonic() - t4,
+        )
+        log.info(
+            "find_dup_candidates: total %.1fs (scope=%s)",
+            time.monotonic() - t0,
+            scope,
+        )
         return [dict(r) for r in candidates]
 
     finally:
