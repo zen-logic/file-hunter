@@ -1,5 +1,5 @@
 from starlette.requests import Request
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import read_db, execute_write
 from file_hunter.core import json_ok, json_error
 from file_hunter.services.locations import (
     get_shallow_tree,
@@ -17,8 +17,8 @@ from file_hunter.ws.scan import broadcast
 
 
 async def list_locations(request: Request):
-    db = await get_db()
-    tree = await get_shallow_tree(db)
+    async with read_db() as db:
+        tree = await get_shallow_tree(db)
     return json_ok(tree)
 
 
@@ -30,9 +30,9 @@ async def add_location(request: Request):
         return json_error("Name and path are required.")
 
     # Find the local agent to assign this location to
-    db = await get_db()
-    cursor = await db.execute("SELECT id FROM agents WHERE name = 'Local Agent'")
-    local_agent = await cursor.fetchone()
+    async with read_db() as db:
+        cursor = await db.execute("SELECT id FROM agents WHERE name = 'Local Agent'")
+        local_agent = await cursor.fetchone()
     agent_id = local_agent["id"] if local_agent else None
 
     # Validate path via the local agent
@@ -93,10 +93,10 @@ async def add_location(request: Request):
 async def remove_location(request: Request):
     raw_id = request.path_params["id"]
     loc_id = int(raw_id.replace("loc-", ""))
-    db = await get_db()
-    row = await db.execute_fetchall(
-        "SELECT name, root_path, agent_id FROM locations WHERE id = ?", (loc_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT name, root_path, agent_id FROM locations WHERE id = ?", (loc_id,)
+        )
     if not row:
         return json_error("Location not found.", 404)
 
@@ -181,10 +181,10 @@ async def update_location(request: Request):
 
     hook = get_location_changed()
     if hook:
-        db = await get_db()
-        row = await db.execute_fetchall(
-            "SELECT root_path, agent_id FROM locations WHERE id = ?", (loc_id,)
-        )
+        async with read_db() as db:
+            row = await db.execute_fetchall(
+                "SELECT root_path, agent_id FROM locations WHERE id = ?", (loc_id,)
+            )
         if row:
             await hook(
                 "renamed",
@@ -222,8 +222,8 @@ async def tree_children(request: Request):
         return json_error("ids must be comma-separated integers.")
     if not folder_ids:
         return json_error("ids parameter is required.")
-    db = await get_db()
-    result = await get_children(db, folder_ids)
+    async with read_db() as db:
+        result = await get_children(db, folder_ids)
     return json_ok(result)
 
 
@@ -236,8 +236,8 @@ async def tree_expand(request: Request):
         target_id = int(target_raw)
     except ValueError:
         return json_error("target must be an integer folder ID.")
-    db = await get_db()
-    result = await get_expand_path(db, target_id)
+    async with read_db() as db:
+        result = await get_expand_path(db, target_id)
     if result is None:
         return json_error("Folder not found.", 404)
     return json_ok(result)
@@ -248,8 +248,8 @@ async def treemap_data(request: Request):
     location_id = int(request.path_params["id"])
     parent_raw = request.query_params.get("parent_id", "")
     parent_id = int(parent_raw) if parent_raw else None
-    db = await get_db()
-    result = await get_treemap_children(db, location_id, parent_id)
+    async with read_db() as db:
+        result = await get_treemap_children(db, location_id, parent_id)
     if result is None:
         return json_error("Location not found.", 404)
     return json_ok(result)

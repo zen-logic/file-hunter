@@ -3,7 +3,7 @@ import logging
 
 from starlette.requests import Request
 from file_hunter.core import ProgressTracker, json_ok, json_error
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.services.stats import get_stats, get_location_stats, get_folder_stats
 
 log = logging.getLogger("file_hunter")
@@ -43,8 +43,8 @@ async def stop_repair():
 
 
 async def stats(request: Request):
-    db = await get_db()
-    data = await get_stats(db)
+    async with read_db() as db:
+        data = await get_stats(db)
     return json_ok(data)
 
 
@@ -63,8 +63,8 @@ async def _bg_recalculate():
     from file_hunter.ws.scan import broadcast
 
     try:
-        db = await get_db()
-        loc_rows = await db.execute_fetchall("SELECT id FROM locations")
+        async with read_db() as db:
+            loc_rows = await db.execute_fetchall("SELECT id FROM locations")
         for loc in loc_rows:
             await recalculate_location_sizes(loc["id"])
         invalidate_stats_cache()
@@ -304,9 +304,10 @@ async def _bg_repair(phases: list[str] | None = None):
                 log.info("Catalog repair: skipping phase 3 (sizes)")
             else:
                 _repair_progress["phase"] = "sizes"
-                all_locs = await (await get_db()).execute_fetchall(
-                    "SELECT id FROM locations"
-                )
+                async with read_db() as _rdb:
+                    all_locs = await _rdb.execute_fetchall(
+                        "SELECT id FROM locations"
+                    )
                 _repair_progress["locations_total"] = len(all_locs)
                 log.info(
                     "Catalog repair: phase 3 — recalculating sizes for %d locations",
@@ -352,10 +353,10 @@ async def rehash_partial(request: Request):
     """Enqueue a rehash_partial operation for every agent-backed location."""
     from file_hunter.services.queue_manager import enqueue
 
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT id, name, agent_id FROM locations WHERE agent_id IS NOT NULL"
-    )
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT id, name, agent_id FROM locations WHERE agent_id IS NOT NULL"
+        )
     if not rows:
         return json_error("No agent-backed locations found.")
 
@@ -373,8 +374,8 @@ async def rehash_partial(request: Request):
 
 async def location_stats(request: Request):
     loc_id = int(request.path_params["id"])
-    db = await get_db()
-    data = await get_location_stats(db, loc_id)
+    async with read_db() as db:
+        data = await get_location_stats(db, loc_id)
     if not data:
         return json_error("Location not found.", 404)
     return json_ok(data)
@@ -382,8 +383,8 @@ async def location_stats(request: Request):
 
 async def folder_stats(request: Request):
     folder_id = int(request.path_params["id"])
-    db = await get_db()
-    data = await get_folder_stats(db, folder_id)
+    async with read_db() as db:
+        data = await get_folder_stats(db, folder_id)
     if not data:
         return json_error("Folder not found.", 404)
     return json_ok(data)

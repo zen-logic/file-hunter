@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from file_hunter_core.classify import classify_file
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -72,7 +72,7 @@ async def resolve_merge_target(db, target_id: str) -> dict | None:
 async def run_merge(source_id, source_info, destination_id, dest_info):
     """Main merge background task.
 
-    Reads via get_db(), writes via db_writer(). No owned connection.
+    Reads via read_db(), writes via db_writer(). No owned connection.
     """
     global _merge_running, _merge_cancel_requested
     _merge_running = True
@@ -94,8 +94,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
     hidden_folder_map: dict[str, str] = {}
 
     try:
-        db = await get_db()
-
         await broadcast(
             {
                 "type": "merge_started",
@@ -105,7 +103,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
         )
 
         # Load source files
-        source_files = await _load_source_files(db, source_id, source_info)
+        async with read_db() as db:
+            source_files = await _load_source_files(db, source_id, source_info)
         total_files = len(source_files)
 
         if total_files == 0:
@@ -122,7 +121,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
             return
 
         # Build destination hash index for O(1) duplicate lookup
-        dest_hash_index = await _build_dest_hash_index(db, dest_loc_id)
+        async with read_db() as db:
+            dest_hash_index = await _build_dest_hash_index(db, dest_loc_id)
 
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
         folder_cache: dict[str, int] = {}
@@ -407,10 +407,11 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     # Resolve dest file's rel_dir for the .sources DB record
                     dest_file_id = dest_entry.get("id")
                     if dest_file_id:
-                        drows = await db.execute_fetchall(
-                            "SELECT folder_id, rel_path FROM files WHERE id = ?",
-                            (dest_file_id,),
-                        )
+                        async with read_db() as db:
+                            drows = await db.execute_fetchall(
+                                "SELECT folder_id, rel_path FROM files WHERE id = ?",
+                                (dest_file_id,),
+                            )
                         if drows:
                             d_rel_dir = os.path.dirname(drows[0]["rel_path"])
                             await _upsert_sources_record(
@@ -723,9 +724,9 @@ async def _upsert_sources_record(
     if st is None:
         return
 
-    db = await get_db()
-    # Check if record already exists
-    rows = await db.execute_fetchall(
+    async with read_db() as db:
+        # Check if record already exists
+        rows = await db.execute_fetchall(
         "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
         (dest_location_id, sources_rel),
     )
@@ -767,8 +768,8 @@ async def _ensure_folder_hierarchy(
     hidden: bool = False,
 ) -> int:
     """Create/find folder records for a full relative directory path."""
-    db = await get_db()
-    parts = rel_dir_path.replace("\\", "/").split("/")
+    async with read_db() as db:
+        parts = rel_dir_path.replace("\\", "/").split("/")
     current_path = ""
     parent_id = None
 

@@ -23,15 +23,15 @@ async def load_agent_location_ids():
 
     Called once at startup and whenever an agent connects/disconnects.
     """
-    from file_hunter.db import get_db
+    from file_hunter.db import read_db
 
-    db = await get_db()
-    cursor = await db.execute(
-        """SELECT l.id, a.name AS agent_name
-           FROM locations l JOIN agents a ON a.id = l.agent_id
-           WHERE l.agent_id IS NOT NULL"""
-    )
-    rows = await cursor.fetchall()
+    async with read_db() as db:
+        cursor = await db.execute(
+            """SELECT l.id, a.name AS agent_name
+               FROM locations l JOIN agents a ON a.id = l.agent_id
+               WHERE l.agent_id IS NOT NULL"""
+        )
+        rows = await cursor.fetchall()
     _all_agent_loc_ids.clear()
     _agent_label_prefixes.clear()
     for row in rows:

@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services.scanner import (
     ensure_folder_hierarchy,
     upsert_file,
@@ -47,8 +47,6 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
     location_id = params["location_id"]
     scan_path = params.get("path") or params["root_path"]
     root_path = params["root_path"]
-
-    read_db = await get_db()
 
     # --- Initialisation ---
     async with db_writer() as db:
@@ -166,9 +164,10 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                     # Broadcast progress periodically (not every directory)
                     now_mono = time.monotonic()
                     if now_mono - last_progress_broadcast >= 2.0:
-                        await read_db.commit()
-                        await _broadcast_progress(
-                            read_db,
+                        async with read_db() as rdb:
+                            await rdb.commit()
+                            await _broadcast_progress(
+                                rdb,
                             location_id,
                             location_name,
                             files_found,
@@ -307,10 +306,11 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
         invalidate_stats_cache()
 
-        await read_db.commit()
-        dup_row = await read_db.execute_fetchall(
-            "SELECT duplicate_count FROM locations WHERE id = ?", (location_id,)
-        )
+        async with read_db() as rdb:
+            await rdb.commit()
+            dup_row = await rdb.execute_fetchall(
+                "SELECT duplicate_count FROM locations WHERE id = ?", (location_id,)
+            )
         final_dup_count = (dup_row[0]["duplicate_count"] or 0) if dup_row else 0
 
         await broadcast(
@@ -425,15 +425,14 @@ async def _process_directory(
 
     Returns (files_in_dir, new_files_in_dir).
     """
-    read_db = await get_db()
-
     # Build set of agent files keyed by rel_path
     agent_by_path: dict[str, dict] = {}
     for f in agent_files:
         agent_by_path[f["rel_path"]] = f
 
-    # Query expected files from catalog for this directory
-    expected = await _get_expected_files(read_db, location_id, rel_dir)
+    async with read_db() as rdb:
+        # Query expected files from catalog for this directory
+        expected = await _get_expected_files(rdb, location_id, rel_dir)
     expected_by_path = {e["rel_path"]: e for e in expected}
 
     # Classify: unchanged, changed, new, gone
@@ -641,14 +640,13 @@ async def _apply_hash(
     Called during the hash phase of the scan stream. The file already exists
     in the catalog from the metadata phase.
     """
-    read_db = await get_db()
-
-    # Look up the file
-    row = await read_db.execute_fetchall(
-        "SELECT id, file_size, inode FROM files "
-        "WHERE location_id = ? AND rel_path = ? AND stale = 0",
-        (location_id, rel_path),
-    )
+    async with read_db() as rdb:
+        # Look up the file
+        row = await rdb.execute_fetchall(
+            "SELECT id, file_size, inode FROM files "
+            "WHERE location_id = ? AND rel_path = ? AND stale = 0",
+            (location_id, rel_path),
+        )
     if not row:
         return
 
@@ -863,9 +861,9 @@ async def _drain_pending_hashes(
     try:
         while True:
             # Fetch a batch of pending hashes for this agent/location
-            read_db = await get_db()
-            await read_db.commit()  # refresh snapshot
-            rows = await read_db.execute_fetchall(
+
+            async with read_db() as rdb:
+                rows = await rdb.execute_fetchall(
                 "SELECT id, file_id, full_path, inode FROM pending_hashes "
                 "WHERE agent_id = ? AND location_id = ? "
                 "ORDER BY inode "

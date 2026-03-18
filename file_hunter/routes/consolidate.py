@@ -3,7 +3,7 @@ import asyncio
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.services import fs
 from file_hunter.services.consolidate import (
     run_consolidation,
@@ -14,7 +14,6 @@ from file_hunter.services.consolidate import (
 
 async def consolidate(request: Request):
     """POST /api/consolidate — start a consolidation background task."""
-    db = await get_db()
     body = await request.json()
 
     file_id = body.get("file_id")
@@ -30,32 +29,33 @@ async def consolidate(request: Request):
     if mode == "copy_to" and not dest_folder_id:
         return json_error("destination_folder_id is required for copy_to mode.", 400)
 
-    # Verify file exists and has a hash
-    rows = await db.execute_fetchall(
-        "SELECT id, filename, hash_strong, hash_fast FROM files WHERE id = ?",
-        (file_id,),
-    )
-    if not rows:
-        return json_error("File not found.", 404)
+    async with read_db() as db:
+        # Verify file exists and has a hash
+        rows = await db.execute_fetchall(
+            "SELECT id, filename, hash_strong, hash_fast FROM files WHERE id = ?",
+            (file_id,),
+        )
+        if not rows:
+            return json_error("File not found.", 404)
 
-    effective_hash = rows[0]["hash_strong"] or rows[0]["hash_fast"]
-    if not effective_hash:
-        return json_error("File has no hash — scan it first.", 400)
+        effective_hash = rows[0]["hash_strong"] or rows[0]["hash_fast"]
+        if not effective_hash:
+            return json_error("File has no hash — scan it first.", 400)
 
-    # Guard concurrent consolidation
-    if is_consolidation_running(effective_hash):
-        return json_error("Consolidation already in progress for this file.", 409)
+        # Guard concurrent consolidation
+        if is_consolidation_running(effective_hash):
+            return json_error("Consolidation already in progress for this file.", 409)
 
-    # For copy_to, verify destination is online
-    if mode == "copy_to":
-        from file_hunter.services.consolidate import _resolve_folder_path_with_loc
+        # For copy_to, verify destination is online
+        if mode == "copy_to":
+            from file_hunter.services.consolidate import _resolve_folder_path_with_loc
 
-        dest_path, dest_loc_id = await _resolve_folder_path_with_loc(db, dest_folder_id)
-        if dest_path is None:
-            return json_error("Destination folder not found.", 404)
+            dest_path, dest_loc_id = await _resolve_folder_path_with_loc(db, dest_folder_id)
+            if dest_path is None:
+                return json_error("Destination folder not found.", 404)
 
-        if not await fs.dir_exists(dest_path, dest_loc_id):
-            return json_error("Destination is offline.", 400)
+            if not await fs.dir_exists(dest_path, dest_loc_id):
+                return json_error("Destination is offline.", 400)
 
     asyncio.create_task(run_consolidation(file_id, mode, dest_folder_id))
 
@@ -64,7 +64,6 @@ async def consolidate(request: Request):
 
 async def batch_consolidate(request: Request):
     """POST /api/batch/consolidate — consolidate multiple files in background."""
-    db = await get_db()
     body = await request.json()
 
     file_ids = body.get("file_ids", [])
@@ -84,7 +83,8 @@ async def batch_consolidate(request: Request):
     if mode == "copy_to":
         from file_hunter.services.consolidate import _resolve_folder_path_with_loc
 
-        dest_path, dest_loc_id = await _resolve_folder_path_with_loc(db, dest_folder_id)
+        async with read_db() as db:
+            dest_path, dest_loc_id = await _resolve_folder_path_with_loc(db, dest_folder_id)
         if dest_path is None:
             return json_error("Destination folder not found.", 404)
 

@@ -9,7 +9,7 @@ params for resume on restart.
 import asyncio
 import logging
 
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services.agent_ops import hash_partial_batch
 from file_hunter.services.queue_manager import update_params
 from file_hunter.ws.scan import broadcast
@@ -25,24 +25,23 @@ async def run_rehash_partial(op_id: int, agent_id: int, params: dict):
     location_name = params.get("location_name", f"location {location_id}")
     last_id = params.get("last_id", 0)
 
-    db = await get_db()
+    async with read_db() as db:
+        # Count total candidates for progress
+        count_row = await db.execute_fetchall(
+            "SELECT COUNT(*) as cnt FROM files "
+            "WHERE location_id = ? AND id > ? AND hash_partial IS NOT NULL "
+            "AND stale = 0 AND file_size > 0",
+            (location_id, last_id),
+        )
+        remaining = count_row[0]["cnt"] if count_row else 0
 
-    # Count total candidates for progress
-    count_row = await db.execute_fetchall(
-        "SELECT COUNT(*) as cnt FROM files "
-        "WHERE location_id = ? AND id > ? AND hash_partial IS NOT NULL "
-        "AND stale = 0 AND file_size > 0",
-        (location_id, last_id),
-    )
-    remaining = count_row[0]["cnt"] if count_row else 0
-
-    # Also count already-done (for accurate progress after resume)
-    done_row = await db.execute_fetchall(
-        "SELECT COUNT(*) as cnt FROM files "
-        "WHERE location_id = ? AND id <= ? AND hash_partial IS NOT NULL "
-        "AND stale = 0 AND file_size > 0",
-        (location_id, last_id),
-    )
+        # Also count already-done (for accurate progress after resume)
+        done_row = await db.execute_fetchall(
+            "SELECT COUNT(*) as cnt FROM files "
+            "WHERE location_id = ? AND id <= ? AND hash_partial IS NOT NULL "
+            "AND stale = 0 AND file_size > 0",
+            (location_id, last_id),
+        )
     already_done = done_row[0]["cnt"] if done_row else 0
     total = already_done + remaining
 
@@ -70,13 +69,14 @@ async def run_rehash_partial(op_id: int, agent_id: int, params: dict):
     while True:
         await asyncio.sleep(0)  # yield to event loop
 
-        rows = await db.execute_fetchall(
-            "SELECT id, full_path FROM files "
-            "WHERE location_id = ? AND id > ? AND hash_partial IS NOT NULL "
-            "AND stale = 0 AND file_size > 0 "
-            "ORDER BY id LIMIT ?",
-            (location_id, last_id, BATCH_SIZE),
-        )
+        async with read_db() as db:
+            rows = await db.execute_fetchall(
+                "SELECT id, full_path FROM files "
+                "WHERE location_id = ? AND id > ? AND hash_partial IS NOT NULL "
+                "AND stale = 0 AND file_size > 0 "
+                "ORDER BY id LIMIT ?",
+                (location_id, last_id, BATCH_SIZE),
+            )
 
         if not rows:
             break

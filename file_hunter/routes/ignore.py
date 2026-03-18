@@ -1,12 +1,12 @@
 from starlette.requests import Request
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import read_db, execute_write
 from file_hunter.services import ignore as ignore_svc
 
 
 async def list_ignore_rules(request: Request):
-    db = await get_db()
-    rules = await ignore_svc.list_ignore_rules(db)
+    async with read_db() as db:
+        rules = await ignore_svc.list_ignore_rules(db)
     return json_ok(rules)
 
 
@@ -51,8 +51,8 @@ async def check_ignore(request: Request):
     file_size = int(file_size)
     location_id = int(location_id) if location_id else None
 
-    db = await get_db()
-    rule = await ignore_svc.check_file_ignored(db, filename, file_size, location_id)
+    async with read_db() as db:
+        rule = await ignore_svc.check_file_ignored(db, filename, file_size, location_id)
     return json_ok({"ignored": rule is not None, "rule": rule})
 
 
@@ -67,6 +67,6 @@ async def count_ignore_matches(request: Request):
     file_size = int(file_size)
     location_id = int(location_id) if location_id else None
 
-    db = await get_db()
-    count = await ignore_svc.count_matching_files(db, filename, file_size, location_id)
+    async with read_db() as db:
+        count = await ignore_svc.count_matching_files(db, filename, file_size, location_id)
     return json_ok({"count": count})

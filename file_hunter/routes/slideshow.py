@@ -1,11 +1,10 @@
 from starlette.requests import Request
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.core import json_ok
 from file_hunter.services.slideshow import get_slideshow_ids
 
 
 async def slideshow_ids(request: Request):
-    db = await get_db()
     folder_id = request.query_params.get("folder_id")
 
     # Collect search params if present
@@ -36,9 +35,10 @@ async def slideshow_ids(request: Request):
             if key.startswith("c") and "_" in key:
                 search_params[key] = request.query_params[key]
 
-    ids = await get_slideshow_ids(
-        db,
-        folder_id=folder_id,
-        search_params=search_params if search_params else None,
-    )
+    async with read_db() as db:
+        ids = await get_slideshow_ids(
+            db,
+            folder_id=folder_id,
+            search_params=search_params if search_params else None,
+        )
     return json_ok({"ids": ids, "total": len(ids)})

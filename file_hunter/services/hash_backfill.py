@@ -11,7 +11,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from file_hunter.db import db_writer, get_db, open_connection, execute_write
+from file_hunter.db import db_writer, read_db, open_connection, execute_write
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
 
@@ -115,10 +115,10 @@ async def clear_persisted_backfill(agent_id: int, location_id: int):
 
 async def load_persisted_backfills() -> list[tuple[int, int, str, str | None]]:
     """Load all persisted backfills from the database."""
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT agent_id, location_id, location_name, scan_prefix FROM pending_backfills"
-    )
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT agent_id, location_id, location_name, scan_prefix FROM pending_backfills"
+        )
     return [
         (
             r["agent_id"],

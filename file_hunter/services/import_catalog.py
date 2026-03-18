@@ -10,7 +10,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from file_hunter.core import ProgressTracker
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 
 logger = logging.getLogger("file_hunter")
 
@@ -85,8 +85,8 @@ async def run_import(
         ]
 
         # Count existing files so we can report new vs updated
-        db = await get_db()
-        before_count_rows = await db.execute_fetchall(
+        async with read_db() as db:
+            before_count_rows = await db.execute_fetchall(
             "SELECT COUNT(*) as c FROM files WHERE location_id = ?",
             (location_id,),
         )
@@ -106,11 +106,11 @@ async def run_import(
             rel_path = f["rel_path"]
 
             # Check if folder already exists
-            db = await get_db()
-            rows = await db.execute_fetchall(
-                "SELECT id FROM folders WHERE location_id = ? AND rel_path = ?",
-                (location_id, rel_path),
-            )
+            async with read_db() as db:
+                rows = await db.execute_fetchall(
+                    "SELECT id FROM folders WHERE location_id = ? AND rel_path = ?",
+                    (location_id, rel_path),
+                )
             row = rows[0] if rows else None
 
             if row:
@@ -232,7 +232,8 @@ async def run_import(
         cat.close()
 
         # Count new files
-        after_count_rows = await db.execute_fetchall(
+        async with read_db() as db:
+            after_count_rows = await db.execute_fetchall(
             "SELECT COUNT(*) as c FROM files WHERE location_id = ?",
             (location_id,),
         )

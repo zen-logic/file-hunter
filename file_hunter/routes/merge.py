@@ -4,7 +4,7 @@ import os
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.services import fs
 from file_hunter.services.merge import (
     resolve_merge_target,
@@ -16,7 +16,6 @@ from file_hunter.services.merge import (
 
 async def merge(request: Request):
     """POST /api/merge — start a merge background task."""
-    db = await get_db()
     body = await request.json()
 
     source_id = body.get("source_id")
@@ -29,11 +28,12 @@ async def merge(request: Request):
         return json_error("Source and destination cannot be the same.", 400)
 
     # Resolve both targets
-    source_info = await resolve_merge_target(db, source_id)
-    if not source_info:
-        return json_error("Source not found.", 404)
+    async with read_db() as db:
+        source_info = await resolve_merge_target(db, source_id)
+        if not source_info:
+            return json_error("Source not found.", 404)
 
-    dest_info = await resolve_merge_target(db, destination_id)
+        dest_info = await resolve_merge_target(db, destination_id)
     if not dest_info:
         return json_error("Destination not found.", 404)
 

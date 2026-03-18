@@ -5,7 +5,7 @@ from starlette.routing import Route, Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from pathlib import Path
 
-from file_hunter.db import get_db, close_db, db_writer
+from file_hunter.db import read_db, close_db, db_writer
 from file_hunter.ws.scan import ws_endpoint
 from file_hunter.ws.agent import agent_ws_endpoint
 from file_hunter.routes.locations import (
@@ -133,7 +133,8 @@ async def on_startup():
     def _elapsed(label):
         logger.info("startup: %s (%.1fs)", label, time.monotonic() - t0)
 
-    db = await get_db()
+    async with read_db() as db:
+        pass  # ensures DB is initialized
     _elapsed("db ready")
 
     # Local agent is created by preflight.py before the server starts.
@@ -184,9 +185,10 @@ async def on_startup():
     await restore_fast_scan()
 
     # Mark interrupted scans as error (agent will rescan on reconnect)
-    interrupted = await db.execute_fetchall(
-        "SELECT id FROM scans WHERE status IN ('running', 'interrupted', 'finalizing')"
-    )
+    async with read_db() as db:
+        interrupted = await db.execute_fetchall(
+            "SELECT id FROM scans WHERE status IN ('running', 'interrupted', 'finalizing')"
+        )
     if interrupted:
         async with db_writer() as wdb:
             for row in interrupted:

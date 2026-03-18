@@ -5,16 +5,16 @@ import urllib.parse
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 
 
 async def browse(request: Request):
     path = request.query_params.get("path", "").strip()
 
     # Find the local agent
-    db = await get_db()
-    cursor = await db.execute("SELECT id FROM agents WHERE name = 'Local Agent'")
-    row = await cursor.fetchone()
+    async with read_db() as db:
+        cursor = await db.execute("SELECT id FROM agents WHERE name = 'Local Agent'")
+        row = await cursor.fetchone()
     if not row:
         return json_error("Local agent not configured.", 503)
 

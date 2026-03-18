@@ -3,7 +3,7 @@
 import os
 from datetime import datetime, timezone
 
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -21,7 +21,7 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
     mode: 'keep_here' or 'copy_to'
     dest_folder_id: required for copy_to (e.g. 'loc-4' or 'fld-7')
 
-    Reads via get_db(), writes via db_writer(). No owned connection.
+    Reads via read_db(), writes via db_writer(). No owned connection.
     """
     hash_strong = None
     effective_hash = None
@@ -29,15 +29,15 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
     stubs_written = 0
     stubs_queued = 0
     try:
-        db = await get_db()
-        # Load the selected file
-        rows = await db.execute_fetchall(
-            """SELECT f.*, l.name as location_name, l.root_path
-               FROM files f
-               JOIN locations l ON l.id = f.location_id
-               WHERE f.id = ?""",
-            (file_id,),
-        )
+        async with read_db() as db:
+            # Load the selected file
+            rows = await db.execute_fetchall(
+                """SELECT f.*, l.name as location_name, l.root_path
+                   FROM files f
+                   JOIN locations l ON l.id = f.location_id
+                   WHERE f.id = ?""",
+                (file_id,),
+            )
         if not rows:
             await broadcast(
                 {
@@ -90,18 +90,19 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
         )
 
         # Find ALL copies by effective hash (including the selected file)
-        all_copies = await db.execute_fetchall(
-            f"""SELECT f.id, f.filename, f.full_path, f.rel_path,
-                      f.location_id, f.folder_id,
-                      f.file_type_high, f.file_type_low, f.file_size,
-                      f.hash_fast, f.hash_strong, f.description, f.tags,
-                      f.created_date, f.modified_date, f.date_cataloged,
-                      l.name as location_name, l.root_path
-               FROM files f
-               JOIN locations l ON l.id = f.location_id
-               WHERE f.{hash_col} = ?""",
-            (effective_hash,),
-        )
+        async with read_db() as db:
+            all_copies = await db.execute_fetchall(
+                f"""SELECT f.id, f.filename, f.full_path, f.rel_path,
+                          f.location_id, f.folder_id,
+                          f.file_type_high, f.file_type_low, f.file_size,
+                          f.hash_fast, f.hash_strong, f.description, f.tags,
+                          f.created_date, f.modified_date, f.date_cataloged,
+                          l.name as location_name, l.root_path
+                   FROM files f
+                   JOIN locations l ON l.id = f.location_id
+                   WHERE f.{hash_col} = ?""",
+                (effective_hash,),
+            )
         all_copies = [dict(r) for r in all_copies]
 
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -147,9 +148,10 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
 
         elif mode == "copy_to":
             # Resolve destination path and location_id
-            dest_dir, dest_loc_id = await _resolve_folder_path_with_loc(
-                db, dest_folder_id
-            )
+            async with read_db() as db:
+                dest_dir, dest_loc_id = await _resolve_folder_path_with_loc(
+                    db, dest_folder_id
+                )
             if dest_dir is None:
                 await broadcast(
                     {
@@ -468,15 +470,15 @@ async def drain_pending_jobs(location_id: int, root_path: str):
     """Drain queued consolidation jobs for a location that's now online.
 
     Called when an agent reconnects and its locations come online.
-    Reads via get_db(), writes via db_writer().
+    Reads via read_db(), writes via db_writer().
     """
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        """SELECT id, source_file, source_path, destination_path
-           FROM consolidation_jobs
-           WHERE source_location_id = ? AND status = 'pending'""",
-        (location_id,),
-    )
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            """SELECT id, source_file, source_path, destination_path
+               FROM consolidation_jobs
+               WHERE source_location_id = ? AND status = 'pending'""",
+            (location_id,),
+        )
 
     if not rows:
         return
@@ -497,10 +499,11 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                 stub_path = source_path + ".moved"
                 stub_name = source_file + ".moved"
                 # Update the existing file record to reflect the .moved stub
-                file_rows = await db.execute_fetchall(
-                    "SELECT id, rel_path FROM files WHERE full_path = ? AND location_id = ?",
-                    (source_path, location_id),
-                )
+                async with read_db() as db:
+                    file_rows = await db.execute_fetchall(
+                        "SELECT id, rel_path FROM files WHERE full_path = ? AND location_id = ?",
+                        (source_path, location_id),
+                    )
 
                 async with db_writer() as wdb:
                     if file_rows:
@@ -622,8 +625,6 @@ async def _ensure_canonical_record(
     """Insert a file record for the canonical copy at its destination."""
     from file_hunter.core import classify_file
 
-    db = await get_db()
-
     # Determine location_id and folder_id from dest_folder_id
     if dest_folder_id.startswith("loc-"):
         location_id = int(dest_folder_id[4:])
@@ -631,9 +632,10 @@ async def _ensure_canonical_record(
         rel_path = source["filename"]
     elif dest_folder_id.startswith("fld-"):
         fld_id = int(dest_folder_id[4:])
-        rows = await db.execute_fetchall(
-            "SELECT id, location_id, rel_path FROM folders WHERE id = ?", (fld_id,)
-        )
+        async with read_db() as db:
+            rows = await db.execute_fetchall(
+                "SELECT id, location_id, rel_path FROM folders WHERE id = ?", (fld_id,)
+            )
         if not rows:
             return -1
         folder_id = fld_id
@@ -680,12 +682,12 @@ async def _insert_stub_record(
     stub_path: str, sibling_file_id: int, location_id: int, now_iso: str
 ):
     """Insert a DB record for a .moved or .sources stub file alongside its sibling."""
-    db = await get_db()
-    # Get location/folder info from the sibling file record
-    rows = await db.execute_fetchall(
-        "SELECT location_id, folder_id, rel_path FROM files WHERE id = ?",
-        (sibling_file_id,),
-    )
+    async with read_db() as db:
+        # Get location/folder info from the sibling file record
+        rows = await db.execute_fetchall(
+            "SELECT location_id, folder_id, rel_path FROM files WHERE id = ?",
+            (sibling_file_id,),
+        )
     if not rows:
         return
     sibling = rows[0]

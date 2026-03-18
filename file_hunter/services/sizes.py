@@ -51,21 +51,52 @@ async def recalculate_location_sizes(location_id: int):
     Counters: file_count, total_size, duplicate_count, hidden_count, type_counts (JSON).
 
     Strategy:
-    1. Direct values per folder via indexed GROUP BY on files (read via get_db()).
+    1. Direct values per folder via indexed GROUP BY on files (read via read_db()).
     2. Build folder tree in memory from (id, parent_id).
     3. Bottom-up accumulation: leaf folders get direct values, parents sum children.
     4. Batch UPDATE folders, then UPDATE the location row (write via db_writer()).
     """
-    from file_hunter.db import db_writer, get_db
+    from file_hunter.db import db_writer, read_db
 
-    db = await get_db()
+    async with read_db() as db:
+        # 1a. Direct file sizes and counts per folder
+        direct_rows = await db.execute_fetchall(
+            "SELECT folder_id, SUM(file_size) AS total, COUNT(*) AS cnt "
+            "FROM files WHERE location_id = ? AND stale = 0 GROUP BY folder_id",
+            (location_id,),
+        )
 
-    # 1a. Direct file sizes and counts per folder
-    direct_rows = await db.execute_fetchall(
-        "SELECT folder_id, SUM(file_size) AS total, COUNT(*) AS cnt "
-        "FROM files WHERE location_id = ? AND stale = 0 GROUP BY folder_id",
-        (location_id,),
-    )
+        # 1b. Direct duplicate counts per folder
+        dup_rows = await db.execute_fetchall(
+            "SELECT folder_id, COUNT(*) AS cnt "
+            "FROM files WHERE location_id = ? AND stale = 0 "
+            "AND dup_exclude = 0 AND dup_count > 0 "
+            "GROUP BY folder_id",
+            (location_id,),
+        )
+
+        # 1c. Direct hidden counts per folder
+        hidden_rows = await db.execute_fetchall(
+            "SELECT folder_id, COUNT(*) AS cnt "
+            "FROM files WHERE location_id = ? AND stale = 0 AND hidden = 1 "
+            "GROUP BY folder_id",
+            (location_id,),
+        )
+
+        # 1d. Direct type counts per folder
+        type_rows = await db.execute_fetchall(
+            "SELECT folder_id, file_type_high, COUNT(*) AS cnt "
+            "FROM files WHERE location_id = ? AND stale = 0 "
+            "GROUP BY folder_id, file_type_high",
+            (location_id,),
+        )
+
+        # 2. Build folder tree in memory
+        folder_rows = await db.execute_fetchall(
+            "SELECT id, parent_id FROM folders WHERE location_id = ?",
+            (location_id,),
+        )
+
     direct_size: dict[int, int] = {}
     direct_count: dict[int, int] = {}
     root_file_size = 0
@@ -79,14 +110,6 @@ async def recalculate_location_sizes(location_id: int):
             direct_size[fid] = r["total"] or 0
             direct_count[fid] = r["cnt"] or 0
 
-    # 1b. Direct duplicate counts per folder
-    dup_rows = await db.execute_fetchall(
-        "SELECT folder_id, COUNT(*) AS cnt "
-        "FROM files WHERE location_id = ? AND stale = 0 "
-        "AND dup_exclude = 0 AND dup_count > 0 "
-        "GROUP BY folder_id",
-        (location_id,),
-    )
     direct_dup: dict[int, int] = {}
     root_dup_count = 0
     for r in dup_rows:
@@ -96,13 +119,6 @@ async def recalculate_location_sizes(location_id: int):
         else:
             direct_dup[fid] = r["cnt"] or 0
 
-    # 1c. Direct hidden counts per folder
-    hidden_rows = await db.execute_fetchall(
-        "SELECT folder_id, COUNT(*) AS cnt "
-        "FROM files WHERE location_id = ? AND stale = 0 AND hidden = 1 "
-        "GROUP BY folder_id",
-        (location_id,),
-    )
     direct_hidden: dict[int, int] = {}
     root_hidden_count = 0
     for r in hidden_rows:
@@ -112,25 +128,12 @@ async def recalculate_location_sizes(location_id: int):
         else:
             direct_hidden[fid] = r["cnt"] or 0
 
-    # 1d. Direct type counts per folder
-    type_rows = await db.execute_fetchall(
-        "SELECT folder_id, file_type_high, COUNT(*) AS cnt "
-        "FROM files WHERE location_id = ? AND stale = 0 "
-        "GROUP BY folder_id, file_type_high",
-        (location_id,),
-    )
     direct_types: dict[int | None, dict[str, int]] = defaultdict(dict)
     for r in type_rows:
         fid = r["folder_id"]
         ftype = r["file_type_high"] or ""
         direct_types[fid][ftype] = r["cnt"] or 0
     root_type_counts = dict(direct_types.get(None, {}))
-
-    # 2. Build folder tree in memory
-    folder_rows = await db.execute_fetchall(
-        "SELECT id, parent_id FROM folders WHERE location_id = ?",
-        (location_id,),
-    )
     children_of: dict[int | None, list[int]] = {}
     all_folder_ids: list[int] = []
     for f in folder_rows:
@@ -223,12 +226,12 @@ async def populate_all_sizes_if_needed():
     """One-time migration: populate sizes for locations where total_size IS NULL."""
     import time
 
-    from file_hunter.db import get_db
+    from file_hunter.db import read_db
 
-    db = await get_db()
-    null_locs = await db.execute_fetchall(
-        "SELECT id, name FROM locations WHERE total_size IS NULL"
-    )
+    async with read_db() as db:
+        null_locs = await db.execute_fetchall(
+            "SELECT id, name FROM locations WHERE total_size IS NULL"
+        )
     if not null_locs:
         return
 

@@ -10,7 +10,7 @@ import asyncio
 import logging
 
 from file_hunter.core import ProgressTracker
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services.dup_counts import SQL_VAR_LIMIT
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
@@ -44,8 +44,8 @@ async def restore_pending():
     """
     from file_hunter.services.settings import get_setting
 
-    db = await get_db()
-    pending = await get_setting(db, "dup_exclude_pending")
+    async with read_db() as db:
+        pending = await get_setting(db, "dup_exclude_pending")
     if not pending:
         return
 
@@ -59,9 +59,10 @@ async def restore_pending():
             await wdb.execute("DELETE FROM settings WHERE key = 'dup_exclude_pending'")
         return
 
-    row = await db.execute_fetchall(
-        "SELECT name FROM folders WHERE id = ?", (folder_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT name FROM folders WHERE id = ?", (folder_id,)
+        )
     if not row:
         log.warning("dup_exclude_pending folder %d not found, clearing", folder_id)
         async with db_writer() as wdb:
@@ -115,12 +116,11 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
             {"type": "queue_paused", "reason": "dup_exclude", "direction": direction}
         )
 
-        db = await get_db()
-
-        # Get folder name
-        folder_row = await db.execute_fetchall(
-            "SELECT name, location_id FROM folders WHERE id = ?", (folder_id,)
-        )
+        async with read_db() as db:
+            # Get folder name
+            folder_row = await db.execute_fetchall(
+                "SELECT name, location_id FROM folders WHERE id = ?", (folder_id,)
+            )
         if not folder_row:
             log.warning("toggle_dup_exclude: folder %d not found", folder_id)
             _progress.update(status="error", error="Folder not found")
@@ -136,7 +136,8 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
         )
 
         # Recursive CTE on folders table (small — ~100K rows max)
-        desc_rows = await db.execute_fetchall(
+        async with read_db() as db:
+            desc_rows = await db.execute_fetchall(
             """WITH RECURSIVE descendants(id) AS (
                    SELECT ?
                    UNION ALL

@@ -1,7 +1,7 @@
 import json
 
 from starlette.requests import Request
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import read_db, execute_write
 from file_hunter.core import json_ok, json_error
 from file_hunter.services.search import (
     search_files,
@@ -11,7 +11,6 @@ from file_hunter.services.search import (
 
 
 async def search(request: Request):
-    db = await get_db()
     page = int(request.query_params.get("page", 0))
     sort = request.query_params.get("sort", "name")
     sort_dir = request.query_params.get("sortDir", "asc")
@@ -23,51 +22,52 @@ async def search(request: Request):
     location_id = int(scope_id) if scope_type == "location" and scope_id else None
     folder_id = int(scope_id) if scope_type == "folder" and scope_id else None
 
-    if request.query_params.get("mode") == "advanced":
-        conditions = parse_conditions_from_params(request.query_params)
-        results = await search_files_advanced(
-            db,
-            conditions=conditions,
-            include_files=request.query_params.get("files") != "false",
-            include_folders=request.query_params.get("folders") == "true",
-            location_id=location_id,
-            folder_id=folder_id,
-            page=page,
-            sort=sort,
-            sort_dir=sort_dir,
-        )
-    else:
-        results = await search_files(
-            db,
-            name=request.query_params.get("name"),
-            file_type=request.query_params.get("type"),
-            description=request.query_params.get("description"),
-            tags=request.query_params.get("tags"),
-            size_min=request.query_params.get("sizeMin"),
-            size_max=request.query_params.get("sizeMax"),
-            date_from=request.query_params.get("dateFrom"),
-            date_to=request.query_params.get("dateTo"),
-            name_match=request.query_params.get("nameMatch", "anywhere"),
-            include_files=request.query_params.get("files") != "false",
-            dupes_only=bool(request.query_params.get("dupes")),
-            min_dups=request.query_params.get("minDups"),
-            max_dups=request.query_params.get("maxDups"),
-            include_folders=request.query_params.get("folders") == "true",
-            hash_strong=request.query_params.get("hash"),
-            location_id=location_id,
-            folder_id=folder_id,
-            page=page,
-            sort=sort,
-            sort_dir=sort_dir,
-        )
+    async with read_db() as db:
+        if request.query_params.get("mode") == "advanced":
+            conditions = parse_conditions_from_params(request.query_params)
+            results = await search_files_advanced(
+                db,
+                conditions=conditions,
+                include_files=request.query_params.get("files") != "false",
+                include_folders=request.query_params.get("folders") == "true",
+                location_id=location_id,
+                folder_id=folder_id,
+                page=page,
+                sort=sort,
+                sort_dir=sort_dir,
+            )
+        else:
+            results = await search_files(
+                db,
+                name=request.query_params.get("name"),
+                file_type=request.query_params.get("type"),
+                description=request.query_params.get("description"),
+                tags=request.query_params.get("tags"),
+                size_min=request.query_params.get("sizeMin"),
+                size_max=request.query_params.get("sizeMax"),
+                date_from=request.query_params.get("dateFrom"),
+                date_to=request.query_params.get("dateTo"),
+                name_match=request.query_params.get("nameMatch", "anywhere"),
+                include_files=request.query_params.get("files") != "false",
+                dupes_only=bool(request.query_params.get("dupes")),
+                min_dups=request.query_params.get("minDups"),
+                max_dups=request.query_params.get("maxDups"),
+                include_folders=request.query_params.get("folders") == "true",
+                hash_strong=request.query_params.get("hash"),
+                location_id=location_id,
+                folder_id=folder_id,
+                page=page,
+                sort=sort,
+                sort_dir=sort_dir,
+            )
     return json_ok(results)
 
 
 async def list_saved_searches(request: Request):
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT id, name, params, created_at FROM saved_searches ORDER BY created_at DESC"
-    )
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT id, name, params, created_at FROM saved_searches ORDER BY created_at DESC"
+        )
     return json_ok([dict(r) for r in rows])
 
 

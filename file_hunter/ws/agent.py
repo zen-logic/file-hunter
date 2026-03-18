@@ -12,7 +12,7 @@ from urllib.parse import parse_qs
 
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import read_db, execute_write
 from file_hunter.services.auth import verify_password
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
@@ -80,8 +80,8 @@ async def _adopt_orphaned_locations(agent_id: int):
     """
     from file_hunter.services.agent_ops import _resolve_agent
 
-    db = await get_db()
-    orphans = await db.execute_fetchall(
+    async with read_db() as db:
+        orphans = await db.execute_fetchall(
         "SELECT id, name, root_path FROM locations WHERE agent_id IS NULL"
     )
     if not orphans:
@@ -193,19 +193,19 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     from file_hunter.services.online_check import update_location_path_status
 
     path_status: dict[int, bool] = {}
-    db = await get_db()
-    for loc_id in location_ids:
-        cursor = await db.execute(
-            "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
-        )
-        row = await cursor.fetchone()
-        if row:
-            for loc in agent_locations:
-                if loc.get("path") == row["root_path"]:
-                    path_status[loc_id] = loc.get("online", True)
-                    break
-            else:
-                path_status[loc_id] = True
+    async with read_db() as db:
+        for loc_id in location_ids:
+            cursor = await db.execute(
+                "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                for loc in agent_locations:
+                    if loc.get("path") == row["root_path"]:
+                        path_status[loc_id] = loc.get("online", True)
+                        break
+                else:
+                    path_status[loc_id] = True
     update_location_path_status(agent_id, path_status)
 
     # Drain any pending consolidation jobs and deferred file ops for online locations
@@ -215,31 +215,34 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     for loc_id, online in path_status.items():
         if not online:
             continue
-        cursor = await db.execute(
-            "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
-        )
-        loc_row = await cursor.fetchone()
+        async with read_db() as db:
+            cursor = await db.execute(
+                "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
+            )
+            loc_row = await cursor.fetchone()
         if not loc_row:
             continue
         root_path = loc_row["root_path"]
 
         # Check if there are pending consolidation jobs before draining
-        pending = await db.execute(
-            "SELECT COUNT(*) as cnt FROM consolidation_jobs "
-            "WHERE source_location_id = ? AND status = 'pending'",
-            (loc_id,),
-        )
-        cnt_row = await pending.fetchone()
+        async with read_db() as db:
+            pending = await db.execute(
+                "SELECT COUNT(*) as cnt FROM consolidation_jobs "
+                "WHERE source_location_id = ? AND status = 'pending'",
+                (loc_id,),
+            )
+            cnt_row = await pending.fetchone()
         if cnt_row and cnt_row["cnt"] > 0:
             await drain_pending_jobs(loc_id, root_path)
 
         # Check if there are pending file ops before draining
-        pending_ops = await db.execute(
-            "SELECT COUNT(*) as cnt FROM pending_file_ops "
-            "WHERE location_id = ? AND status = 'pending'",
-            (loc_id,),
-        )
-        ops_row = await pending_ops.fetchone()
+        async with read_db() as db:
+            pending_ops = await db.execute(
+                "SELECT COUNT(*) as cnt FROM pending_file_ops "
+                "WHERE location_id = ? AND status = 'pending'",
+                (loc_id,),
+            )
+            ops_row = await pending_ops.fetchone()
         if ops_row and ops_row["cnt"] > 0:
             await drain_pending_ops(loc_id, root_path)
 
@@ -509,9 +512,9 @@ async def agent_ws_endpoint(websocket: WebSocket):
 
 async def _authenticate_agent(token: str) -> tuple[int, str] | None:
     """Validate a token against all agents. Returns (agent_id, name) or None."""
-    db = await get_db()
-    cursor = await db.execute("SELECT id, name, token_hash FROM agents")
-    rows = await cursor.fetchall()
+    async with read_db() as db:
+        cursor = await db.execute("SELECT id, name, token_hash FROM agents")
+        rows = await cursor.fetchall()
 
     for row in rows:
         if verify_password(token, row["token_hash"]):

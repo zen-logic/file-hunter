@@ -3,7 +3,7 @@ import logging
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.services.queue_manager import (
     enqueue,
     cancel,
@@ -17,56 +17,56 @@ logger = logging.getLogger("file_hunter")
 
 
 async def start_scan(request: Request):
-    db = await get_db()
     body = await request.json()
     raw_id = body.get("location_id", "")
     loc_id = int(str(raw_id).replace("loc-", ""))
 
-    # Verify location exists
-    rows = await db.execute_fetchall(
-        "SELECT id, name, root_path, agent_id FROM locations WHERE id = ?", (loc_id,)
-    )
-    if not rows:
-        return json_error("Location not found.", 404)
-
-    location_name = rows[0]["name"]
-    root_path = rows[0]["root_path"]
-    agent_id = rows[0]["agent_id"]
-
-    if not agent_id:
-        return json_error(
-            f"Location '{location_name}' has no agent assigned. "
-            "Configure your agent with this location path.",
-            400,
+    async with read_db() as db:
+        # Verify location exists
+        rows = await db.execute_fetchall(
+            "SELECT id, name, root_path, agent_id FROM locations WHERE id = ?", (loc_id,)
         )
+        if not rows:
+            return json_error("Location not found.", 404)
 
-    # Check if already running or queued for this location
-    status = await get_queue_status()
-    for item in status:
-        if item.get("location_id") == loc_id:
+        location_name = rows[0]["name"]
+        root_path = rows[0]["root_path"]
+        agent_id = rows[0]["agent_id"]
+
+        if not agent_id:
             return json_error(
-                f"'{location_name}' already has a pending operation.", 409
+                f"Location '{location_name}' has no agent assigned. "
+                "Configure your agent with this location path.",
+                400,
             )
 
-    # Resolve scan path (full location or subfolder)
-    scan_path = root_path
-    folder_name = None
-    raw_folder_id = body.get("folder_id")
-    if raw_folder_id:
-        import os
+        # Check if already running or queued for this location
+        status = await get_queue_status()
+        for item in status:
+            if item.get("location_id") == loc_id:
+                return json_error(
+                    f"'{location_name}' already has a pending operation.", 409
+                )
 
-        fld_id = int(str(raw_folder_id).replace("fld-", ""))
-        fld_rows = await db.execute_fetchall(
-            "SELECT id, name, rel_path, location_id FROM folders WHERE id = ?",
-            (fld_id,),
-        )
-        if not fld_rows:
-            return json_error("Folder not found.", 404)
-        folder = fld_rows[0]
-        if folder["location_id"] != loc_id:
-            return json_error("Folder does not belong to this location.", 400)
-        scan_path = os.path.join(root_path, folder["rel_path"])
-        folder_name = folder["name"]
+        # Resolve scan path (full location or subfolder)
+        scan_path = root_path
+        folder_name = None
+        raw_folder_id = body.get("folder_id")
+        if raw_folder_id:
+            import os
+
+            fld_id = int(str(raw_folder_id).replace("fld-", ""))
+            fld_rows = await db.execute_fetchall(
+                "SELECT id, name, rel_path, location_id FROM folders WHERE id = ?",
+                (fld_id,),
+            )
+            if not fld_rows:
+                return json_error("Folder not found.", 404)
+            folder = fld_rows[0]
+            if folder["location_id"] != loc_id:
+                return json_error("Folder does not belong to this location.", 400)
+            scan_path = os.path.join(root_path, folder["rel_path"])
+            folder_name = folder["name"]
 
     op_id = await enqueue(
         "scan_dir",
@@ -99,7 +99,6 @@ async def start_scan(request: Request):
 
 async def cancel_scan(request: Request):
     body = await request.json()
-    db = await get_db()
 
     # Cancel by queue/operation ID
     queue_id = body.get("queue_id")
@@ -121,9 +120,10 @@ async def cancel_scan(request: Request):
         return json_error("No backfill running for this location.", 400)
 
     # Resolve location name for the dequeue broadcast
-    loc_rows = await db.execute_fetchall(
-        "SELECT name FROM locations WHERE id = ?", (loc_id,)
-    )
+    async with read_db() as db:
+        loc_rows = await db.execute_fetchall(
+            "SELECT name FROM locations WHERE id = ?", (loc_id,)
+        )
     location_name = loc_rows[0]["name"] if loc_rows else ""
 
     cancelled = await cancel_by_location(loc_id)
@@ -158,21 +158,21 @@ async def start_fast_scan(request: Request):
     if is_running():
         return json_error("A fast scan is already running.")
 
-    db = await get_db()
     body = await request.json()
     raw_id = body.get("location_id", "")
     loc_id = int(str(raw_id).replace("loc-", ""))
     confirmed = bool(body.get("confirmed", False))
 
-    # Verify location exists and is local
-    rows = await db.execute_fetchall(
-        "SELECT l.id, l.name, l.root_path, l.agent_id, l.date_last_scanned, "
-        "a.name as agent_name "
-        "FROM locations l "
-        "LEFT JOIN agents a ON a.id = l.agent_id "
-        "WHERE l.id = ?",
-        (loc_id,),
-    )
+    async with read_db() as db:
+        # Verify location exists and is local
+        rows = await db.execute_fetchall(
+            "SELECT l.id, l.name, l.root_path, l.agent_id, l.date_last_scanned, "
+            "a.name as agent_name "
+            "FROM locations l "
+            "LEFT JOIN agents a ON a.id = l.agent_id "
+            "WHERE l.id = ?",
+            (loc_id,),
+        )
     if not rows:
         return json_error("Location not found.", 404)
 

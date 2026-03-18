@@ -369,6 +369,25 @@ async def open_connection() -> aiosqlite.Connection:
     return conn
 
 
+@asynccontextmanager
+async def read_db():
+    """Open a read connection, yield it, close on exit.
+
+    Each caller gets its own connection and its own aiosqlite background
+    thread. WAL mode allows unlimited concurrent readers. Connection is
+    closed automatically when the context exits.
+
+    Usage:
+        async with read_db() as db:
+            rows = await db.execute_fetchall("SELECT ...")
+    """
+    conn = await open_connection()
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
 async def _get_write_db() -> aiosqlite.Connection:
     """Lazy-init the single write connection."""
     global _write_db

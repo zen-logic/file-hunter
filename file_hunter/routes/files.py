@@ -4,7 +4,7 @@ import logging
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db, db_writer, execute_write
+from file_hunter.db import read_db, db_writer, execute_write
 from file_hunter.services.files import (
     list_files,
     get_file_detail,
@@ -22,7 +22,6 @@ logger = logging.getLogger("file_hunter")
 
 
 async def files_list(request: Request):
-    db = await get_db()
     folder_id = request.query_params.get("folder_id", "")
     if not folder_id:
         return json_error("folder_id query parameter is required.")
@@ -32,15 +31,16 @@ async def files_list(request: Request):
     filter_text = request.query_params.get("filter", "") or None
     focus_file = request.query_params.get("focusFile")
     focus_file_id = int(focus_file) if focus_file else None
-    data = await list_files(
-        db,
-        folder_id,
-        page=page,
-        sort=sort,
-        sort_dir=sort_dir,
-        filter_text=filter_text,
-        focus_file_id=focus_file_id,
-    )
+    async with read_db() as db:
+        data = await list_files(
+            db,
+            folder_id,
+            page=page,
+            sort=sort,
+            sort_dir=sort_dir,
+            filter_text=filter_text,
+            focus_file_id=focus_file_id,
+        )
     return json_ok(data)
 
 
@@ -55,27 +55,27 @@ async def file_dup_counts(request: Request):
     # Auto-detect: SHA-256 = 64 hex chars, xxHash64 = 16 hex chars
     strong = [h for h in hashes if h and len(h) == 64]
     fast = [h for h in hashes if h and len(h) == 16]
-    db = await get_db()
-    counts = await batch_dup_counts(db, strong_hashes=strong, fast_hashes=fast)
+    async with read_db() as db:
+        counts = await batch_dup_counts(db, strong_hashes=strong, fast_hashes=fast)
     return json_ok({"counts": counts})
 
 
 async def file_detail(request: Request):
-    db = await get_db()
     file_id = int(request.path_params["id"])
-    detail = await get_file_detail(db, file_id)
+    async with read_db() as db:
+        detail = await get_file_detail(db, file_id)
     if not detail:
         return json_error("File not found.", 404)
     return json_ok(detail)
 
 
 async def file_content(request: Request):
-    db = await get_db()
     file_id = int(request.path_params["id"])
-    row = await db.execute(
-        "SELECT full_path, filename, location_id FROM files WHERE id = ?", (file_id,)
-    )
-    row = await row.fetchone()
+    async with read_db() as db:
+        row = await db.execute(
+            "SELECT full_path, filename, location_id FROM files WHERE id = ?", (file_id,)
+        )
+        row = await row.fetchone()
     if not row:
         return json_error("File not found.", 404)
 
@@ -98,12 +98,12 @@ async def file_bytes(request: Request):
     """Return a slice of raw bytes from a file. For hex viewer paging."""
     from starlette.responses import Response
 
-    db = await get_db()
     file_id = int(request.path_params["id"])
-    row = await db.execute(
-        "SELECT full_path, location_id, file_size FROM files WHERE id = ?", (file_id,)
-    )
-    row = await row.fetchone()
+    async with read_db() as db:
+        row = await db.execute(
+            "SELECT full_path, location_id, file_size FROM files WHERE id = ?", (file_id,)
+        )
+        row = await row.fetchone()
     if not row:
         return json_error("File not found.", 404)
 
@@ -139,8 +139,8 @@ async def file_update(request: Request):
 
     await execute_write(update_file, file_id, description=description, tags=tags)
 
-    db = await get_db()
-    detail = await get_file_detail(db, file_id)
+    async with read_db() as db:
+        detail = await get_file_detail(db, file_id)
     if not detail:
         return json_error("File not found.", 404)
     return json_ok(detail)
@@ -210,24 +210,24 @@ async def file_delete(request: Request):
 async def file_verify(request: Request):
     """POST /api/files/{id:int}/verify — compute SHA-256 for duplicate verification."""
     file_id = int(request.path_params["id"])
-    db = await get_db()
 
-    row = await db.execute_fetchall(
-        """SELECT f.id, f.filename, f.full_path, f.location_id,
-                  f.hash_fast, f.hash_strong, l.root_path
-           FROM files f
-           JOIN locations l ON l.id = f.location_id
-           WHERE f.id = ?""",
-        (file_id,),
-    )
-    if not row:
-        return json_error("File not found.", 404)
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            """SELECT f.id, f.filename, f.full_path, f.location_id,
+                      f.hash_fast, f.hash_strong, l.root_path
+               FROM files f
+               JOIN locations l ON l.id = f.location_id
+               WHERE f.id = ?""",
+            (file_id,),
+        )
+        if not row:
+            return json_error("File not found.", 404)
 
-    f = row[0]
-    if f["hash_strong"]:
-        # Already verified — just return detail
-        detail = await get_file_detail(db, file_id)
-        return json_ok(detail)
+        f = row[0]
+        if f["hash_strong"]:
+            # Already verified — just return detail
+            detail = await get_file_detail(db, file_id)
+            return json_ok(detail)
 
     from file_hunter.services import fs
 
@@ -288,7 +288,8 @@ async def file_verify(request: Request):
         }
     )
 
-    detail = await get_file_detail(db, file_id)
+    async with read_db() as db:
+        detail = await get_file_detail(db, file_id)
     return json_ok(detail)
 
 
@@ -296,35 +297,35 @@ async def folder_download(request: Request):
     """GET /api/folders/{id:int}/download — download folder as ZIP."""
     from file_hunter.services.batch import build_streaming_zip
 
-    db = await get_db()
     folder_id = int(request.path_params["id"])
 
-    row = await db.execute_fetchall(
-        """SELECT f.name, f.rel_path, f.location_id
-           FROM folders f WHERE f.id = ?""",
-        (folder_id,),
-    )
-    if not row:
-        return json_error("Folder not found.", 404)
-    folder_name = row[0]["name"]
-    folder_rel = row[0]["rel_path"]
-    location_id = row[0]["location_id"]
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            """SELECT f.name, f.rel_path, f.location_id
+               FROM folders f WHERE f.id = ?""",
+            (folder_id,),
+        )
+        if not row:
+            return json_error("Folder not found.", 404)
+        folder_name = row[0]["name"]
+        folder_rel = row[0]["rel_path"]
+        location_id = row[0]["location_id"]
 
-    desc_rows = await db.execute_fetchall(
-        """WITH RECURSIVE desc(id) AS (
-               SELECT ? UNION ALL
-               SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
-           )
-           SELECT id FROM desc""",
-        (folder_id,),
-    )
-    desc_ids = [r["id"] for r in desc_rows]
+        desc_rows = await db.execute_fetchall(
+            """WITH RECURSIVE desc(id) AS (
+                   SELECT ? UNION ALL
+                   SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
+               )
+               SELECT id FROM desc""",
+            (folder_id,),
+        )
+        desc_ids = [r["id"] for r in desc_rows]
 
-    placeholders = ",".join("?" * len(desc_ids))
-    files = await db.execute_fetchall(
-        f"SELECT full_path, rel_path FROM files WHERE folder_id IN ({placeholders})",
-        desc_ids,
-    )
+        placeholders = ",".join("?" * len(desc_ids))
+        files = await db.execute_fetchall(
+            f"SELECT full_path, rel_path FROM files WHERE folder_id IN ({placeholders})",
+            desc_ids,
+        )
 
     prefix = folder_rel + "/" if folder_rel else ""
     zip_files = []
@@ -341,19 +342,19 @@ async def location_download(request: Request):
     """GET /api/locations/{id:int}/download — download entire location as ZIP."""
     from file_hunter.services.batch import build_streaming_zip
 
-    db = await get_db()
     loc_id = int(request.path_params["id"])
 
-    row = await db.execute_fetchall(
-        "SELECT name FROM locations WHERE id = ?", (loc_id,)
-    )
-    if not row:
-        return json_error("Location not found.", 404)
-    loc_name = row[0]["name"]
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT name FROM locations WHERE id = ?", (loc_id,)
+        )
+        if not row:
+            return json_error("Location not found.", 404)
+        loc_name = row[0]["name"]
 
-    files = await db.execute_fetchall(
-        "SELECT full_path, rel_path FROM files WHERE location_id = ?", (loc_id,)
-    )
+        files = await db.execute_fetchall(
+            "SELECT full_path, rel_path FROM files WHERE location_id = ?", (loc_id,)
+        )
 
     zip_files = [(f["full_path"], f["rel_path"], loc_id) for f in files]
     return await build_streaming_zip(zip_files, f"{loc_name}.zip")
@@ -418,10 +419,10 @@ async def file_cancel_pending(request: Request):
     """POST /api/files/{id:int}/cancel-pending — cancel a deferred operation."""
     file_id = int(request.path_params["id"])
 
-    db = await get_db()
-    row = await db.execute_fetchall(
-        "SELECT id, pending_op, filename FROM files WHERE id = ?", (file_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT id, pending_op, filename FROM files WHERE id = ?", (file_id,)
+        )
     if not row:
         return json_error("File not found.", 404)
     if not row[0]["pending_op"]:
@@ -451,36 +452,35 @@ async def folder_dup_exclude(request: Request):
     if is_running():
         return json_error("A duplicate exclusion operation is already running.")
 
-    db = await get_db()
-
-    row = await db.execute_fetchall(
-        "SELECT name FROM folders WHERE id = ?", (folder_id,)
-    )
-    if not row:
-        return json_error("Folder not found.", 404)
-    folder_name = row[0]["name"]
-
-    # Recursive CTE to count affected folders and files
-    desc_rows = await db.execute_fetchall(
-        """WITH RECURSIVE descendants(id) AS (
-               SELECT ?
-               UNION ALL
-               SELECT fo.id FROM folders fo JOIN descendants d ON fo.parent_id = d.id
-           )
-           SELECT id FROM descendants""",
-        (folder_id,),
-    )
-    folder_count = len(desc_rows)
-
-    # Get file count from stored folder counters (O(1), no aggregate query)
-    folder_ids = [r["id"] for r in desc_rows]
-    file_count = 0
-    for fid in folder_ids:
-        fc_row = await db.execute_fetchall(
-            "SELECT file_count FROM folders WHERE id = ?", (fid,)
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT name FROM folders WHERE id = ?", (folder_id,)
         )
-        if fc_row and fc_row[0]["file_count"]:
-            file_count += fc_row[0]["file_count"]
+        if not row:
+            return json_error("Folder not found.", 404)
+        folder_name = row[0]["name"]
+
+        # Recursive CTE to count affected folders and files
+        desc_rows = await db.execute_fetchall(
+            """WITH RECURSIVE descendants(id) AS (
+                   SELECT ?
+                   UNION ALL
+                   SELECT fo.id FROM folders fo JOIN descendants d ON fo.parent_id = d.id
+               )
+               SELECT id FROM descendants""",
+            (folder_id,),
+        )
+        folder_count = len(desc_rows)
+
+        # Get file count from stored folder counters (O(1), no aggregate query)
+        folder_ids = [r["id"] for r in desc_rows]
+        file_count = 0
+        for fid in folder_ids:
+            fc_row = await db.execute_fetchall(
+                "SELECT file_count FROM folders WHERE id = ?", (fid,)
+            )
+            if fc_row and fc_row[0]["file_count"]:
+                file_count += fc_row[0]["file_count"]
 
     if not confirmed:
         # Return counts for confirmation dialog

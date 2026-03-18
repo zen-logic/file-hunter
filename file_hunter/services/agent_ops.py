@@ -8,7 +8,7 @@ import logging
 
 import httpx
 
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 
 logger = logging.getLogger("file_hunter")
 
@@ -42,10 +42,10 @@ async def _get_agent_id(location_id: int) -> int:
     if location_id in _loc_agent_cache:
         return _loc_agent_cache[location_id]
 
-    db = await get_db()
-    row = await db.execute_fetchall(
-        "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
+        )
     if not row or not row[0]["agent_id"]:
         raise ValueError(f"Location {location_id} has no agent_id")
     agent_id = row[0]["agent_id"]

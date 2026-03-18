@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -53,14 +53,14 @@ async def drain_pending_ops(location_id: int, root_path: str):
     """Execute pending file ops for a location that's now online.
 
     Called from _sync_agent_locations when an agent reconnects.
-    Reads via get_db(), writes via db_writer().
+    Reads via read_db(), writes via db_writer().
     """
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT id, op_type, file_id, params FROM pending_file_ops "
-        "WHERE location_id = ? AND status = 'pending'",
-        (location_id,),
-    )
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT id, op_type, file_id, params FROM pending_file_ops "
+            "WHERE location_id = ? AND status = 'pending'",
+            (location_id,),
+        )
 
     if not rows:
         return
@@ -82,11 +82,12 @@ async def drain_pending_ops(location_id: int, root_path: str):
 
         try:
             # Re-read file — it may have been cancelled or changed
-            file_row = await db.execute_fetchall(
-                "SELECT id, full_path, filename, hash_fast, hash_strong, "
-                "location_id, pending_op FROM files WHERE id = ?",
-                (file_id,),
-            )
+            async with read_db() as db:
+                file_row = await db.execute_fetchall(
+                    "SELECT id, full_path, filename, hash_fast, hash_strong, "
+                    "location_id, pending_op FROM files WHERE id = ?",
+                    (file_id,),
+                )
             if not file_row:
                 # File no longer exists — mark op completed
                 async with db_writer() as wdb:

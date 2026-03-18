@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -34,8 +34,6 @@ async def run_upload(
     )
 
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db = await get_db()
-
     for i, sf in enumerate(saved_files):
         try:
             hash_fast, hash_strong = await fs.file_hash(
@@ -43,13 +41,14 @@ async def run_upload(
             )
 
             # Check for existing file with same strong hash (read)
-            rows = await db.execute_fetchall(
-                """SELECT f.id, f.filename, f.full_path, l.name as location_name
-                   FROM files f
-                   JOIN locations l ON l.id = f.location_id
-                   WHERE f.hash_strong = ? LIMIT 1""",
-                (hash_strong,),
-            )
+            async with read_db() as db:
+                rows = await db.execute_fetchall(
+                    """SELECT f.id, f.filename, f.full_path, l.name as location_name
+                       FROM files f
+                       JOIN locations l ON l.id = f.location_id
+                       WHERE f.hash_strong = ? LIMIT 1""",
+                    (hash_strong,),
+                )
 
             if rows:
                 # Duplicate — remove uploaded file, write .moved stub

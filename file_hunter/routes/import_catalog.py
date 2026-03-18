@@ -7,7 +7,7 @@ import tempfile
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.services.import_catalog import (
     get_progress,
     read_catalog_meta,
@@ -40,13 +40,13 @@ async def import_catalog_upload(request: Request):
             return json_error("Invalid catalog file")
 
         # Fetch available agents and locations for the UI
-        db = await get_db()
-        agents = await db.execute_fetchall(
-            "SELECT id, name, status FROM agents ORDER BY id"
-        )
-        locations = await db.execute_fetchall(
-            "SELECT id, name, root_path, agent_id FROM locations ORDER BY name"
-        )
+        async with read_db() as db:
+            agents = await db.execute_fetchall(
+                "SELECT id, name, status FROM agents ORDER BY id"
+            )
+            locations = await db.execute_fetchall(
+                "SELECT id, name, root_path, agent_id FROM locations ORDER BY name"
+            )
 
         return json_ok(
             {
@@ -91,11 +91,11 @@ async def import_catalog_run(request: Request):
 
     if location_id:
         # Use existing location
-        db = await get_db()
-        rows = await db.execute_fetchall(
-            "SELECT id, name, root_path, agent_id FROM locations WHERE id = ?",
-            (location_id,),
-        )
+        async with read_db() as db:
+            rows = await db.execute_fetchall(
+                "SELECT id, name, root_path, agent_id FROM locations WHERE id = ?",
+                (location_id,),
+            )
         row = rows[0] if rows else None
         if not row:
             return json_error("Location not found")

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 
 logger = logging.getLogger("file_hunter")
 
@@ -70,24 +70,23 @@ async def cancel(op_id: int) -> bool:
 
 async def cancel_by_location(location_id: int) -> bool:
     """Cancel a running or pending operation for a location. Returns True if found."""
-    db = await get_db()
+    async with read_db() as db:
+        # Check running ops first
+        for op_id, (_, task) in list(_running_ops.items()):
+            row = await db.execute_fetchall(
+                "SELECT params FROM operation_queue WHERE id = ?", (op_id,)
+            )
+            if row:
+                params = json.loads(row[0]["params"] or "{}")
+                if params.get("location_id") == location_id:
+                    task.cancel()
+                    # broadcast happens when _reap_finished picks up the CancelledError
+                    return True
 
-    # Check running ops first
-    for op_id, (_, task) in list(_running_ops.items()):
-        row = await db.execute_fetchall(
-            "SELECT params FROM operation_queue WHERE id = ?", (op_id,)
+        # Check pending ops
+        rows = await db.execute_fetchall(
+            "SELECT id, params FROM operation_queue WHERE status = 'pending' ORDER BY id"
         )
-        if row:
-            params = json.loads(row[0]["params"] or "{}")
-            if params.get("location_id") == location_id:
-                task.cancel()
-                # broadcast happens when _reap_finished picks up the CancelledError
-                return True
-
-    # Check pending ops
-    rows = await db.execute_fetchall(
-        "SELECT id, params FROM operation_queue WHERE status = 'pending' ORDER BY id"
-    )
     for row in rows:
         params = json.loads(row["params"] or "{}")
         if params.get("location_id") == location_id:
@@ -105,44 +104,44 @@ async def cancel_by_location(location_id: int) -> bool:
 
 async def get_pending_count(agent_id: int | None = None) -> int:
     """Return count of pending operations, optionally filtered by agent."""
-    db = await get_db()
-    if agent_id is not None:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM operation_queue "
-            "WHERE status = 'pending' AND agent_id = ?",
-            (agent_id,),
-        )
-    else:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM operation_queue WHERE status = 'pending'"
-        )
-    row = await cursor.fetchone()
+    async with read_db() as db:
+        if agent_id is not None:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM operation_queue "
+                "WHERE status = 'pending' AND agent_id = ?",
+                (agent_id,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM operation_queue WHERE status = 'pending'"
+            )
+        row = await cursor.fetchone()
     return row[0]
 
 
 async def get_queue_status() -> list[dict]:
     """Return pending and running operations for UI display."""
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT o.id, o.type, o.status, o.agent_id, o.params, "
-        "o.created_at, o.started_at "
-        "FROM operation_queue o "
-        "WHERE o.status IN ('pending', 'running') "
-        "ORDER BY o.id"
-    )
-    results = []
-    for r in rows:
-        item = dict(r)
-        params = json.loads(item.get("params") or "{}")
-        item["params"] = params
-        loc_id = params.get("location_id")
-        if loc_id:
-            loc_row = await db.execute_fetchall(
-                "SELECT name FROM locations WHERE id = ?", (loc_id,)
-            )
-            item["location_id"] = loc_id
-            item["location_name"] = loc_row[0]["name"] if loc_row else None
-        results.append(item)
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT o.id, o.type, o.status, o.agent_id, o.params, "
+            "o.created_at, o.started_at "
+            "FROM operation_queue o "
+            "WHERE o.status IN ('pending', 'running') "
+            "ORDER BY o.id"
+        )
+        results = []
+        for r in rows:
+            item = dict(r)
+            params = json.loads(item.get("params") or "{}")
+            item["params"] = params
+            loc_id = params.get("location_id")
+            if loc_id:
+                loc_row = await db.execute_fetchall(
+                    "SELECT name FROM locations WHERE id = ?", (loc_id,)
+                )
+                item["location_id"] = loc_id
+                item["location_name"] = loc_row[0]["name"] if loc_row else None
+            results.append(item)
     return results
 
 
@@ -369,10 +368,10 @@ async def _reap_finished():
         del _running_ops[op_id]
 
         # Untrack location
-        db = await get_db()
-        row = await db.execute_fetchall(
-            "SELECT params FROM operation_queue WHERE id = ?", (op_id,)
-        )
+        async with read_db() as db:
+            row = await db.execute_fetchall(
+                "SELECT params FROM operation_queue WHERE id = ?", (op_id,)
+            )
         if row:
             loc_id = json.loads(row[0]["params"] or "{}").get("location_id")
             _untrack_location(loc_id)
@@ -405,12 +404,12 @@ async def _next_pending_ops(busy_agents: set) -> list[dict]:
 
     online_agents = set(get_online_agent_ids())
 
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT id, type, status, agent_id, params "
-        "FROM operation_queue WHERE status = 'pending' "
-        "ORDER BY id"
-    )
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT id, type, status, agent_id, params "
+            "FROM operation_queue WHERE status = 'pending' "
+            "ORDER BY id"
+        )
     result = []
     seen_agents: set[int | None] = set()
     for row in rows:

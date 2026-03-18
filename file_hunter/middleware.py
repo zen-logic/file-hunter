@@ -1,6 +1,6 @@
 from urllib.parse import parse_qs
 from starlette.responses import JSONResponse
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.services.auth import validate_session
 from file_hunter.extensions import get_public_ws_paths
 
@@ -50,8 +50,8 @@ class AuthMiddleware:
                 await response(scope, receive, send)
                 return
 
-            db = await get_db()
-            user = await validate_session(db, token)
+            async with read_db() as db:
+                user = await validate_session(db, token)
             if not user:
                 response = JSONResponse(
                     {"ok": False, "error": "Invalid or expired session."},
@@ -79,8 +79,8 @@ class AuthMiddleware:
                 await self._reject_ws(scope, receive, send, 4001)
                 return
 
-            db = await get_db()
-            user = await validate_session(db, token)
+            async with read_db() as db:
+                user = await validate_session(db, token)
             if not user:
                 await self._reject_ws(scope, receive, send, 4001)
                 return

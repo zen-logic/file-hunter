@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import httpx
 from starlette.responses import StreamingResponse
 
-from file_hunter.db import get_db
+from file_hunter.db import read_db
 from file_hunter.services.agent_ops import _resolve_agent
 
 logger = logging.getLogger("file_hunter")
@@ -55,10 +55,10 @@ async def fetch_agent_bytes(full_path, location_id):
 
     Returns bytes if successful, None if not an agent location or offline.
     """
-    db = await get_db()
-    row = await db.execute_fetchall(
-        "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
+        )
     if not row or not row[0]["agent_id"]:
         return None
 
@@ -91,10 +91,10 @@ async def fetch_agent_byte_range(full_path, location_id, offset, length):
 
     Returns bytes if successful, None if not an agent location or offline.
     """
-    db = await get_db()
-    row = await db.execute_fetchall(
-        "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
+        )
     if not row or not row[0]["agent_id"]:
         return None
 
@@ -133,14 +133,13 @@ async def proxy_agent_content(file_id, full_path, filename, request_headers=None
     or None if not an agent file or agent is offline.
     Supports Range requests for video/audio streaming.
     """
-    db = await get_db()
-
-    row = await db.execute_fetchall(
-        """SELECT l.agent_id FROM files f
-           JOIN locations l ON l.id = f.location_id
-           WHERE f.id = ?""",
-        (file_id,),
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            """SELECT l.agent_id FROM files f
+               JOIN locations l ON l.id = f.location_id
+               WHERE f.id = ?""",
+            (file_id,),
+        )
     if not row or not row[0]["agent_id"]:
         return None
 
@@ -218,10 +217,10 @@ async def stream_agent_file(full_path, location_id):
                 async for chunk in chunks:
                     ...
     """
-    db = await get_db()
-    row = await db.execute_fetchall(
-        "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
+        )
     if not row or not row[0]["agent_id"]:
         yield None
         return

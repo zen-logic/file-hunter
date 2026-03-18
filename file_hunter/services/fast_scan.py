@@ -55,11 +55,11 @@ async def restore_pending():
     interrupted, re-runs just the post-processing (recount + sizes).
     The file data is already committed — only counts need fixing.
     """
-    from file_hunter.db import db_writer, get_db
+    from file_hunter.db import db_writer, read_db
     from file_hunter.services.settings import get_setting
 
-    db = await get_db()
-    pending = await get_setting(db, "fast_scan_pending")
+    async with read_db() as db:
+        pending = await get_setting(db, "fast_scan_pending")
     if not pending:
         return
 
@@ -71,9 +71,10 @@ async def restore_pending():
             await wdb.execute("DELETE FROM settings WHERE key = 'fast_scan_pending'")
         return
 
-    row = await db.execute_fetchall(
-        "SELECT name, root_path FROM locations WHERE id = ?", (location_id,)
-    )
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT name, root_path FROM locations WHERE id = ?", (location_id,)
+        )
     if not row:
         log.warning("fast_scan_pending location %d not found, clearing", location_id)
         async with db_writer() as wdb:

@@ -1,15 +1,15 @@
 from starlette.requests import Request
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import read_db, execute_write
 from file_hunter.services import auth as auth_svc
 
 
 async def auth_status(request: Request):
-    db = await get_db()
-    count = await auth_svc.user_count(db)
-    from file_hunter.services.settings import get_setting
+    async with read_db() as db:
+        count = await auth_svc.user_count(db)
+        from file_hunter.services.settings import get_setting
 
-    server_name = await get_setting(db, "serverName") or ""
+        server_name = await get_setting(db, "serverName") or ""
     return json_ok({"needsSetup": count == 0, "serverName": server_name})
 
 
@@ -22,8 +22,8 @@ async def auth_setup(request: Request):
     if not username or not password:
         return json_error("Username and password are required.")
 
-    db = await get_db()
-    count = await auth_svc.user_count(db)
+    async with read_db() as db:
+        count = await auth_svc.user_count(db)
     if count > 0:
         return json_error("Setup already completed.", status=403)
 
@@ -44,8 +44,8 @@ async def auth_login(request: Request):
     if not username or not password:
         return json_error("Username and password are required.")
 
-    db = await get_db()
-    user = await auth_svc.authenticate(db, username, password)
+    async with read_db() as db:
+        user = await auth_svc.authenticate(db, username, password)
     if not user:
         return json_error("Invalid username or password.", status=401)
 
@@ -78,8 +78,8 @@ async def auth_me(request: Request):
 
 
 async def list_users(request: Request):
-    db = await get_db()
-    users = await auth_svc.get_users(db)
+    async with read_db() as db:
+        users = await auth_svc.get_users(db)
     return json_ok(users)
 
 

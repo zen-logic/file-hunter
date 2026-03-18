@@ -13,7 +13,7 @@ import asyncio
 import logging
 from collections import defaultdict
 
-from file_hunter.db import db_writer, get_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
 
@@ -484,26 +484,26 @@ async def _dup_recalc_writer():
             )
 
             # Update stored duplicate_count for affected locations
-            db = await get_db()
             affected: set[int] = set(merged_location_ids)
 
-            if merged_strong:
-                h_list = list(merged_strong)
-                h_ph = ",".join("?" for _ in h_list)
-                rows = await db.execute_fetchall(
-                    f"SELECT DISTINCT location_id FROM files WHERE hash_strong IN ({h_ph})",
-                    h_list,
-                )
-                affected |= {r["location_id"] for r in rows}
+            async with read_db() as db:
+                if merged_strong:
+                    h_list = list(merged_strong)
+                    h_ph = ",".join("?" for _ in h_list)
+                    rows = await db.execute_fetchall(
+                        f"SELECT DISTINCT location_id FROM files WHERE hash_strong IN ({h_ph})",
+                        h_list,
+                    )
+                    affected |= {r["location_id"] for r in rows}
 
-            if merged_fast:
-                h_list = list(merged_fast)
-                h_ph = ",".join("?" for _ in h_list)
-                rows = await db.execute_fetchall(
-                    f"SELECT DISTINCT location_id FROM files WHERE hash_fast IN ({h_ph})",
-                    h_list,
-                )
-                affected |= {r["location_id"] for r in rows}
+                if merged_fast:
+                    h_list = list(merged_fast)
+                    h_ph = ",".join("?" for _ in h_list)
+                    rows = await db.execute_fetchall(
+                        f"SELECT DISTINCT location_id FROM files WHERE hash_fast IN ({h_ph})",
+                        h_list,
+                    )
+                    affected |= {r["location_id"] for r in rows}
 
             await update_location_dup_counts(affected)
 
@@ -519,7 +519,7 @@ async def find_dup_candidates(
     """Find files needing hash_fast that are in duplicate (hash_partial, file_size) groups.
 
     Single GROUP BY query on a dedicated connection — replaces the old
-    3-step batched approach.  Never uses get_db().
+    3-step batched approach.  Never uses read_db().
 
     location_id: when set, only returns candidates from dup groups that
     involve at least one file in this location.  None = all dup groups
@@ -775,80 +775,28 @@ async def recalculate_dup_counts(
 async def backfill_dup_counts():
     """Backfill dup_count for all files on startup.
 
-    Reads via get_db(), writes via db_writer() (inside _batched_recalc).
+    Reads via read_db(), writes via db_writer() (inside _batched_recalc).
     Skips if no files have stale dup_counts (quick consistency check).
     Checks both hash_strong and hash_fast groupings.
     """
-    db = await get_db()
     try:
-        # Quick check: any file with dup_count=0 that actually has duplicates?
-        # Check hash_strong grouping
-        stale_strong_check = await db.execute_fetchall(
-            """SELECT 1 FROM files f
-               WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                 AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
-                 AND EXISTS (
-                     SELECT 1 FROM files f2
-                     WHERE f2.hash_strong = f.hash_strong
-                       AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
-                 )
-               LIMIT 1"""
-        )
-        # Check hash_fast grouping (files without hash_strong)
-        stale_fast_check = await db.execute_fetchall(
-            """SELECT 1 FROM files f
-               WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
-                 AND f.hash_strong IS NULL
-                 AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
-                 AND EXISTS (
-                     SELECT 1 FROM files f2
-                     WHERE f2.hash_fast = f.hash_fast
-                       AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
-                 )
-               LIMIT 1"""
-        )
-
-        if not stale_strong_check and not stale_fast_check:
-            log.info("dup_count backfill: counts consistent, skipping")
-            await broadcast({"type": "dup_backfill_completed", "skipped": True})
-            return
-
-        # Collect stale hash_strong values
-        strong_hashes: set[str] = set()
-        if stale_strong_check:
-            rows = await db.execute_fetchall(
-                """SELECT DISTINCT f.hash_strong
-                   FROM files f
+        async with read_db() as db:
+            # Quick check: any file with dup_count=0 that actually has duplicates?
+            # Check hash_strong grouping
+            stale_strong_check = await db.execute_fetchall(
+                """SELECT 1 FROM files f
                    WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
                      AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
                      AND EXISTS (
                          SELECT 1 FROM files f2
                          WHERE f2.hash_strong = f.hash_strong
                            AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
-                     )"""
+                     )
+                   LIMIT 1"""
             )
-            strong_hashes = {r["hash_strong"] for r in rows}
-
-            # Also find false positives for hash_strong
-            fp_rows = await db.execute_fetchall(
-                """SELECT DISTINCT f.hash_strong
-                   FROM files f
-                   WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
-                     AND f.dup_count > 0 AND f.stale = 0 AND f.dup_exclude = 0
-                     AND NOT EXISTS (
-                         SELECT 1 FROM files f2
-                         WHERE f2.hash_strong = f.hash_strong
-                           AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
-                     )"""
-            )
-            strong_hashes |= {r["hash_strong"] for r in fp_rows}
-
-        # Collect stale hash_fast values (files without hash_strong)
-        fast_hashes: set[str] = set()
-        if stale_fast_check:
-            rows = await db.execute_fetchall(
-                """SELECT DISTINCT f.hash_fast
-                   FROM files f
+            # Check hash_fast grouping (files without hash_strong)
+            stale_fast_check = await db.execute_fetchall(
+                """SELECT 1 FROM files f
                    WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
                      AND f.hash_strong IS NULL
                      AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
@@ -856,24 +804,76 @@ async def backfill_dup_counts():
                          SELECT 1 FROM files f2
                          WHERE f2.hash_fast = f.hash_fast
                            AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
-                     )"""
+                     )
+                   LIMIT 1"""
             )
-            fast_hashes = {r["hash_fast"] for r in rows}
 
-            # Also find false positives for hash_fast
-            fp_rows = await db.execute_fetchall(
-                """SELECT DISTINCT f.hash_fast
-                   FROM files f
-                   WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
-                     AND f.hash_strong IS NULL
-                     AND f.dup_count > 0 AND f.stale = 0 AND f.dup_exclude = 0
-                     AND NOT EXISTS (
-                         SELECT 1 FROM files f2
-                         WHERE f2.hash_fast = f.hash_fast
-                           AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
-                     )"""
-            )
-            fast_hashes |= {r["hash_fast"] for r in fp_rows}
+            if not stale_strong_check and not stale_fast_check:
+                log.info("dup_count backfill: counts consistent, skipping")
+                await broadcast({"type": "dup_backfill_completed", "skipped": True})
+                return
+
+            # Collect stale hash_strong values
+            strong_hashes: set[str] = set()
+            if stale_strong_check:
+                rows = await db.execute_fetchall(
+                    """SELECT DISTINCT f.hash_strong
+                       FROM files f
+                       WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
+                         AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                         AND EXISTS (
+                             SELECT 1 FROM files f2
+                             WHERE f2.hash_strong = f.hash_strong
+                               AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
+                         )"""
+                )
+                strong_hashes = {r["hash_strong"] for r in rows}
+
+                # Also find false positives for hash_strong
+                fp_rows = await db.execute_fetchall(
+                    """SELECT DISTINCT f.hash_strong
+                       FROM files f
+                       WHERE f.hash_strong IS NOT NULL AND f.hash_strong != ''
+                         AND f.dup_count > 0 AND f.stale = 0 AND f.dup_exclude = 0
+                         AND NOT EXISTS (
+                             SELECT 1 FROM files f2
+                             WHERE f2.hash_strong = f.hash_strong
+                               AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
+                         )"""
+                )
+                strong_hashes |= {r["hash_strong"] for r in fp_rows}
+
+            # Collect stale hash_fast values (files without hash_strong)
+            fast_hashes: set[str] = set()
+            if stale_fast_check:
+                rows = await db.execute_fetchall(
+                    """SELECT DISTINCT f.hash_fast
+                       FROM files f
+                       WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
+                         AND f.hash_strong IS NULL
+                         AND f.stale = 0 AND f.dup_exclude = 0 AND f.dup_count = 0
+                         AND EXISTS (
+                             SELECT 1 FROM files f2
+                             WHERE f2.hash_fast = f.hash_fast
+                               AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
+                         )"""
+                )
+                fast_hashes = {r["hash_fast"] for r in rows}
+
+                # Also find false positives for hash_fast
+                fp_rows = await db.execute_fetchall(
+                    """SELECT DISTINCT f.hash_fast
+                       FROM files f
+                       WHERE f.hash_fast IS NOT NULL AND f.hash_fast != ''
+                         AND f.hash_strong IS NULL
+                         AND f.dup_count > 0 AND f.stale = 0 AND f.dup_exclude = 0
+                         AND NOT EXISTS (
+                             SELECT 1 FROM files f2
+                             WHERE f2.hash_fast = f.hash_fast
+                               AND f2.id != f.id AND f2.stale = 0 AND f2.dup_exclude = 0
+                         )"""
+                )
+                fast_hashes |= {r["hash_fast"] for r in fp_rows}
 
         total_hashes = len(strong_hashes) + len(fast_hashes)
         if total_hashes == 0:
@@ -954,7 +954,7 @@ async def hash_candidates_for_location(
     """
     import asyncio
 
-    from file_hunter.db import db_writer, get_db
+    from file_hunter.db import db_writer, read_db
     from file_hunter.services.agent_ops import dispatch
 
     candidates = await find_dup_candidates(location_id=location_id)
@@ -966,11 +966,11 @@ async def hash_candidates_for_location(
     )
 
     # Filter to files on this agent's locations only
-    db = await get_db()
-    agent_loc_rows = await db.execute_fetchall(
-        "SELECT id FROM locations WHERE agent_id = ?",
-        (agent_id,),
-    )
+    async with read_db() as db:
+        agent_loc_rows = await db.execute_fetchall(
+            "SELECT id FROM locations WHERE agent_id = ?",
+            (agent_id,),
+        )
     agent_loc_ids = {r["id"] for r in agent_loc_rows}
     candidates = [c for c in candidates if c["location_id"] in agent_loc_ids]
 

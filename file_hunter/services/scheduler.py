@@ -11,7 +11,7 @@ triggering the appropriate agent.
 import asyncio
 from datetime import datetime
 
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import read_db, execute_write
 
 
 async def start_scheduler():
@@ -30,16 +30,16 @@ async def _scheduler_loop():
 
 
 async def _check_schedules():
-    db = await get_db()
     now = datetime.now()
     current_day = now.weekday()  # 0=Mon
     current_time = now.strftime("%H:%M")
 
-    rows = await db.execute_fetchall(
-        "SELECT id, name, root_path, scan_schedule_days, scan_schedule_time, "
-        "scan_schedule_last_run "
-        "FROM locations WHERE scan_schedule_enabled = 1"
-    )
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT id, name, root_path, scan_schedule_days, scan_schedule_time, "
+            "scan_schedule_last_run "
+            "FROM locations WHERE scan_schedule_enabled = 1"
+        )
 
     for row in rows:
         days_str = row["scan_schedule_days"]
@@ -54,9 +54,10 @@ async def _check_schedules():
             continue
 
         try:
-            loc_row = await db.execute_fetchall(
-                "SELECT agent_id FROM locations WHERE id = ?", (row["id"],)
-            )
+            async with read_db() as db:
+                loc_row = await db.execute_fetchall(
+                    "SELECT agent_id FROM locations WHERE id = ?", (row["id"],)
+                )
             agent_id = loc_row[0]["agent_id"] if loc_row else None
             if not agent_id:
                 continue

@@ -1,14 +1,14 @@
 from starlette.requests import Request
 from file_hunter.core import json_ok
-from file_hunter.db import get_db, execute_write
+from file_hunter.db import read_db, execute_write
 from file_hunter.services import settings as settings_svc
 from file_hunter.ws.scan import broadcast
 from file_hunter import __version__
 
 
 async def get_settings(request: Request):
-    db = await get_db()
-    all_settings = await settings_svc.get_all_settings(db)
+    async with read_db() as db:
+        all_settings = await settings_svc.get_all_settings(db)
     return json_ok(all_settings)
 
 
@@ -57,7 +57,7 @@ async def update_settings(request: Request):
 
     await execute_write(_update, body)
 
-    db = await get_db()
-    all_settings = await settings_svc.get_all_settings(db)
+    async with read_db() as db:
+        all_settings = await settings_svc.get_all_settings(db)
     await broadcast({"type": "settings_changed", "settings": all_settings})
     return json_ok(all_settings)
