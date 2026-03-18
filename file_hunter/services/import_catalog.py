@@ -195,11 +195,24 @@ async def run_import(
                     "file_type_low=excluded.file_type_low, "
                     "file_size=excluded.file_size, "
                     "hash_partial=excluded.hash_partial, "
-                    "hash_fast=COALESCE(excluded.hash_fast, hash_fast), "
                     "created_date=excluded.created_date, "
                     "modified_date=excluded.modified_date, "
                     "date_last_seen=excluded.date_last_seen, "
-                    "hidden=excluded.hidden",
+                    "hidden=excluded.hidden, "
+                    # File unchanged (same size + mtime): preserve hashes, description, tags
+                    # File changed: clear computed hashes, preserve user metadata
+                    "hash_fast=CASE "
+                    "  WHEN excluded.file_size = files.file_size "
+                    "    AND excluded.modified_date = files.modified_date "
+                    "  THEN COALESCE(hash_fast, excluded.hash_fast) "
+                    "  ELSE excluded.hash_fast END, "
+                    "hash_strong=CASE "
+                    "  WHEN excluded.file_size = files.file_size "
+                    "    AND excluded.modified_date = files.modified_date "
+                    "  THEN hash_strong "
+                    "  ELSE NULL END, "
+                    "description=COALESCE(description, ''), "
+                    "tags=COALESCE(tags, '')",
                     batch,
                 )
 
