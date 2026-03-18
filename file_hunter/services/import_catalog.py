@@ -17,6 +17,7 @@ logger = logging.getLogger("file_hunter")
 _progress = ProgressTracker(
     files_total=0,
     files_imported=0,
+    files_new=0,
     folders_created=0,
     dup_hashes_done=0,
     dup_hashes_total=0,
@@ -68,6 +69,7 @@ async def run_import(
         status="running",
         files_total=0,
         files_imported=0,
+        files_new=0,
         folders_created=0,
         dup_hashes_done=0,
         dup_hashes_total=0,
@@ -81,6 +83,14 @@ async def run_import(
         _progress["files_total"] = cat.execute("SELECT COUNT(*) FROM files").fetchone()[
             0
         ]
+
+        # Count existing files so we can report new vs updated
+        db = await get_db()
+        before_count_rows = await db.execute_fetchall(
+            "SELECT COUNT(*) as c FROM files WHERE location_id = ?",
+            (location_id,),
+        )
+        files_before = before_count_rows[0]["c"]
 
         # --- Import folders ---
         cat_folders = cat.execute(
@@ -220,6 +230,14 @@ async def run_import(
             offset += BATCH_SIZE
 
         cat.close()
+
+        # Count new files
+        after_count_rows = await db.execute_fetchall(
+            "SELECT COUNT(*) as c FROM files WHERE location_id = ?",
+            (location_id,),
+        )
+        files_after = after_count_rows[0]["c"]
+        _progress["files_new"] = files_after - files_before
 
         # --- Recalculate location sizes ---
         _progress["status"] = "recalculating"
