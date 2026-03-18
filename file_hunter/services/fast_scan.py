@@ -380,6 +380,9 @@ async def run_fast_scan(location_id: int, root_path: str, location_name: str):
                 "location": location_name,
                 "locationId": location_id,
                 "fileCount": _progress["files_found"],
+                "filesFound": _progress["files_found"],
+                "filesHashed": _progress["files_hashed"],
+                "duplicatesFound": 0,
             }
         )
 
