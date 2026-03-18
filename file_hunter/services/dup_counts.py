@@ -138,84 +138,59 @@ async def full_dup_recount(
     ]
     count_maps: list[dict[str, int]] = []
 
+    from collections import Counter
+
     for hash_column, extra_where, _ in hash_configs:
         log.info("full_dup_recount (%s): querying %s counts", scope_label, hash_column)
         conn = await open_connection()
         try:
             if location_id:
-                # Find hashes on this location, then count across ALL locations
-                hash_rows = await conn.execute_fetchall(
+                # Temp table of this location's hashes, JOIN to count globally
+                await conn.execute("CREATE TEMP TABLE _recount_hashes (hash_val TEXT)")
+                await conn.execute(
+                    f"INSERT INTO _recount_hashes "
                     f"SELECT DISTINCT {hash_column} FROM files "
                     f"WHERE location_id = ? AND {hash_column} IS NOT NULL "
                     f"AND {hash_column} != ''{extra_where}",
                     (location_id,),
                 )
-                target_hashes = [r[hash_column] for r in hash_rows]
-                if target_hashes:
-                    # Count globally for these hashes — batched to stay under SQL variable limit
-                    rows = []
-                    for bi in range(0, len(target_hashes), SQL_VAR_LIMIT):
-                        chunk = target_hashes[bi : bi + SQL_VAR_LIMIT]
-                        ph = ",".join("?" for _ in chunk)
-                        chunk_rows = await conn.execute_fetchall(
-                            f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
-                            f"WHERE {hash_column} IN ({ph}) "
-                            f"AND stale = 0 AND dup_exclude = 0 "
-                            f"GROUP BY {hash_column}",
-                            chunk,
-                        )
-                        rows.extend(chunk_rows)
-                    log.info(
-                        "full_dup_recount (%s): counted %d %s hashes in %d batches",
-                        scope_label,
-                        len(target_hashes),
-                        hash_column,
-                        (len(target_hashes) + SQL_VAR_LIMIT - 1) // SQL_VAR_LIMIT,
-                    )
-                else:
-                    rows = []
-            else:
-                # Collect all distinct hashes, then batch the COUNT queries
-                hash_rows = await conn.execute_fetchall(
-                    f"SELECT DISTINCT {hash_column} FROM files "
-                    f"WHERE {hash_column} IS NOT NULL AND {hash_column} != ''"
-                    f"{extra_where}",
+                await conn.execute(
+                    "CREATE INDEX _recount_hashes_idx ON _recount_hashes(hash_val)"
                 )
-                all_hashes = [r[hash_column] for r in hash_rows]
-                rows = []
-                if all_hashes:
-                    for bi in range(0, len(all_hashes), SQL_VAR_LIMIT):
-                        chunk = all_hashes[bi : bi + SQL_VAR_LIMIT]
-                        ph = ",".join("?" for _ in chunk)
-                        chunk_rows = await conn.execute_fetchall(
-                            f"SELECT {hash_column}, COUNT(*) as cnt FROM files "
-                            f"WHERE {hash_column} IN ({ph}) "
-                            f"AND stale = 0 AND dup_exclude = 0 "
-                            f"GROUP BY {hash_column}",
-                            chunk,
-                        )
-                        rows.extend(chunk_rows)
-                    log.info(
-                        "full_dup_recount (%s): counted %d %s hashes in %d batches",
-                        scope_label,
-                        len(all_hashes),
-                        hash_column,
-                        (len(all_hashes) + SQL_VAR_LIMIT - 1) // SQL_VAR_LIMIT,
-                    )
+                await conn.commit()
+
+                rows = await conn.execute_fetchall(
+                    f"SELECT f.{hash_column} FROM files f "
+                    f"INNER JOIN _recount_hashes h ON f.{hash_column} = h.hash_val "
+                    f"WHERE f.stale = 0 AND f.dup_exclude = 0"
+                )
+                await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
+            else:
+                rows = await conn.execute_fetchall(
+                    f"SELECT {hash_column} FROM files "
+                    f"WHERE {hash_column} IS NOT NULL AND {hash_column} != ''"
+                    f"{extra_where} AND stale = 0 AND dup_exclude = 0"
+                )
         finally:
+            try:
+                await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
+            except Exception:
+                pass
             await conn.close()
 
+        # Count in Python
+        hash_counts = Counter(r[hash_column] for r in rows)
         cm: dict[str, int] = {}
-        for r in rows:
-            cnt = r["cnt"]
+        for h, cnt in hash_counts.items():
             dc = cnt - 1 if cnt > 1 else 0
-            cm[r[hash_column]] = dc
+            cm[h] = dc
         count_maps.append(cm)
         log.info(
-            "full_dup_recount (%s): %d distinct %s values",
+            "full_dup_recount (%s): %d distinct %s values from %d rows",
             scope_label,
             len(cm),
             hash_column,
+            len(rows),
         )
 
     grand_total = sum(len(cm) for cm in count_maps)
@@ -305,50 +280,56 @@ async def optimized_dup_recount(
     all_dup_hashes: list[tuple[str, str, int]] = []  # (hash_col, hash_val, dup_count)
 
     conn = await open_connection()
+    from collections import Counter
+
     try:
         for hash_column, update_extra in hash_configs:
             if location_id:
-                hash_rows = await conn.execute_fetchall(
+                # Temp table of location's hashes, JOIN to count globally
+                await conn.execute("CREATE TEMP TABLE _recount_hashes (hash_val TEXT)")
+                await conn.execute(
+                    f"INSERT INTO _recount_hashes "
                     f"SELECT DISTINCT {hash_column} FROM files "
                     f"WHERE location_id = ? AND {hash_column} IS NOT NULL "
                     f"AND {hash_column} != ''",
                     (location_id,),
                 )
-                location_hashes = [r[hash_column] for r in hash_rows]
+                await conn.execute(
+                    "CREATE INDEX _recount_hashes_idx ON _recount_hashes(hash_val)"
+                )
+                await conn.commit()
 
-                for i in range(0, len(location_hashes), SQL_VAR_LIMIT):
-                    chunk = location_hashes[i : i + SQL_VAR_LIMIT]
-                    ph = ",".join("?" for _ in chunk)
-                    rows = await conn.execute_fetchall(
-                        f"SELECT {hash_column}, COUNT(*) as cnt "
-                        f"FROM files "
-                        f"WHERE {hash_column} IN ({ph}) "
-                        f"AND stale = 0 AND dup_exclude = 0 "
-                        f"GROUP BY {hash_column} HAVING COUNT(*) > 1",
-                        chunk,
-                    )
-                    for r in rows:
-                        all_dup_hashes.append(
-                            (hash_column, r[hash_column], r["cnt"] - 1)
-                        )
+                rows = await conn.execute_fetchall(
+                    f"SELECT f.{hash_column} FROM files f "
+                    f"INNER JOIN _recount_hashes h ON f.{hash_column} = h.hash_val "
+                    f"WHERE f.stale = 0 AND f.dup_exclude = 0"
+                )
+                await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
             else:
                 rows = await conn.execute_fetchall(
-                    f"SELECT {hash_column}, COUNT(*) as cnt "
-                    f"FROM files "
+                    f"SELECT {hash_column} FROM files "
                     f"WHERE {hash_column} IS NOT NULL AND {hash_column} != '' "
-                    f"AND stale = 0 AND dup_exclude = 0{update_extra} "
-                    f"GROUP BY {hash_column} HAVING COUNT(*) > 1"
+                    f"AND stale = 0 AND dup_exclude = 0{update_extra}"
                 )
-                for r in rows:
-                    all_dup_hashes.append((hash_column, r[hash_column], r["cnt"] - 1))
+
+            # Count in Python, keep only duplicates (count > 1)
+            hash_counts = Counter(r[hash_column] for r in rows)
+            for h, cnt in hash_counts.items():
+                if cnt > 1:
+                    all_dup_hashes.append((hash_column, h, cnt - 1))
 
             log.info(
-                "optimized_dup_recount (%s): %s — %d duplicate groups",
+                "optimized_dup_recount (%s): %s — %d duplicate groups from %d rows",
                 scope_label,
                 hash_column,
-                sum(1 for h in all_dup_hashes if h[0] == hash_column),
+                sum(1 for dh in all_dup_hashes if dh[0] == hash_column),
+                len(rows),
             )
     finally:
+        try:
+            await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
+        except Exception:
+            pass
         await conn.close()
 
     total = len(all_dup_hashes)
