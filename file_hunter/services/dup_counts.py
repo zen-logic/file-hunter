@@ -535,70 +535,64 @@ async def find_dup_candidates(
     """
     from file_hunter.db import open_connection
 
+    from collections import Counter
+
     SQL_VAR_LIMIT = 500
 
     conn = await open_connection()
     try:
-        # Step 1: get distinct (hash_partial, file_size) pairs for the scope
+        # Step 1: location's pairs into temp table, then JOIN to count globally
         if location_id is not None:
-            local_pairs = await conn.execute_fetchall(
+            await conn.execute(
+                "CREATE TEMP TABLE _dup_pairs (hash_partial TEXT, file_size INTEGER)"
+            )
+            await conn.execute(
+                "INSERT INTO _dup_pairs "
                 "SELECT DISTINCT hash_partial, file_size FROM files "
                 "WHERE location_id = ? AND hash_partial IS NOT NULL "
                 "AND file_size > 0 AND stale = 0",
                 (location_id,),
             )
+            await conn.commit()
+
+            rows = await conn.execute_fetchall(
+                "SELECT f.hash_partial, f.file_size FROM files f "
+                "INNER JOIN _dup_pairs p "
+                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size "
+                "WHERE f.stale = 0"
+            )
+            await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
         else:
-            local_pairs = await conn.execute_fetchall(
-                "SELECT DISTINCT hash_partial, file_size FROM files "
+            rows = await conn.execute_fetchall(
+                "SELECT hash_partial, file_size FROM files "
                 "WHERE hash_partial IS NOT NULL AND file_size > 0 AND stale = 0"
             )
 
+        # Step 2: count in Python — find pairs with more than one file
+        pair_counts = Counter((r["hash_partial"], r["file_size"]) for r in rows)
+        dup_pairs = {k for k, v in pair_counts.items() if v > 1}
+
         log.info(
-            "find_dup_candidates: %d distinct pairs (scope=%s)",
-            len(local_pairs),
+            "find_dup_candidates: %d dup groups from %d rows (scope=%s)",
+            len(dup_pairs),
+            len(rows),
             f"location {location_id}" if location_id else "global",
         )
 
-        if not local_pairs:
+        if not dup_pairs:
             return []
 
-        # Step 2: which of those pairs have COUNT > 1 globally?
-        # Batched to stay under SQL variable limit.
-        dup_groups = []
-        for i in range(0, len(local_pairs), SQL_VAR_LIMIT):
-            chunk = local_pairs[i : i + SQL_VAR_LIMIT]
+        # Step 3: fetch files needing hash_fast in those groups
+        dup_list = list(dup_pairs)
+        candidates = []
+        for i in range(0, len(dup_list), SQL_VAR_LIMIT):
+            chunk = dup_list[i : i + SQL_VAR_LIMIT]
             conditions = " OR ".join(
                 "(hash_partial = ? AND file_size = ?)" for _ in chunk
             )
             params: list = []
-            for g in chunk:
-                params.extend([g["hash_partial"], g["file_size"]])
-            rows = await conn.execute_fetchall(
-                f"SELECT hash_partial, file_size FROM files "
-                f"WHERE ({conditions}) AND stale = 0 "
-                f"GROUP BY hash_partial, file_size HAVING COUNT(*) > 1",
-                params,
-            )
-            dup_groups.extend(rows)
-
-        log.info(
-            "find_dup_candidates: %d dup groups",
-            len(dup_groups),
-        )
-
-        if not dup_groups:
-            return []
-
-        # Step 3: fetch files needing hash_fast in those groups
-        candidates = []
-        for i in range(0, len(dup_groups), SQL_VAR_LIMIT):
-            chunk = dup_groups[i : i + SQL_VAR_LIMIT]
-            conditions = " OR ".join(
-                "(hash_partial = ? AND file_size = ?)" for _ in chunk
-            )
-            params = []
-            for g in chunk:
-                params.extend([g["hash_partial"], g["file_size"]])
+            for hp, fs in chunk:
+                params.extend([hp, fs])
             rows = await conn.execute_fetchall(
                 f"SELECT id, full_path, location_id "
                 f"FROM files "
@@ -611,6 +605,10 @@ async def find_dup_candidates(
         return [dict(r) for r in candidates]
 
     finally:
+        try:
+            await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
+        except Exception:
+            pass
         await conn.close()
 
 
