@@ -202,20 +202,25 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         from file_hunter.services.sizes import recalculate_location_sizes
 
         recount_total = 0
+        last_recount_broadcast = time.monotonic()
 
         async def _on_recount_total(total):
             nonlocal recount_total
             recount_total = total
 
         async def _on_recount_progress(processed):
-            await broadcast({
-                "type": "scan_progress",
-                "locationId": location_id,
-                "location": location_name,
-                "phase": "recounting",
-                "checksDone": processed,
-                "checksTotal": recount_total,
-            })
+            nonlocal last_recount_broadcast
+            now = time.monotonic()
+            if now - last_recount_broadcast >= 2.0:
+                await broadcast({
+                    "type": "scan_progress",
+                    "locationId": location_id,
+                    "location": location_name,
+                    "phase": "recounting",
+                    "checksDone": processed,
+                    "checksTotal": recount_total,
+                })
+                last_recount_broadcast = now
 
         logger.info("Running dup recount for %s", location_name)
         await broadcast({

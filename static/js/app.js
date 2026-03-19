@@ -1023,9 +1023,9 @@ WS.on('scan_progress', (msg) => {
     } else if (msg.phase === 'recounting') {
         const total = msg.checksTotal || 0;
         const done = msg.checksDone || 0;
-        const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
-        statusText = `${msg.location} — Counting duplicates${pct}`;
-        logText = `${msg.location} — counting duplicates${pct}`;
+        const progress = total > 0 ? `: ${done.toLocaleString()} / ${total.toLocaleString()}` : '';
+        statusText = `${msg.location} — Counting duplicates${progress}`;
+        logText = `${msg.location} — counting duplicates${progress}`;
     } else if (msg.phase === 'rebuilding') {
         statusText = `${msg.location} — Rebuilding statistics...`;
         logText = `${msg.location} — rebuilding statistics`;
