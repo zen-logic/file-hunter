@@ -437,7 +437,7 @@ async def _stream_to_temp_db(
                 )
                 tmp_db.commit()
                 file_batch.clear()
-            tmp_db.execute("CREATE INDEX idx_tmp_files_relpath ON files(rel_path)")
+            tmp_db.execute("CREATE INDEX IF NOT EXISTS idx_tmp_files_relpath ON files(rel_path)")
             tmp_db.commit()
             hash_phase = True
             hashes_total = record.get("total", 0)
@@ -505,8 +505,9 @@ async def _stream_to_temp_db(
         )
     tmp_db.commit()
 
-    # Index for ingest phase
+    # Indexes for ingest and diff phases
     tmp_db.execute("CREATE INDEX IF NOT EXISTS idx_tmp_files_dir ON files(rel_dir)")
+    tmp_db.execute("CREATE INDEX IF NOT EXISTS idx_tmp_files_relpath ON files(rel_path)")
     tmp_db.commit()
     tmp_db.close()
 
@@ -799,13 +800,24 @@ async def _diff_and_update(
                 )
             await asyncio.sleep(0)
 
-    # Mark all seen files with current scan_id
-    async with db_writer() as db:
-        await db.execute(
-            "UPDATE files SET scan_id = ?, date_last_seen = ? "
-            "WHERE location_id = ? AND stale = 0",
-            (scan_id, now_iso, location_id),
+    # Mark all seen files with current scan_id — batched to avoid holding writer
+    async with read_db() as rdb:
+        seen_ids = await rdb.execute_fetchall(
+            "SELECT id FROM files WHERE location_id = ? AND stale = 0",
+            (location_id,),
         )
+    if seen_ids:
+        seen_id_list = [r["id"] for r in seen_ids]
+        for i in range(0, len(seen_id_list), 5000):
+            batch = seen_id_list[i : i + 5000]
+            ph = ",".join("?" for _ in batch)
+            async with db_writer() as db:
+                await db.execute(
+                    f"UPDATE files SET scan_id = ?, date_last_seen = ? "
+                    f"WHERE id IN ({ph})",
+                    [scan_id, now_iso] + batch,
+                )
+            await asyncio.sleep(0)
 
     # --- Phase 2c: insert new files ---
     if new_rows:
