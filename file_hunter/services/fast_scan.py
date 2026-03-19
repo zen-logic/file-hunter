@@ -485,10 +485,13 @@ def _sync_walk_and_hash(location_id: int, root_path: str, location_name: str):
 
                 # Store inode for pass 2 ordering (only for hashable files)
                 if st.st_size > 0:
+                    ino = st.st_ino
+                    if ino >= 2**63:
+                        ino -= 2**64
                     inode_batch.append(
                         (
                             rel_path,
-                            st.st_ino & 0x7FFFFFFFFFFFFFFF,
+                            ino,
                         )
                     )
 

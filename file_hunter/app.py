@@ -85,6 +85,7 @@ from file_hunter.routes.settings import (
     update_settings,
     get_version,
     get_pro_status,
+    reset_queues,
 )
 from file_hunter.routes.ignore import (
     list_ignore_rules,
@@ -308,6 +309,7 @@ app = Starlette(
         Route("/api/stats/repair", repair_catalog, methods=["POST"]),
         Route("/api/stats/repair-progress", repair_catalog_progress, methods=["GET"]),
         Route("/api/admin/rehash-partial", rehash_partial, methods=["POST"]),
+        Route("/api/maintenance/reset-queues", reset_queues, methods=["POST"]),
         Route("/api/locations/{id:int}/stats", location_stats, methods=["GET"]),
         Route("/api/folders/{id:int}/stats", folder_stats, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),

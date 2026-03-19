@@ -88,6 +88,10 @@ const Settings = {
                     <button class="btn btn-sm" id="settings-repair-catalog">Repair Catalog</button>
                     <span class="settings-hint">Clears incorrect stale flags, recalculates file counts and duplicate detection</span>
                 </div>
+                <div class="settings-row">
+                    <button class="btn btn-sm btn-danger" id="settings-reset-queues">Reset Queues</button>
+                    <span class="settings-hint">Removes temporary scan databases, clears all queued operations and pending hashes. Only available when no operations are running.</span>
+                </div>
             </div>
             <div class="settings-section">
                 ${proActive ? '<h3 class="settings-section-title">Pro Updates</h3>' : ''}
@@ -138,6 +142,17 @@ const Settings = {
         document.getElementById('settings-repair-catalog').addEventListener('click', () => {
             this.close();
             RepairCatalog.open();
+        });
+
+        // Reset queues
+        document.getElementById('settings-reset-queues').addEventListener('click', async () => {
+            if (!confirm('Stop all operations and reset queues? This will cancel running scans, remove temporary databases, and clear all queued operations. This cannot be undone.')) return;
+            const res = await API.post('/api/maintenance/reset-queues');
+            if (res.ok) {
+                alert(`Reset complete. ${res.data.opsCancelled} operation(s) cancelled, ${res.data.tempFilesRemoved} temporary file(s) removed.`);
+            } else {
+                alert(res.error || 'Failed to reset queues.');
+            }
         });
 
         // Pro updates / upgrade

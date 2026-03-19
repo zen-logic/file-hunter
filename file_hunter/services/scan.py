@@ -18,8 +18,8 @@ import json
 import logging
 import os
 import sqlite3
-import tempfile
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 
 import httpx
@@ -37,6 +37,9 @@ from file_hunter_core.classify import classify_file
 logger = logging.getLogger("file_hunter")
 
 INGEST_BATCH_SIZE = 2000
+
+# Temp DB directory — relative to package root, same as catalog DB
+_TEMP_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "temp"
 
 
 async def run_scan(op_id: int, agent_id: int, params: dict):
@@ -99,8 +102,12 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         }
     )
 
-    # Save scan_id to params for crash recovery
+    # Save scan_id and temp DB path to params for crash recovery
     params["scan_id"] = scan_id
+    # Create temp DB for fast stream capture — in data/temp/ for persistence
+    _TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = str(_TEMP_DIR / f"scan-{location_id}-{scan_id}.db")
+    params["tmp_path"] = tmp_path
     async with db_writer() as db:
         await db.execute(
             "UPDATE operation_queue SET params = ? WHERE id = ?",
@@ -118,13 +125,6 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
     files_new = 0
     candidates_total = 0
     stale_count = 0
-
-    # Create temp DB for fast stream capture
-    tmp_file = tempfile.NamedTemporaryFile(
-        suffix=".db", prefix=f"scan-{location_id}-", delete=False
-    )
-    tmp_path = tmp_file.name
-    tmp_file.close()
 
     try:
         if is_rescan:
@@ -269,6 +269,12 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             }
         )
 
+        # Success — clean up temp DB
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
     except asyncio.CancelledError:
         drainer_task.cancel()
         completed_iso = _now()
@@ -346,11 +352,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         raise
 
     finally:
-        # Clean up temp DB
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        pass  # Temp DB preserved for resume on cancel/interrupt/error
 
 
 async def _stream_to_temp_db(
