@@ -146,10 +146,10 @@ const Settings = {
 
         // Reset queues
         document.getElementById('settings-reset-queues').addEventListener('click', async () => {
-            if (!confirm('Reset all queues? This will remove temporary scan databases, clear all queued operations and pending hashes. This cannot be undone.')) return;
+            if (!confirm('Stop all operations and reset queues? This will cancel running scans, remove temporary databases, and clear all queued operations. This cannot be undone.')) return;
             const res = await API.post('/api/maintenance/reset-queues');
             if (res.ok) {
-                alert(`Queues reset. ${res.data.tempFilesRemoved} temporary file(s) removed.`);
+                alert(`Reset complete. ${res.data.opsCancelled} operation(s) cancelled, ${res.data.tempFilesRemoved} temporary file(s) removed.`);
             } else {
                 alert(res.error || 'Failed to reset queues.');
             }

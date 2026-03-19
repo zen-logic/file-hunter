@@ -71,11 +71,19 @@ async def update_settings(request: Request):
 
 
 async def reset_queues(request: Request):
-    """POST /api/maintenance/reset-queues — clear temp DBs, queues, pending hashes."""
-    from file_hunter.services.queue_manager import _running_ops
+    """POST /api/maintenance/reset-queues — cancel all ops, clear temp DBs, queues, pending hashes."""
+    from file_hunter.services.queue_manager import _running_ops, cancel
 
-    if _running_ops:
-        return json_error("Cannot reset while operations are running.", 409)
+    # Cancel all running operations
+    cancelled = 0
+    for op_id in list(_running_ops.keys()):
+        await cancel(op_id)
+        cancelled += 1
+
+    # Wait briefly for cancellations to complete
+    if cancelled:
+        import asyncio
+        await asyncio.sleep(1)
 
     # Clear temp DBs
     temp_dir = Path(__file__).resolve().parent.parent.parent / "data" / "temp"
@@ -95,11 +103,12 @@ async def reset_queues(request: Request):
         await db.execute("DELETE FROM pending_hashes")
 
     logger.info(
-        "Reset queues: %d temp files removed, operation_queue and pending_hashes cleared",
-        temp_files_removed,
+        "Reset queues: %d ops cancelled, %d temp files removed, queues cleared",
+        cancelled, temp_files_removed,
     )
 
     return json_ok({
+        "opsCancelled": cancelled,
         "tempFilesRemoved": temp_files_removed,
-        "message": "Queues reset successfully.",
+        "message": "All operations stopped and queues reset.",
     })
