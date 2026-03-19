@@ -935,8 +935,7 @@ async def backfill_dup_counts():
 
 
 SMALL_FILE_THRESHOLD = 128 * 1024  # 128KB — hash_partial == hash_fast, no agent needed
-LARGE_FILE_THRESHOLD = 10 * 1024 * 1024  # 10MB — hash individually, significant I/O
-HASH_BATCH_BYTES = 50 * 1024 * 1024  # 50MB — max total bytes per batch request
+HASH_BATCH_BYTES = 500 * 1024 * 1024  # 500MB — max total bytes per batch request
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 
@@ -1052,24 +1051,12 @@ async def hash_candidates_for_location(
                 await on_progress(hashed, total)
 
         for c in large_files:
-            if c["file_size"] >= LARGE_FILE_THRESHOLD:
-                # Flush any accumulated batch first
+            batch.append(c)
+            batch_bytes += c["file_size"]
+            if batch_bytes >= HASH_BATCH_BYTES:
                 await _flush_batch()
                 batch.clear()
                 batch_bytes = 0
-                # Send individually
-                batch.append(c)
-                batch_bytes = c["file_size"]
-                await _flush_batch()
-                batch.clear()
-                batch_bytes = 0
-            else:
-                batch.append(c)
-                batch_bytes += c["file_size"]
-                if batch_bytes >= HASH_BATCH_BYTES:
-                    await _flush_batch()
-                    batch.clear()
-                    batch_bytes = 0
 
         # Flush remaining
         await _flush_batch()

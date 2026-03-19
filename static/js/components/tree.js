@@ -23,6 +23,7 @@ const Tree = {
     treeData: [],
     _expandedIds: new Set(),
     _scanningLocations: new Set(),
+    _scanningPhases: new Map(),
     _queuedLocations: new Map(),  // node id -> queue_id
     _backfillingLocations: new Set(),
     _deletingLocations: new Set(),
@@ -170,15 +171,27 @@ const Tree = {
         this.render();
     },
 
-    setScanningLocation(locationId) {
+    setScanningLocation(locationId, phase) {
         const key = 'loc-' + locationId;
-        if (this._scanningLocations.has(key)) return;
+        const isNew = !this._scanningLocations.has(key);
         this._scanningLocations.add(key);
-        this.render();
+        const oldPhase = this._scanningPhases.get(key);
+        if (phase) this._scanningPhases.set(key, phase);
+        if (isNew || oldPhase !== phase) this.render();
     },
 
     clearScanningLocation(locationId) {
-        this._scanningLocations.delete('loc-' + locationId);
+        const key = 'loc-' + locationId;
+        this._scanningLocations.delete(key);
+        this._scanningPhases.delete(key);
+    },
+
+    setLocationChildren(locationId, children) {
+        const node = this._findNode('loc-' + locationId);
+        if (node) {
+            node.children = children;
+            this.render();
+        }
     },
 
     setQueuedLocation(locationId, queueId) {
@@ -576,7 +589,17 @@ const Tree = {
             const sizeSpan = document.createElement('span');
             sizeSpan.className = 'tree-size';
             if (this._scanningLocations.has(node.id) && !node.totalSize) {
-                sizeSpan.textContent = 'scanning...';
+                const phaseLabels = {
+                    scanning: 'metadata...',
+                    hashing: 'partials...',
+                    cataloging: 'ingest...',
+                    cataloging_hashes: 'hashing...',
+                    checking_duplicates: 'hashing...',
+                    recounting: 'finalizing...',
+                    rebuilding: 'finalizing...',
+                };
+                const phase = this._scanningPhases.get(node.id);
+                sizeSpan.textContent = phaseLabels[phase] || 'scanning...';
                 sizeSpan.classList.add('tree-size-scanning');
             } else {
                 sizeSpan.textContent = node.totalSize != null ? formatSize(node.totalSize) : '';

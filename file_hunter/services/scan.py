@@ -148,6 +148,41 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             files_found, files_new, location_name,
         )
 
+        # Broadcast root folders so frontend can populate the tree
+        async with read_db() as rdb:
+            from file_hunter.services.settings import get_setting
+            show_hidden = await get_setting(rdb, "showHiddenFiles") == "1"
+            hidden_filter = "" if show_hidden else " AND f.hidden = 0"
+            child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
+            root_folders = await rdb.execute_fetchall(
+                f"""SELECT f.id, f.name, f.total_size, f.hidden, f.dup_exclude,
+                          EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
+                   FROM folders f
+                   WHERE f.location_id = ? AND f.parent_id IS NULL{hidden_filter}
+                   ORDER BY f.name""",
+                (location_id,),
+            )
+        children = []
+        for f in root_folders:
+            child_node = {
+                "id": f"fld-{f['id']}",
+                "type": "folder",
+                "label": f["name"],
+                "hasChildren": bool(f["has_children"]),
+                "totalSize": f["total_size"],
+                "children": None,
+            }
+            if f["hidden"]:
+                child_node["hidden"] = True
+            if f["dup_exclude"]:
+                child_node["dupExcluded"] = True
+            children.append(child_node)
+        await broadcast({
+            "type": "location_children",
+            "locationId": location_id,
+            "children": children,
+        })
+
         # --- Phase 3: hash phase (H records are in temp DB) ---
         hashes_applied = await _apply_hashes_from_temp(
             tmp_path, location_id, agent_id, root_path, now_iso,
@@ -454,6 +489,12 @@ async def _stream_to_temp_db(
         now_mono = time.monotonic()
         if now_mono - last_broadcast >= 2.0:
             if hash_phase:
+                if hash_batch:
+                    tmp_db.executemany(
+                        "INSERT OR REPLACE INTO hashes VALUES (?, ?)", hash_batch
+                    )
+                    tmp_db.commit()
+                    hash_batch.clear()
                 hash_count = tmp_db.execute("SELECT COUNT(*) FROM hashes").fetchone()[0]
                 await broadcast({
                     "type": "scan_progress",
@@ -742,9 +783,26 @@ async def _apply_hashes_from_temp(
     # Find and process dup candidates — reuse import's shared function
     from file_hunter.services.dup_counts import hash_candidates_for_location
 
+    last_dup_broadcast = time.monotonic()
+
+    async def _on_dup_progress(hashed, total):
+        nonlocal last_dup_broadcast
+        now = time.monotonic()
+        if now - last_dup_broadcast >= 2.0:
+            await broadcast({
+                "type": "scan_progress",
+                "locationId": location_id,
+                "location": location_name,
+                "phase": "checking_duplicates",
+                "checksDone": hashed,
+                "checksTotal": total,
+            })
+            last_dup_broadcast = now
+
     candidates_total, candidates_hashed, new_hashes = await hash_candidates_for_location(
         location_id=location_id,
         agent_id=agent_id,
+        on_progress=_on_dup_progress,
     )
 
     logger.info(

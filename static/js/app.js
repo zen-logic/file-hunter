@@ -5,7 +5,6 @@ import Detail from './components/detail.js';
 import StatusBar from './components/statusbar.js';
 import Search from './components/search.js';
 import AddLocationModal from './components/addlocation.js';
-import ScanConfirm from './components/scanconfirm.js';
 import FastScan from './components/fastscan.js';
 import ConfirmModal from './components/confirm.js';
 import Consolidate from './components/consolidate.js';
@@ -412,35 +411,15 @@ function startApp(user) {
 
 ConfirmModal.init();
 
-ScanConfirm.init(async (locationNode, folderNode) => {
-    const payload = { location_id: locationNode.id };
-    if (folderNode) payload.folder_id = folderNode.id;
-    const res = await API.post('/api/scan', payload);
-    if (!res.ok) Toast.error(res.error || 'Failed to start scan.');
-}, async (locationNode) => {
-    // Fast scan — two-phase confirmation
-    const checkRes = await API.post('/api/scan/fast', { location_id: locationNode.id });
-    if (!checkRes.ok) { Toast.error(checkRes.error || 'Fast scan not available.'); return; }
-    const info = checkRes.data;
-    if (info.previouslyScanned) {
-        const ok = await ConfirmModal.open({
-            title: 'Replace catalog data?',
-            message: `Fast Scan will delete all existing catalog data for "${info.locationName}" and rescan from scratch. This cannot be undone.`,
-            confirmLabel: 'Replace and Scan',
-        });
-        if (!ok) return;
-    }
-    const startRes = await API.post('/api/scan/fast', { location_id: locationNode.id, confirmed: true });
-    if (!startRes.ok) { Toast.error(startRes.error || 'Failed to start fast scan.'); return; }
-    FastScan.open();
-});
-
-scanBtn.addEventListener('click', () => {
+scanBtn.addEventListener('click', async () => {
     if (!selectedNode) return;
     const loc = Tree.getLocation(selectedNode.id);
     if (!loc) return;
     const isFolder = String(selectedNode.id).startsWith('fld-');
-    ScanConfirm.open(loc, isFolder ? selectedNode : null);
+    const payload = { location_id: loc.id };
+    if (isFolder) payload.folder_id = selectedNode.id;
+    const res = await API.post('/api/scan', payload);
+    if (!res.ok) Toast.error(res.error || 'Failed to start scan.');
 });
 
 Consolidate.init(async ({ file_id, mode, destination_folder_id }) => {
@@ -1018,8 +997,12 @@ WS.on('scan_progress', (msg) => {
         statusText = `${msg.location} — Saving hashes: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
         logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} hashes saved`;
     } else if (msg.phase === 'checking_duplicates') {
-        statusText = `${msg.location} — Checking duplicates...`;
-        logText = `${msg.location} — checking duplicates`;
+        const total = msg.checksTotal || 0;
+        const done = msg.checksDone || 0;
+        const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
+        const progress = total > 0 ? `: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}` : '...';
+        statusText = `${msg.location} — Confirming duplicates${progress}`;
+        logText = `${msg.location} — confirming duplicates${progress}`;
     } else if (msg.phase === 'recounting') {
         const total = msg.checksTotal || 0;
         const done = msg.checksDone || 0;
@@ -1038,7 +1021,11 @@ WS.on('scan_progress', (msg) => {
     Detail.updateFromScanProgress(msg);
     ActivityLog.add(logText);
     updateLocationOnline(msg.locationId, true);
-    Tree.setScanningLocation(msg.locationId);
+    Tree.setScanningLocation(msg.locationId, msg.phase);
+});
+
+WS.on('location_children', (msg) => {
+    Tree.setLocationChildren(msg.locationId, msg.children);
 });
 
 WS.on('scan_completed', async (msg) => {
