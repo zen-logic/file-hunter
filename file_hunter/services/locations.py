@@ -66,7 +66,9 @@ async def get_shallow_tree(db):
     child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
 
     locations = await db.execute_fetchall(
-        "SELECT id, name, root_path, date_added, date_last_scanned, total_size FROM locations ORDER BY name COLLATE NOCASE"
+        "SELECT id, name, root_path, date_added, date_last_scanned, total_size "
+        "FROM locations WHERE name NOT LIKE '__deleting_%' "
+        "ORDER BY name COLLATE NOCASE"
     )
 
     # Root-level folders (parent_id IS NULL) with has_children flag and stored size

@@ -341,6 +341,10 @@ async def init_db(db: aiosqlite.Connection):
     )
     await db.execute("DROP INDEX IF EXISTS idx_files_hidden")
     await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_files_location_scan "
+        "ON files(location_id, scan_id)"
+    )
+    await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_locations_agent_id ON locations(agent_id)"
     )
     await db.execute(

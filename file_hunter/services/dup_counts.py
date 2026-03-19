@@ -121,7 +121,7 @@ async def _batched_recalc(
 
 
 SQL_VAR_LIMIT = 500
-FULL_RECOUNT_WRITE_BATCH = SQL_VAR_LIMIT
+FULL_RECOUNT_WRITE_BATCH = 5000
 
 
 async def full_dup_recount(
@@ -160,7 +160,7 @@ async def full_dup_recount(
         conn = await open_connection()
         try:
             if location_id:
-                # Temp table of this location's hashes, JOIN to count globally
+                # Temp table of this location's hashes, JOIN + GROUP BY in SQL
                 await conn.execute("CREATE TEMP TABLE _recount_hashes (hash_val TEXT)")
                 await conn.execute(
                     f"INSERT INTO _recount_hashes "
@@ -175,16 +175,20 @@ async def full_dup_recount(
                 await conn.commit()
 
                 rows = await conn.execute_fetchall(
-                    f"SELECT f.{hash_column} FROM files f "
+                    f"SELECT f.{hash_column} as hash_val, COUNT(*) as cnt "
+                    f"FROM files f "
                     f"INNER JOIN _recount_hashes h ON f.{hash_column} = h.hash_val "
-                    f"WHERE f.stale = 0 AND f.dup_exclude = 0"
+                    f"WHERE f.stale = 0 AND f.dup_exclude = 0 "
+                    f"GROUP BY f.{hash_column}"
                 )
                 await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
             else:
                 rows = await conn.execute_fetchall(
-                    f"SELECT {hash_column} FROM files "
+                    f"SELECT {hash_column} as hash_val, COUNT(*) as cnt "
+                    f"FROM files "
                     f"WHERE {hash_column} IS NOT NULL AND {hash_column} != ''"
-                    f"{extra_where} AND stale = 0 AND dup_exclude = 0"
+                    f"{extra_where} AND stale = 0 AND dup_exclude = 0 "
+                    f"GROUP BY {hash_column}"
                 )
         finally:
             try:
@@ -193,19 +197,17 @@ async def full_dup_recount(
                 pass
             await conn.close()
 
-        # Count in Python
-        hash_counts = Counter(r[hash_column] for r in rows)
+        # Build count map directly from SQL results — no Python counting needed
         cm: dict[str, int] = {}
-        for h, cnt in hash_counts.items():
-            dc = cnt - 1 if cnt > 1 else 0
-            cm[h] = dc
+        for r in rows:
+            cnt = r["cnt"]
+            cm[r["hash_val"]] = cnt - 1 if cnt > 1 else 0
         count_maps.append(cm)
         log.info(
-            "full_dup_recount (%s): %d distinct %s values from %d rows",
+            "full_dup_recount (%s): %d distinct %s values",
             scope_label,
             len(cm),
             hash_column,
-            len(rows),
         )
 
     grand_total = sum(len(cm) for cm in count_maps)
@@ -932,7 +934,9 @@ async def backfill_dup_counts():
         log.exception("dup_count backfill failed")
 
 
-SMALL_FILE_THRESHOLD = 128 * 1024  # 128KB
+SMALL_FILE_THRESHOLD = 128 * 1024  # 128KB — hash_partial == hash_fast, no agent needed
+LARGE_FILE_THRESHOLD = 10 * 1024 * 1024  # 10MB — hash individually, significant I/O
+HASH_BATCH_BYTES = 50 * 1024 * 1024  # 50MB — max total bytes per batch request
 MAX_RETRIES = 3
 RETRY_DELAY = 5
 
@@ -1008,43 +1012,72 @@ async def hash_candidates_for_location(
         if on_progress:
             await on_progress(hashed, total)
 
-    # Large files: one at a time via agent, retry on failure
-    for c in large_files:
-        for attempt in range(1, MAX_RETRIES + 1):
+    # Large files: batch by bytes, very large files go individually
+    if large_files:
+        from file_hunter.services.agent_ops import hash_fast_batch
+
+        # Sort by size so we process smaller files first in batches
+        large_files.sort(key=lambda c: c["file_size"])
+
+        batch: list[dict] = []
+        batch_bytes = 0
+
+        async def _flush_batch():
+            nonlocal hashed
+            if not batch:
+                return
+            paths = [c["full_path"] for c in batch]
+            path_to_candidate = {c["full_path"]: c for c in batch}
             try:
-                result = await dispatch(
-                    "file_hash",
-                    c["location_id"],
-                    path=c["full_path"],
-                )
+                result = await hash_fast_batch(agent_id, paths)
                 async with db_writer() as wdb:
-                    await wdb.execute(
-                        "UPDATE files SET hash_fast = ? WHERE id = ?",
-                        (result["hash_fast"], c["id"]),
-                    )
-                new_fast_hashes.add(result["hash_fast"])
-                hashed += 1
-                break
+                    for hr in result.get("results", []):
+                        cand = path_to_candidate.get(hr["path"])
+                        hf = hr.get("hash_fast")
+                        if cand and hf:
+                            await wdb.execute(
+                                "UPDATE files SET hash_fast = ? WHERE id = ?",
+                                (hf, cand["id"]),
+                            )
+                            new_fast_hashes.add(hf)
+                            hashed += 1
             except Exception as e:
-                if attempt < MAX_RETRIES:
-                    log.warning(
-                        "hash_candidates attempt %d/%d failed for %s: %s — retrying in %ds",
-                        attempt,
-                        MAX_RETRIES,
-                        c["full_path"],
-                        e,
-                        RETRY_DELAY,
-                    )
-                    await asyncio.sleep(RETRY_DELAY)
-                else:
-                    log.error(
-                        "hash_candidates FAILED after %d attempts for %s: %s",
-                        MAX_RETRIES,
-                        c["full_path"],
-                        e,
-                    )
-        if on_progress:
-            await on_progress(hashed, total)
+                log.error(
+                    "hash_candidates batch failed (%d files, %dMB): %s",
+                    len(batch),
+                    batch_bytes // (1024 * 1024),
+                    e,
+                )
+            if on_progress:
+                await on_progress(hashed, total)
+
+        for c in large_files:
+            if c["file_size"] >= LARGE_FILE_THRESHOLD:
+                # Flush any accumulated batch first
+                await _flush_batch()
+                batch.clear()
+                batch_bytes = 0
+                # Send individually
+                batch.append(c)
+                batch_bytes = c["file_size"]
+                await _flush_batch()
+                batch.clear()
+                batch_bytes = 0
+            else:
+                batch.append(c)
+                batch_bytes += c["file_size"]
+                if batch_bytes >= HASH_BATCH_BYTES:
+                    await _flush_batch()
+                    batch.clear()
+                    batch_bytes = 0
+
+        # Flush remaining
+        await _flush_batch()
+
+        log.info(
+            "hash_candidates_for_location: %d large files hashed via agent",
+            hashed - len(small_files),
+        )
 
     log.info(
         "hash_candidates_for_location: %d/%d hashed (%d small, %d large) for location %d",

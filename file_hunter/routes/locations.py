@@ -1,5 +1,5 @@
 from starlette.requests import Request
-from file_hunter.db import read_db, execute_write
+from file_hunter.db import read_db, db_writer, execute_write
 from file_hunter.core import json_ok, json_error
 from file_hunter.services.locations import (
     get_shallow_tree,
@@ -111,7 +111,24 @@ async def remove_location(request: Request):
     await cancel_by_location(loc_id)
     cancel_backfill_by_location(loc_id)
 
-    # Enqueue the delete as a persistent operation
+    # Rename + hide immediately so it vanishes from the UI and frees the name
+    async with db_writer() as wdb:
+        await wdb.execute(
+            "UPDATE locations SET name = ?, root_path = ? WHERE id = ?",
+            (f"__deleting_{loc_id}_{location_name}", f"__deleting_{loc_id}", loc_id),
+        )
+
+    # Broadcast deletion immediately — UI removes the location now
+    await broadcast(
+        {
+            "type": "location_deleted",
+            "locationId": f"loc-{loc_id}",
+            "name": location_name,
+        }
+    )
+    invalidate_stats_cache()
+
+    # Enqueue the actual CASCADE delete as a background operation
     op_id = await enqueue(
         "delete_location",
         agent_id,
@@ -122,15 +139,7 @@ async def remove_location(request: Request):
         },
     )
 
-    await broadcast(
-        {
-            "type": "location_deleting",
-            "locationId": f"loc-{loc_id}",
-            "name": location_name,
-        }
-    )
-
-    return json_ok({"message": f"Deleting '{location_name}'...", "queue_id": op_id})
+    return json_ok({"message": f"Location '{location_name}' deleted.", "queue_id": op_id})
 
 
 async def update_location(request: Request):

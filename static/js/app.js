@@ -996,39 +996,42 @@ WS.on('scan_started', (msg) => {
 WS.on('scan_progress', (msg) => {
     let statusText;
     let logText;
-    if (msg.phase === 'tree_diff') {
-        const changedSuffix = msg.dirsChanged ? ` (${msg.dirsChanged.toLocaleString()} changed)` : '';
-        statusText = `${msg.location} — Comparing: ${msg.dirsProcessed.toLocaleString()} dirs checked, ${msg.filesFound.toLocaleString()} files${changedSuffix}`;
-        logText = statusText;
-    } else if (msg.phase === 'streaming') {
-        statusText = `${msg.location} — Cataloging: ${msg.filesFound.toLocaleString()} files`;
-        logText = `${msg.location} — ${msg.filesFound.toLocaleString()} files cataloged`;
-    } else if (msg.phase === 'hashing_partial') {
-        const total = msg.filesToHash || 0;
-        const done = msg.filesHashed || 0;
+    if (msg.phase === 'scanning') {
+        statusText = `${msg.location} — Scanning: ${(msg.filesFound || 0).toLocaleString()} files, ${(msg.dirsFound || 0).toLocaleString()} dirs`;
+        logText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} files found`;
+    } else if (msg.phase === 'hashing') {
+        const total = msg.hashesTotal || 0;
+        const done = msg.hashesDone || 0;
         const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
-        statusText = `${msg.location} — Partial hashing: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
-        logText = `${msg.location} — ${msg.filesFound.toLocaleString()} found, ${done.toLocaleString()} partial hashed`;
-    } else if (msg.phase === 'finding_candidates') {
-        statusText = `${msg.location} — Finding duplicate candidates...`;
-        logText = `${msg.location} — finding duplicate candidates`;
-    } else if (msg.phase === 'confirming') {
-        const total = msg.filesToHash || 0;
-        const done = msg.filesHashed || 0;
+        statusText = `${msg.location} — Hashing: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} hashed`;
+    } else if (msg.phase === 'cataloging') {
+        const total = msg.catalogTotal || 0;
+        const done = msg.catalogDone || 0;
         const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
-        statusText = `${msg.location} — Confirming duplicates: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
-        logText = `${msg.location} — confirming ${done.toLocaleString()} / ${total.toLocaleString()} candidates`;
+        statusText = `${msg.location} — Cataloging: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} cataloged`;
+    } else if (msg.phase === 'cataloging_hashes') {
+        const total = msg.catalogTotal || 0;
+        const done = msg.catalogDone || 0;
+        const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
+        statusText = `${msg.location} — Saving hashes: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} hashes saved`;
+    } else if (msg.phase === 'checking_duplicates') {
+        statusText = `${msg.location} — Checking duplicates...`;
+        logText = `${msg.location} — checking duplicates`;
     } else if (msg.phase === 'recounting') {
-        statusText = `${msg.location} — Recounting duplicates...`;
-        logText = `${msg.location} — recounting duplicates`;
+        const total = msg.checksTotal || 0;
+        const done = msg.checksDone || 0;
+        const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
+        statusText = `${msg.location} — Counting duplicates${pct}`;
+        logText = `${msg.location} — counting duplicates${pct}`;
     } else if (msg.phase === 'rebuilding') {
-        statusText = `${msg.location} — Rebuilding sizes...`;
-        logText = `${msg.location} — rebuilding sizes`;
+        statusText = `${msg.location} — Rebuilding statistics...`;
+        logText = `${msg.location} — rebuilding statistics`;
     } else {
-        const skippedSuffix = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
-        const matchesSuffix = msg.potentialMatches ? `, ${msg.potentialMatches.toLocaleString()} matches` : '';
-        statusText = `${msg.location} — ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedSuffix}${matchesSuffix}`;
-        logText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} found, ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedSuffix}${matchesSuffix}`;
+        statusText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} files`;
+        logText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} files`;
     }
     StatusBar.renderActivity('scanning', statusText, msg.locationId);
     StatusBar.updateStatsFromProgress(msg);
@@ -1378,6 +1381,15 @@ WS.on('location_changed', async (msg) => {
 WS.on('location_deleting', (msg) => {
     ActivityLog.add(`Deleting location: <b>${msg.name}</b>...`);
     Tree.setDeletingLocation(msg.locationId);
+    // If viewing the deleting location, clear panels
+    if (selectedNode && selectedNode.id === msg.locationId) {
+        selectedNode = null;
+        selectedFile = null;
+        const filePanel = document.getElementById('file-content');
+        if (filePanel) filePanel.innerHTML = '<div class="panel-body" style="padding: 1rem; color: var(--color-text-placeholder);">Deleting...</div>';
+        const detailPanel = document.getElementById('detail-content');
+        if (detailPanel) detailPanel.innerHTML = '<div class="panel-body" style="padding: 1rem; color: var(--color-text-placeholder);">Deleting...</div>';
+    }
 });
 
 WS.on('location_deleted', async (msg) => {

@@ -633,6 +633,8 @@ const Tree = {
 
         item.addEventListener('click', async (e) => {
             e.stopPropagation();
+            // Block interaction with deleting locations
+            if (node.type === 'location' && this._deletingLocations.has(node.id)) return;
             if (hasChildren) {
                 if (node.expanded) {
                     node.expanded = false;

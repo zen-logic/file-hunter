@@ -73,6 +73,11 @@ async def _purge_location(db, location_id: int):
         "DELETE FROM pending_backfills WHERE location_id = ?", (location_id,)
     )
 
+    # Pending hashes (no FK cascade)
+    await db.execute(
+        "DELETE FROM pending_hashes WHERE location_id = ?", (location_id,)
+    )
+
     # Location row (CASCADE handles files, folders, scans, consolidation_jobs, ignored_files)
     await db.execute("DELETE FROM locations WHERE id = ?", (location_id,))
     await db.commit()
