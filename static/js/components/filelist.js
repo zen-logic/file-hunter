@@ -790,8 +790,8 @@ const FileList = {
         if (!this.currentItems || this.currentItems.length === 0) return;
         const hashes = [...new Set(
             this.currentItems
-                .filter(f => f.hashStrong)
-                .map(f => f.hashStrong)
+                .map(f => f.hashStrong || f.hashFast)
+                .filter(Boolean)
         )];
         if (hashes.length === 0) return;
 
@@ -807,8 +807,9 @@ const FileList = {
         let changed = false;
 
         for (const item of this.currentItems) {
-            if (!item.hashStrong) continue;
-            const newDups = counts[item.hashStrong] || 0;
+            const h = item.hashStrong || item.hashFast;
+            if (!h) continue;
+            const newDups = counts[h] || 0;
             if (item.dups !== newDups) {
                 item.dups = newDups;
                 changed = true;

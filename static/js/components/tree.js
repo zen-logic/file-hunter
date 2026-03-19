@@ -194,6 +194,14 @@ const Tree = {
         }
     },
 
+    updateLocationSize(locationId, totalSize) {
+        const node = this._findNode('loc-' + locationId);
+        if (node) {
+            node.totalSize = totalSize;
+            this.render();
+        }
+    },
+
     setQueuedLocation(locationId, queueId) {
         const key = 'loc-' + locationId;
         if (this._queuedLocations.has(key)) return;

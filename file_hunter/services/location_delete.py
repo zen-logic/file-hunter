@@ -11,7 +11,6 @@ import logging
 from file_hunter.db import read_db
 from file_hunter.services.agent_ops import delete_agent_location, invalidate_loc_cache
 from file_hunter.services.stats import invalidate_stats_cache
-from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
 
@@ -62,15 +61,6 @@ async def run_delete_location(op_id: int, agent_id: int | None, params: dict):
     # Step 5: Clean up in-memory state
     invalidate_loc_cache(location_id)
     invalidate_stats_cache()
-
-    # Step 7: Broadcast completion
-    await broadcast(
-        {
-            "type": "location_deleted",
-            "locationId": f"loc-{location_id}",
-            "name": location_name,
-        }
-    )
 
     logger.info(
         "Location deleted: #%d '%s'",

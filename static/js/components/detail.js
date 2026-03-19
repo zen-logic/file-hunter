@@ -102,6 +102,10 @@ const Detail = {
         if (fc && msg.fileCount !== undefined) {
             fc.textContent = msg.fileCount.toLocaleString();
         }
+        const flc = this.el.querySelector('[data-stat="folderCount"]');
+        if (flc && msg.folderCount !== undefined) {
+            flc.textContent = msg.folderCount.toLocaleString();
+        }
         const ts = this.el.querySelector('[data-stat="totalSize"]');
         if (ts && msg.totalSize !== undefined) {
             ts.textContent = formatSize(msg.totalSize);

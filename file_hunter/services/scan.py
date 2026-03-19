@@ -115,7 +115,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
     # State — initialised before try so exception handlers can reference them
     files_found = 0
     files_new = 0
-    hashes_applied = 0
+    candidates_total = 0
     stale_count = 0
 
     # Create temp DB for fast stream capture
@@ -183,15 +183,9 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             "children": children,
         })
 
-        # --- Phase 3: hash phase (H records are in temp DB) ---
-        hashes_applied = await _apply_hashes_from_temp(
-            tmp_path, location_id, agent_id, root_path, now_iso,
-            location_name,
-        )
-
-        logger.info(
-            "Hash phase complete: %d hashes applied for %s",
-            hashes_applied, location_name,
+        # --- Phase 3: find dup candidates and queue for hashing ---
+        candidates_total = await _find_and_queue_dup_candidates(
+            location_id, agent_id, location_name,
         )
 
         # --- Finalization ---
@@ -247,10 +241,12 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         invalidate_stats_cache()
 
         async with read_db() as rdb:
-            dup_row = await rdb.execute_fetchall(
-                "SELECT duplicate_count FROM locations WHERE id = ?", (location_id,)
+            loc_row = await rdb.execute_fetchall(
+                "SELECT duplicate_count, total_size FROM locations WHERE id = ?",
+                (location_id,),
             )
-        final_dup_count = (dup_row[0]["duplicate_count"] or 0) if dup_row else 0
+        final_dup_count = (loc_row[0]["duplicate_count"] or 0) if loc_row else 0
+        final_total_size = (loc_row[0]["total_size"] or 0) if loc_row else 0
 
         await broadcast(
             {
@@ -258,10 +254,11 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 "locationId": location_id,
                 "location": location_name,
                 "filesFound": files_found,
-                "filesHashed": hashes_applied,
+                "filesHashed": candidates_total,
                 "filesNew": files_new,
                 "staleFiles": stale_count,
                 "duplicatesFound": final_dup_count,
+                "totalSize": final_total_size,
             }
         )
 
@@ -372,13 +369,8 @@ async def _stream_to_temp_db(
             file_size INTEGER NOT NULL,
             mtime TEXT NOT NULL,
             ctime TEXT NOT NULL,
-            inode INTEGER NOT NULL
-        )"""
-    )
-    tmp_db.execute(
-        """CREATE TABLE hashes (
-            rel_path TEXT PRIMARY KEY,
-            hash_partial TEXT NOT NULL
+            inode INTEGER NOT NULL,
+            hash_partial TEXT
         )"""
     )
     tmp_db.execute("CREATE TABLE dirs (rel_dir TEXT PRIMARY KEY)")
@@ -414,25 +406,28 @@ async def _stream_to_temp_db(
                 record["mtime"],
                 record["ctime"],
                 record["inode"],
+                None,  # hash_partial — filled in by H records
             ))
             total_files += 1
 
             # Flush batch to temp DB periodically
             if len(file_batch) >= 5000:
                 tmp_db.executemany(
-                    "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)", file_batch
+                    "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch
                 )
                 tmp_db.commit()
                 file_batch.clear()
 
         elif rtype == "phase":
-            # Flush remaining file batch
+            # Flush remaining file batch and index for hash lookups
             if file_batch:
                 tmp_db.executemany(
-                    "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)", file_batch
+                    "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch
                 )
                 tmp_db.commit()
                 file_batch.clear()
+            tmp_db.execute("CREATE INDEX idx_tmp_files_relpath ON files(rel_path)")
+            tmp_db.commit()
             hash_phase = True
             hashes_total = record.get("total", 0)
             logger.info(
@@ -441,10 +436,11 @@ async def _stream_to_temp_db(
             )
 
         elif rtype == "hash":
-            hash_batch.append((record["rel_path"], record["hash_partial"]))
+            hash_batch.append((record["hash_partial"], record["rel_path"]))
             if len(hash_batch) >= 5000:
                 tmp_db.executemany(
-                    "INSERT OR REPLACE INTO hashes VALUES (?, ?)", hash_batch
+                    "UPDATE files SET hash_partial = ? WHERE rel_path = ?",
+                    hash_batch,
                 )
                 tmp_db.commit()
                 hash_batch.clear()
@@ -458,11 +454,14 @@ async def _stream_to_temp_db(
             if hash_phase:
                 if hash_batch:
                     tmp_db.executemany(
-                        "INSERT OR REPLACE INTO hashes VALUES (?, ?)", hash_batch
+                        "UPDATE files SET hash_partial = ? WHERE rel_path = ?",
+                        hash_batch,
                     )
                     tmp_db.commit()
                     hash_batch.clear()
-                hash_count = tmp_db.execute("SELECT COUNT(*) FROM hashes").fetchone()[0]
+                hash_count = tmp_db.execute(
+                    "SELECT COUNT(*) FROM files WHERE hash_partial IS NOT NULL"
+                ).fetchone()[0]
                 await broadcast({
                     "type": "scan_progress",
                     "locationId": location_id,
@@ -486,16 +485,17 @@ async def _stream_to_temp_db(
     # Flush remaining batches
     if file_batch:
         tmp_db.executemany(
-            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)", file_batch
+            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch
         )
     if hash_batch:
         tmp_db.executemany(
-            "INSERT OR REPLACE INTO hashes VALUES (?, ?)", hash_batch
+            "UPDATE files SET hash_partial = ? WHERE rel_path = ?",
+            hash_batch,
         )
     tmp_db.commit()
 
     # Index for ingest phase
-    tmp_db.execute("CREATE INDEX idx_tmp_files_dir ON files(rel_dir)")
+    tmp_db.execute("CREATE INDEX IF NOT EXISTS idx_tmp_files_dir ON files(rel_dir)")
     tmp_db.commit()
     tmp_db.close()
 
@@ -542,14 +542,17 @@ async def _bulk_ingest(
 
     logger.info("Folders created for %s: %d", location_name, len(folder_cache))
 
-    # Batch ingest files
+    # Batch ingest files — accumulate running totals for live UI updates
     offset = 0
     ingested = 0
+    running_size = 0
+    running_types: dict[str, int] = {}
+    running_hidden = 0
     last_broadcast = time.monotonic()
 
     while True:
         rows = tmp_db.execute(
-            "SELECT rel_dir, rel_path, file_size, mtime, ctime, inode "
+            "SELECT rel_dir, rel_path, file_size, mtime, ctime, inode, hash_partial "
             "FROM files LIMIT ? OFFSET ?",
             (INGEST_BATCH_SIZE, offset),
         ).fetchall()
@@ -588,7 +591,15 @@ async def _bulk_ingest(
                 is_hidden,
                 dup_exclude,
                 r["inode"],
+                r["hash_partial"],
             ))
+
+            # Accumulate running totals
+            running_size += r["file_size"]
+            if file_type_high:
+                running_types[file_type_high] = running_types.get(file_type_high, 0) + 1
+            if is_hidden:
+                running_hidden += 1
 
         async with db_writer() as db:
             await db.executemany(
@@ -597,8 +608,8 @@ async def _bulk_ingest(
                 "file_type_high, file_type_low, file_size, "
                 "created_date, modified_date, "
                 "date_cataloged, date_last_seen, scan_id, "
-                "hidden, dup_exclude, inode) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "hidden, dup_exclude, inode, hash_partial) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(location_id, rel_path) DO UPDATE SET "
                 "filename=excluded.filename, full_path=excluded.full_path, "
                 "folder_id=excluded.folder_id, "
@@ -612,11 +623,13 @@ async def _bulk_ingest(
                 "hidden=excluded.hidden, "
                 "inode=excluded.inode, "
                 "stale=0, "
-                # Preserve hashes if file unchanged (same size + mtime)
+                # Use new hash_partial if provided, else preserve if file unchanged
                 "hash_partial=CASE "
+                "  WHEN excluded.hash_partial IS NOT NULL "
+                "  THEN excluded.hash_partial "
                 "  WHEN excluded.file_size = files.file_size "
                 "    AND excluded.modified_date = files.modified_date "
-                "  THEN hash_partial ELSE NULL END, "
+                "  THEN files.hash_partial ELSE NULL END, "
                 "hash_fast=CASE "
                 "  WHEN excluded.file_size = files.file_size "
                 "    AND excluded.modified_date = files.modified_date "
@@ -637,6 +650,10 @@ async def _bulk_ingest(
                 "Ingest progress: %d / %d files for %s",
                 ingested, total_files, location_name,
             )
+            type_breakdown = [
+                {"type": t, "count": c}
+                for t, c in sorted(running_types.items(), key=lambda x: -x[1])
+            ]
             await broadcast({
                 "type": "scan_progress",
                 "locationId": location_id,
@@ -644,6 +661,11 @@ async def _bulk_ingest(
                 "phase": "cataloging",
                 "catalogDone": ingested,
                 "catalogTotal": total_files,
+                "fileCount": ingested,
+                "totalSize": running_size,
+                "folderCount": len(folder_cache),
+                "hiddenCount": running_hidden,
+                "typeBreakdown": type_breakdown,
             })
             last_broadcast = now_mono
 
@@ -662,81 +684,18 @@ async def _bulk_ingest(
     return max(0, files_after - files_before)
 
 
-async def _apply_hashes_from_temp(
-    tmp_path: str,
+async def _find_and_queue_dup_candidates(
     location_id: int,
     agent_id: int,
-    root_path: str,
-    now_iso: str,
     location_name: str,
-) -> int:
-    """Apply partial hashes from temp DB to catalog, then find dup candidates.
+):
+    """Find dup candidates and queue them for hashing.
 
-    1. Batch-write hash_partials from temp DB to catalog
-    2. Call hash_candidates_for_location() — existing shared function
-       that finds candidates, copies hash_fast for small files,
-       queues large files for agent hash_fast
+    Hash partials are already in the catalog from bulk ingest.
+    Small files: copy hash_partial to hash_fast + submit to coalesced writer.
+    Large files: insert into pending_hashes for the drainer.
     """
-    tmp_db = sqlite3.connect(tmp_path)
-    tmp_db.row_factory = sqlite3.Row
-
-    total = tmp_db.execute("SELECT COUNT(*) FROM hashes").fetchone()[0]
-    if total == 0:
-        tmp_db.close()
-        return 0
-
-    logger.info("Applying %d partial hashes for %s", total, location_name)
-
-    # Batch write hash_partials to catalog
-    offset = 0
-    applied = 0
-    last_broadcast = time.monotonic()
-
-    while True:
-        rows = tmp_db.execute(
-            "SELECT rel_path, hash_partial FROM hashes LIMIT ? OFFSET ?",
-            (INGEST_BATCH_SIZE, offset),
-        ).fetchall()
-
-        if not rows:
-            break
-
-        update_batch = []
-        for r in rows:
-            update_batch.append((r["hash_partial"], location_id, r["rel_path"]))
-
-        async with db_writer() as db:
-            await db.executemany(
-                "UPDATE files SET hash_partial = ? "
-                "WHERE location_id = ? AND rel_path = ? AND stale = 0",
-                update_batch,
-            )
-
-        applied += len(rows)
-        offset += INGEST_BATCH_SIZE
-
-        now_mono = time.monotonic()
-        if now_mono - last_broadcast >= 2.0:
-            pct = round(applied / total * 100) if total else 0
-            logger.info(
-                "Hash partial write: %d / %d (%d%%) for %s",
-                applied, total, pct, location_name,
-            )
-            await broadcast({
-                "type": "scan_progress",
-                "locationId": location_id,
-                "location": location_name,
-                "phase": "cataloging_hashes",
-                "catalogDone": applied,
-                "catalogTotal": total,
-            })
-            last_broadcast = now_mono
-
-        await asyncio.sleep(0)
-
-    tmp_db.close()
-
-    logger.info("Hash partials written, finding dup candidates for %s", location_name)
+    logger.info("Finding dup candidates for %s", location_name)
 
     await broadcast({
         "type": "scan_progress",
@@ -745,8 +704,6 @@ async def _apply_hashes_from_temp(
         "phase": "checking_duplicates",
     })
 
-    # Find dup candidates — small files handled inline, large files queued
-    # for the hash drainer which runs concurrently
     from file_hunter.services.dup_counts import hash_candidates_for_location
 
     candidates_total, small_handled, large_queued = await hash_candidates_for_location(
@@ -759,7 +716,7 @@ async def _apply_hashes_from_temp(
         candidates_total, small_handled, large_queued, location_name,
     )
 
-    return applied
+    return candidates_total
 
 
 async def _broadcast_progress(

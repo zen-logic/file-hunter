@@ -1021,11 +1021,16 @@ WS.on('scan_progress', (msg) => {
     Detail.updateFromScanProgress(msg);
     ActivityLog.add(logText);
     updateLocationOnline(msg.locationId, true);
+    if (msg.totalSize !== undefined) Tree.updateLocationSize(msg.locationId, msg.totalSize);
     Tree.setScanningLocation(msg.locationId, msg.phase);
 });
 
-WS.on('location_children', (msg) => {
+WS.on('location_children', async (msg) => {
     Tree.setLocationChildren(msg.locationId, msg.children);
+    if (selectedNode && selectedNode.id === 'loc-' + msg.locationId) {
+        await FileList.showFolder(selectedNode.id);
+        await Detail.refreshStats();
+    }
 });
 
 WS.on('scan_completed', async (msg) => {
@@ -1040,13 +1045,8 @@ WS.on('scan_completed', async (msg) => {
     ActivityLog.add(`Scan completed: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} hashed${skippedPart}, ${msg.duplicatesFound.toLocaleString()} duplicates${stalePart}`);
     Toast.success(`Scan completed: ${msg.location}`);
     Tree.clearScanningLocation(msg.locationId);
+    if (msg.totalSize !== undefined) Tree.updateLocationSize(msg.locationId, msg.totalSize);
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
     await Detail.refreshStats();
 });
 
@@ -1068,12 +1068,6 @@ WS.on('scan_cancelled', async (msg) => {
     Toast.info(`Scan cancelled: ${msg.location}`);
     Tree.clearScanningLocation(msg.locationId);
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
     await Detail.refreshStats();
 });
 
@@ -1257,10 +1251,10 @@ WS.on('size_recalc_completed', msg => {
     StatusBar.loadStats();
     Detail.refreshStats();
 });
-WS.on('dup_recalc_completed', msg => {
-    const src = msg.source ? ` (${msg.source})` : '';
-    ActivityLog.add(`Duplicate counts updated${src}`);
-    StatusBar.loadStats();
+WS.on('dup_recalc_completed', async (msg) => {
+    await StatusBar.loadStats();
+    await Detail.refreshStats();
+    FileList.refreshDupCounts();
 });
 
 // --- Dup exclude progress polling ---
@@ -1395,12 +1389,7 @@ WS.on('location_deleted', async (msg) => {
 
 WS.on('stats_updated', async () => {
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
-    await refreshDetailPanel();
+    await Detail.refreshStats();
 });
 
 WS.on('repair_started', () => {
