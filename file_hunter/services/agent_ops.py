@@ -420,13 +420,18 @@ def _parse_tsv_line(line: str) -> dict | None:
         return None
     t = parts[0]
     if t == "F" and len(parts) >= 6:
+        # Reinterpret as signed 64-bit for SQLite — handles both old
+        # agents (unsigned) and new agents (already signed)
+        ino = int(parts[5])
+        if ino >= 2**63:
+            ino -= 2**64
         return {
             "type": "file",
             "rel_path": parts[1],
             "size": int(parts[2]),
             "mtime": parts[3],
             "ctime": parts[4],
-            "inode": int(parts[5]),
+            "inode": ino,
         }
     if t == "D" and len(parts) >= 2:
         return {"type": "dir", "rel_dir": parts[1]}
