@@ -1048,6 +1048,48 @@ async def hash_candidates_for_location(
     return total, len(small_files), len(large_files)
 
 
+async def post_ingest_dup_processing(
+    location_id: int,
+    agent_id: int,
+    location_name: str,
+    on_progress=None,
+):
+    """Shared post-ingest dup processing for scan, rescan, and import.
+
+    1. Find dup candidates (files sharing hash_partial that need hash_fast)
+    2. Handle small files (copy hash_partial → hash_fast)
+    3. Queue large files for hash drainer
+    4. Recount dup_count for affected hashes
+
+    Called after files + hashes are in the catalog and hashes.db.
+    """
+    from file_hunter.ws.scan import broadcast
+
+    log.info("Post-ingest dup processing for %s", location_name)
+
+    await broadcast({
+        "type": "scan_progress",
+        "locationId": location_id,
+        "location": location_name,
+        "phase": "checking_duplicates",
+    })
+
+    candidates_total, small_handled, large_queued = await hash_candidates_for_location(
+        location_id=location_id,
+        agent_id=agent_id,
+    )
+
+    log.info(
+        "Dup candidates: %d total (%d small handled, %d large queued) for %s",
+        candidates_total, small_handled, large_queued, location_name,
+    )
+
+    if on_progress:
+        await on_progress(candidates_total, small_handled, large_queued)
+
+    return candidates_total
+
+
 async def run_hash_file(op_id: int, agent_id: int, params: dict):
     """Queue operation handler: hash a single file via agent dispatch.
 

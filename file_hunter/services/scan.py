@@ -158,7 +158,8 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
             # --- Phase 3: find dup candidates for new/changed files ---
             if new_count > 0 or changed_count > 0:
-                candidates_total = await _find_and_queue_dup_candidates(
+                from file_hunter.services.dup_counts import post_ingest_dup_processing
+                candidates_total = await post_ingest_dup_processing(
                     location_id, agent_id, location_name,
                 )
 
@@ -191,7 +192,8 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             await _broadcast_location_children(location_id)
 
             # --- Phase 3: find dup candidates and queue for hashing ---
-            candidates_total = await _find_and_queue_dup_candidates(
+            from file_hunter.services.dup_counts import post_ingest_dup_processing
+            candidates_total = await post_ingest_dup_processing(
                 location_id, agent_id, location_name,
             )
 
@@ -1242,40 +1244,6 @@ async def _broadcast_location_children(location_id: int):
         "children": children,
     })
 
-
-async def _find_and_queue_dup_candidates(
-    location_id: int,
-    agent_id: int,
-    location_name: str,
-):
-    """Find dup candidates and queue them for hashing.
-
-    Hash partials are already in the catalog from bulk ingest.
-    Small files: copy hash_partial to hash_fast + submit to coalesced writer.
-    Large files: insert into pending_hashes for the drainer.
-    """
-    logger.info("Finding dup candidates for %s", location_name)
-
-    await broadcast({
-        "type": "scan_progress",
-        "locationId": location_id,
-        "location": location_name,
-        "phase": "checking_duplicates",
-    })
-
-    from file_hunter.services.dup_counts import hash_candidates_for_location
-
-    candidates_total, small_handled, large_queued = await hash_candidates_for_location(
-        location_id=location_id,
-        agent_id=agent_id,
-    )
-
-    logger.info(
-        "Dup candidates: %d total (%d small handled, %d large queued) for %s",
-        candidates_total, small_handled, large_queued, location_name,
-    )
-
-    return candidates_total
 
 
 async def _broadcast_progress(

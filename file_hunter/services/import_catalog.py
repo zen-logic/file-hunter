@@ -274,22 +274,6 @@ async def run_import(
         _progress["status"] = "recalculating"
         await _recalculate_location_sizes(location_id)
 
-        # --- Recount duplicates in hashes.db ---
-        _progress["status"] = "dup_recount"
-        from file_hunter.services.dup_counts import full_dup_recount
-
-        async def _on_dup_progress(done):
-            _progress["dup_hashes_done"] = done
-
-        async def _on_dup_total(total):
-            _progress["dup_hashes_total"] = total
-
-        await full_dup_recount(
-            location_id=location_id,
-            on_progress=_on_dup_progress,
-            on_total=_on_dup_total,
-        )
-
         # Update date_last_scanned and record import in scans table
         async with db_writer() as wdb:
             await wdb.execute(

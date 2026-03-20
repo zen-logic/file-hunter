@@ -171,52 +171,15 @@ async def _run_and_notify(
         async with paused_queue("import", location_name):
             await run_import(catalog_path, location_id, root_path)
 
-            # Recount dups for imported location before resuming queue
-            log.info(
-                "Import post-processing: status=%s, starting dup recount for location %d",
-                _progress["status"],
-                location_id,
-            )
+            # Post-ingest: find dup candidates + recount
             if _progress["status"] == "complete":
-                # --- Candidate detection + hash_fast ---
-                from file_hunter.services.dup_counts import hash_candidates_for_location
+                from file_hunter.services.dup_counts import post_ingest_dup_processing
 
-                async def _on_hash_progress(hashed, total):
-                    _progress["dup_hashes_done"] = hashed
-                    _progress["dup_hashes_total"] = total
-
-                _progress["status"] = "hashing"
-                total, hashed, _ = await hash_candidates_for_location(
-                    location_id=location_id,
-                    agent_id=agent_id,
-                    on_progress=_on_hash_progress,
+                _progress["status"] = "checking_duplicates"
+                await post_ingest_dup_processing(
+                    location_id, agent_id, location_name,
                 )
-
-                # --- Dup recount ---
-                from file_hunter.services.dup_counts import optimized_dup_recount
-
-                _progress["status"] = "dup_recount"
-                _progress["dup_hashes_done"] = 0
-                _progress["dup_hashes_total"] = 0
-
-                async def _on_dup_total(total):
-                    _progress["dup_hashes_total"] = total
-
-                async def _on_dup_progress(total_processed):
-                    _progress["dup_hashes_done"] = total_processed
-
-                await optimized_dup_recount(
-                    location_id=location_id,
-                    on_progress=_on_dup_progress,
-                    on_total=_on_dup_total,
-                )
-                log.info("Import dup recount complete for location %d", location_id)
                 _progress["status"] = "complete"
-            else:
-                log.warning(
-                    "Import dup recount skipped — status was '%s' not 'complete'",
-                    _progress["status"],
-                )
 
     except Exception as e:
         log.exception("Import post-processing failed")
