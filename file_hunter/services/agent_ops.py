@@ -64,6 +64,8 @@ def invalidate_loc_cache(location_id: int = None):
 async def _post(host, port, token, path, body, timeout=60.0):
     """POST JSON to agent and return the parsed data field."""
     url = f"http://{host}:{port}{path}"
+    if timeout is None:
+        timeout = httpx.Timeout(None, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             url, json=body, headers={"Authorization": f"Bearer {token}"}
@@ -256,7 +258,7 @@ async def hash_partial_batch(agent_id: int, paths: list[str]) -> dict:
         raise ConnectionError(f"Agent {agent_id} is offline")
     host, port, token = resolved
     return await _post(
-        host, port, token, "/files/hash-partial-batch", {"paths": paths}, timeout=300.0
+        host, port, token, "/files/hash-partial-batch", {"paths": paths}, timeout=None
     )
 
 
@@ -271,7 +273,7 @@ async def hash_fast_batch(agent_id: int, paths: list[str]) -> dict:
         raise ConnectionError(f"Agent {agent_id} is offline")
     host, port, token = resolved
     return await _post(
-        host, port, token, "/files/hash-batch", {"paths": paths}, timeout=600.0
+        host, port, token, "/files/hash-batch", {"paths": paths}, timeout=None
     )
 
 

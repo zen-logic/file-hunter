@@ -232,6 +232,12 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             await drainer_task
         except asyncio.CancelledError:
             pass
+        except Exception as drainer_err:
+            logger.warning(
+                "Hash drainer failed for %s: %s — scan data is intact, "
+                "pending hashes will be retried next scan",
+                location_name, drainer_err,
+            )
         logger.info("Hash drainer finished for %s", location_name)
 
         # --- Correction pass: rebuild stored counters ---
