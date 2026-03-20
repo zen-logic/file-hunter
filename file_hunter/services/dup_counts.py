@@ -519,6 +519,12 @@ async def _dup_recalc_writer():
                 source_label or "unknown",
             )
 
+            # Notify UI that dup counts are being recalculated
+            await broadcast({
+                "type": "dup_recalc_started",
+                "locationIds": list(merged_location_ids),
+            })
+
             # Recalculate dup_count on files
             await recalculate_dup_counts(
                 strong_hashes=merged_strong,
@@ -550,8 +556,18 @@ async def _dup_recalc_writer():
 
             await update_location_dup_counts(affected)
 
+            # Rebuild folder-level dup counts now that hashes.db is up to date
+            from file_hunter.services.sizes import recalculate_location_sizes
+
+            for lid in affected:
+                await recalculate_location_sizes(lid)
+
             total_hashes = len(merged_strong) + len(merged_fast)
-            await broadcast({"type": "dup_recalc_completed", "hashCount": total_hashes})
+            await broadcast({
+                "type": "dup_recalc_completed",
+                "hashCount": total_hashes,
+                "locationIds": list(affected),
+            })
     except Exception:
         log.error("Coalesced dup recalc writer failed", exc_info=True)
 

@@ -1277,6 +1277,18 @@ WS.on('size_recalc_completed', msg => {
         recalcBtn.disabled = false;
     }
 });
+WS.on('dup_recalc_started', (msg) => {
+    // Show "recalculating..." on dup count if viewing an affected location/folder
+    const dupEl = document.querySelector('[data-stat="duplicates"]');
+    if (dupEl && msg.locationIds) {
+        const viewingLocId = Detail._currentLocationNode
+            ? String(Detail._currentLocationNode.id).replace('loc-', '')
+            : null;
+        if (viewingLocId && msg.locationIds.includes(parseInt(viewingLocId))) {
+            dupEl.textContent = 'recalculating...';
+        }
+    }
+});
 WS.on('dup_recalc_completed', async (msg) => {
     await StatusBar.loadStats();
     await Detail.refreshStats();
