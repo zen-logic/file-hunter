@@ -1135,7 +1135,17 @@ function syncQueuedLocations(queue) {
 
 WS.on('scan_queued', (msg) => {
     syncQueuedLocations(msg.queue);
-    ActivityLog.add(`Scan queued: <b>${msg.entry.name}</b>`);
+    const q = msg.queue;
+    let reason = '';
+    if (q && q.deleting_location_ids && q.deleting_location_ids.length > 0) {
+        reason = ' (waiting for location delete to finish)';
+    } else if (q && q.running_location_ids && q.running_location_ids.length > 0) {
+        reason = ' (waiting for current operation to finish)';
+    }
+    ActivityLog.add(`Scan queued: <b>${msg.entry.name}</b>${reason}`);
+    if (reason) {
+        StatusBar.renderActivity('scanning', `Queued: ${msg.entry.name}${reason}`, null);
+    }
 });
 
 WS.on('scan_dequeued', (msg) => {
