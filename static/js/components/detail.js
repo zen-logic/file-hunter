@@ -135,6 +135,8 @@ const Detail = {
             if (res.ok) {
                 const s = res.data;
                 gfc.textContent = s.totalFiles.toLocaleString();
+                const gloc = this.el.querySelector('[data-stat="globalLocations"]');
+                if (gloc) gloc.textContent = s.totalLocations;
                 const gts = this.el.querySelector('[data-stat="globalTotalSize"]');
                 if (gts) gts.textContent = s.totalSizeFormatted;
                 const gdup = this.el.querySelector('[data-stat="globalDuplicates"]');
@@ -724,7 +726,7 @@ const Detail = {
                     <div class="stat-label">Files Cataloged</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value">${s.totalLocations}</div>
+                    <div class="stat-value" data-stat="globalLocations">${s.totalLocations}</div>
                     <div class="stat-label">Locations</div>
                 </div>
                 <div class="stat-card">
