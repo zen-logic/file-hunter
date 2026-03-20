@@ -187,6 +187,7 @@ async def _run_and_notify(
         _progress["error"] = str(e)
 
     invalidate_stats_cache()
+    log.info("Broadcasting import_completed for %s (location %d)", location_name, location_id)
     await broadcast(
         {
             "type": "import_completed",
