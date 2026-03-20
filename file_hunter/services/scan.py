@@ -762,6 +762,14 @@ async def _diff_and_update(
 
     logger.info("Rescan folders ensured for %s: %d", location_name, len(folder_cache))
 
+    # Build folder_parents for stats cascade
+    async with read_db() as rdb:
+        fp_rows = await rdb.execute_fetchall(
+            "SELECT id, parent_id FROM folders WHERE location_id = ?",
+            (location_id,),
+        )
+    folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+
     # --- Phase 2b: diff using ATTACH ---
     await broadcast({
         "type": "scan_progress",
@@ -789,7 +797,9 @@ async def _diff_and_update(
 
         # Changed files: in both but size or mtime differs
         changed_rows = await conn.execute_fetchall(
-            "SELECT t.rel_dir, t.rel_path, t.file_size, t.mtime, t.ctime, t.inode, c.id as file_id "
+            "SELECT t.rel_dir, t.rel_path, t.file_size, t.mtime, t.ctime, t.inode, "
+            "c.id as file_id, c.file_size as old_size, c.file_type_high as old_type, "
+            "c.folder_id as old_folder_id, c.hidden as old_hidden "
             "FROM temp_scan.files t "
             "INNER JOIN main.files c "
             "  ON c.location_id = ? AND c.rel_path = t.rel_path "
@@ -800,9 +810,10 @@ async def _diff_and_update(
         changed_count = len(changed_rows)
         logger.info("Rescan diff: %d changed files for %s", changed_count, location_name)
 
-        # Stale files: IDs of files in catalog but not in temp DB
+        # Stale files: in catalog but not in temp DB (with details for stats)
         stale_ids = await conn.execute_fetchall(
-            "SELECT c.id FROM main.files c "
+            "SELECT c.id, c.folder_id, c.file_size, c.file_type_high, c.hidden "
+            "FROM main.files c "
             "LEFT JOIN temp_scan.files t ON t.rel_path = c.rel_path "
             "WHERE c.location_id = ? AND c.stale = 0 AND t.rel_path IS NULL",
             (location_id,),
@@ -831,6 +842,14 @@ async def _diff_and_update(
         # Remove stale files from hashes.db
         from file_hunter.hashes_db import remove_file_hashes
         await remove_file_hashes(stale_id_list)
+
+        # Stats: remove stale file deltas
+        from file_hunter.stats_db import apply_file_deltas as _apply_deltas
+        stale_removed = [
+            (r["folder_id"], r["file_size"] or 0, r["file_type_high"], r["hidden"])
+            for r in stale_ids
+        ]
+        await _apply_deltas(location_id, folder_parents, removed=stale_removed)
 
     # Mark all seen files with current scan_id — batched to avoid holding writer
     async with read_db() as rdb:
@@ -909,6 +928,14 @@ async def _diff_and_update(
                     batch,
                 )
 
+            # Stats: new files added
+            batch_deltas = [
+                (b[4], b[7], b[5], b[13])  # folder_id, file_size, type_high, hidden
+                for b in batch
+            ]
+            from file_hunter.stats_db import apply_file_deltas as _apply_deltas
+            await _apply_deltas(location_id, folder_parents, added=batch_deltas)
+
             await broadcast({
                 "type": "scan_progress",
                 "locationId": location_id,
@@ -958,6 +985,27 @@ async def _diff_and_update(
                     update_batch,
                 )
             await asyncio.sleep(0)
+
+        # Stats: changed files — remove old sizes, add new sizes
+        changed_removed = [
+            (r["old_folder_id"], r["old_size"] or 0, r["old_type"], r["old_hidden"])
+            for r in changed_rows
+        ]
+        changed_added = []
+        for r in changed_rows:
+            rel_dir = r["rel_dir"]
+            folder_id = None
+            if rel_dir and rel_dir in folder_cache:
+                folder_id = folder_cache[rel_dir][0]
+            file_type_high = classify_file(r["rel_path"])[0]
+            is_hidden = 1 if os.path.basename(r["rel_path"]).startswith(".") else 0
+            changed_added.append((folder_id, r["file_size"], file_type_high, is_hidden))
+
+        from file_hunter.stats_db import apply_file_deltas as _apply_deltas
+        await _apply_deltas(
+            location_id, folder_parents,
+            removed=changed_removed, added=changed_added,
+        )
 
         logger.info(
             "Rescan: %d changed files updated for %s", changed_count, location_name
