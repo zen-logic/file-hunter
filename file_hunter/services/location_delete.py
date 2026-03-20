@@ -140,22 +140,21 @@ async def _purge_location_batched(location_id: int):
         await asyncio.sleep(0)
 
     # Small tables — single deletes, each releases writer
+    # Only delete OTHER ops for this location (scans, backfills) — not the
+    # currently running delete_location op. The queue manager owns its lifecycle.
     async with db_writer() as db:
         await db.execute(
-            "DELETE FROM operation_queue WHERE params LIKE ?",
+            "DELETE FROM operation_queue WHERE params LIKE ? AND type != 'delete_location'",
             (f'%"location_id": {location_id}%',),
         )
 
+    # Final cleanup — single writer call so location row can't survive if
+    # server crashes between steps
     async with db_writer() as db:
         await db.execute(
             "DELETE FROM pending_backfills WHERE location_id = ?", (location_id,)
         )
-
-    async with db_writer() as db:
         await db.execute(
             "DELETE FROM pending_hashes WHERE location_id = ?", (location_id,)
         )
-
-    # Location row — children already deleted, no heavy CASCADE
-    async with db_writer() as db:
         await db.execute("DELETE FROM locations WHERE id = ?", (location_id,))
