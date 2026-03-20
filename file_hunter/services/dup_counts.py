@@ -98,6 +98,7 @@ async def _batched_recalc(
         for i in range(0, len(dc_hashes), effective_batch):
             batch = dc_hashes[i : i + effective_batch]
             ph = ",".join("?" for _ in batch)
+            # Source of truth: hashes.db
             async with hashes_writer() as wdb:
                 await wdb.execute(
                     f"UPDATE file_hashes SET dup_count = ? "
@@ -105,6 +106,26 @@ async def _batched_recalc(
                     f"{update_extra}",
                     [dc] + batch,
                 )
+                # Get affected file_ids for catalog sync
+                affected_rows = await wdb.execute(
+                    f"SELECT file_id FROM file_hashes "
+                    f"WHERE {hash_column} IN ({ph})"
+                    f"{update_extra}",
+                )
+                affected_ids = [r[0] for r in await affected_rows.fetchall()]
+
+            # Denormalized copy: catalog files.dup_count (for search/sort indexing)
+            if affected_ids:
+                for j in range(0, len(affected_ids), 500):
+                    id_batch = affected_ids[j : j + 500]
+                    id_ph = ",".join("?" for _ in id_batch)
+                    async with db_writer() as cdb:
+                        await cdb.execute(
+                            f"UPDATE files SET dup_count = ? "
+                            f"WHERE id IN ({id_ph})",
+                            [dc] + id_batch,
+                        )
+
             processed += len(batch)
 
             if on_progress:
@@ -239,6 +260,24 @@ async def full_dup_recount(
                         f"{update_extra}",
                         [dc] + batch,
                     )
+                    affected_rows = await wdb.execute(
+                        f"SELECT file_id FROM file_hashes "
+                        f"WHERE {hash_column} IN ({ph})"
+                        f"{update_extra}",
+                    )
+                    affected_ids = [r[0] for r in await affected_rows.fetchall()]
+
+                if affected_ids:
+                    for j in range(0, len(affected_ids), 500):
+                        id_batch = affected_ids[j : j + 500]
+                        id_ph = ",".join("?" for _ in id_batch)
+                        async with db_writer() as cdb:
+                            await cdb.execute(
+                                f"UPDATE files SET dup_count = ? "
+                                f"WHERE id IN ({id_ph})",
+                                [dc] + id_batch,
+                            )
+
                 written += len(batch)
                 total_processed += len(batch)
                 if on_progress:
@@ -341,6 +380,7 @@ async def optimized_dup_recount(
     processed = 0
     for i in range(0, total, SQL_VAR_LIMIT):
         batch = all_dup_hashes[i : i + SQL_VAR_LIMIT]
+        catalog_updates: list[tuple[int, int]] = []  # (dc, file_id)
         async with hashes_writer() as wdb:
             for hash_column, h, dc in batch:
                 update_extra = (
@@ -351,6 +391,23 @@ async def optimized_dup_recount(
                     f"WHERE {hash_column} = ?{update_extra}",
                     (dc, h),
                 )
+                rows = await wdb.execute(
+                    f"SELECT file_id FROM file_hashes "
+                    f"WHERE {hash_column} = ?{update_extra}",
+                )
+                for r in await rows.fetchall():
+                    catalog_updates.append((dc, r[0]))
+
+        # Sync to catalog
+        if catalog_updates:
+            for j in range(0, len(catalog_updates), 500):
+                sub = catalog_updates[j : j + 500]
+                async with db_writer() as cdb:
+                    await cdb.executemany(
+                        "UPDATE files SET dup_count = ? WHERE id = ?",
+                        sub,
+                    )
+
         processed += len(batch)
         if on_progress:
             await on_progress(processed)
