@@ -656,8 +656,7 @@ async def find_dup_candidates(
 async def update_location_dup_counts(location_ids: set[int]):
     """Recount and write locations.duplicate_count for the given locations.
 
-    Reads dup counts from hashes.db, writes to catalog via db_writer().
-    The catalog write is tiny (one row per location) — no contention concern.
+    Reads dup counts from hashes.db, writes to stats.db.
     """
     if not location_ids:
         return
@@ -675,10 +674,12 @@ async def update_location_dup_counts(location_ids: set[int]):
     finally:
         await conn.close()
 
-    async with db_writer() as wdb:
+    from file_hunter.stats_db import stats_writer
+
+    async with stats_writer() as sdb:
         for dc, lid in loc_updates:
-            await wdb.execute(
-                "UPDATE locations SET duplicate_count = ? WHERE id = ?",
+            await sdb.execute(
+                "UPDATE location_stats SET duplicate_count = ? WHERE location_id = ?",
                 (dc, lid),
             )
 
