@@ -97,34 +97,35 @@ async def _refresh_all():
 
 
 async def _refresh_dashboard(db):
-    """Refresh dashboard stats from stored counters on locations table."""
-    loc_agg_rows, recent_scans_rows = await asyncio.gather(
-        db.execute_fetchall(
+    """Refresh dashboard stats from stats.db + catalog for non-counter data."""
+    from file_hunter.stats_db import read_stats as read_stats_db
+
+    # Counter aggregates from stats.db
+    async with read_stats_db() as sdb:
+        loc_agg_rows = await sdb.execute_fetchall(
             "SELECT COUNT(*) as c, COALESCE(SUM(total_size), 0) as s, "
             "COALESCE(SUM(file_count), 0) as fc, "
             "COALESCE(SUM(duplicate_count), 0) as dc "
-            "FROM locations WHERE name NOT LIKE '__deleting_%'"
-        ),
-        db.execute_fetchall(
-            """SELECT s.id, l.name as location_name, s.status, s.started_at,
-                      s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
-               FROM scans s
-               JOIN locations l ON l.id = s.location_id
-               ORDER BY s.started_at DESC
-               LIMIT 5"""
-        ),
+            "FROM location_stats"
+        )
+        loc_type_rows = await sdb.execute_fetchall(
+            "SELECT type_counts FROM location_stats WHERE type_counts != '{}'"
+        )
+
+    # Recent scans from catalog (not counter data)
+    recent_scans_rows = await db.execute_fetchall(
+        """SELECT s.id, l.name as location_name, s.status, s.started_at,
+                  s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
+           FROM scans s
+           JOIN locations l ON l.id = s.location_id
+           ORDER BY s.started_at DESC
+           LIMIT 5"""
     )
 
     total_locations = loc_agg_rows[0]["c"]
     total_size = loc_agg_rows[0]["s"]
     total_files = loc_agg_rows[0]["fc"]
     dup_count = loc_agg_rows[0]["dc"]
-
-    # Aggregate type_counts from all locations
-    loc_type_rows = await db.execute_fetchall(
-        "SELECT type_counts FROM locations "
-        "WHERE type_counts != '{}' AND name NOT LIKE '__deleting_%'"
-    )
     merged_types: dict[str, int] = {}
     for r in loc_type_rows:
         for ftype, cnt in json.loads(r["type_counts"] or "{}").items():
@@ -166,20 +167,31 @@ async def _refresh_dashboard(db):
 
 
 async def _refresh_all_locations(db):
-    """Refresh cached stats for all locations from stored counters."""
+    """Refresh cached stats for all locations from stats.db + catalog."""
+    from file_hunter.stats_db import read_stats as read_stats_db
+
+    # Location metadata from catalog
     loc_rows = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, "
-        "total_size, file_count, duplicate_count, hidden_count, type_counts, "
         "scan_schedule_enabled, scan_schedule_days, scan_schedule_time, "
         "scan_schedule_last_run FROM locations "
         "WHERE name NOT LIKE '__deleting_%'"
     )
+
+    # Counters from stats.db
+    async with read_stats_db() as sdb:
+        stats_rows = await sdb.execute_fetchall(
+            "SELECT location_id, file_count, total_size, duplicate_count, "
+            "hidden_count, type_counts FROM location_stats"
+        )
+    stats_by_loc = {r["location_id"]: r for r in stats_rows}
+
     for loc in loc_rows:
-        await _refresh_location(db, loc)
+        await _refresh_location(db, loc, stats_by_loc.get(loc["id"]))
 
 
-async def _refresh_location(db, loc):
-    """Refresh cached stats for a single location using stored counters."""
+async def _refresh_location(db, loc, stats_row=None):
+    """Refresh cached stats for a single location."""
     location_id = loc["id"]
 
     folder_rows = await db.execute_fetchall(
@@ -187,12 +199,14 @@ async def _refresh_location(db, loc):
         (location_id,),
     )
 
-    file_count = loc["file_count"] or 0
-    total_size = loc["total_size"] or 0
-    dup_count = loc["duplicate_count"] or 0
+    file_count = (stats_row["file_count"] if stats_row else 0) or 0
+    total_size = (stats_row["total_size"] if stats_row else 0) or 0
+    dup_count = (stats_row["duplicate_count"] if stats_row else 0) or 0
+    hidden_count = (stats_row["hidden_count"] if stats_row else 0) or 0
     folder_count = folder_rows[0]["c"]
 
-    tc = json.loads(loc["type_counts"] or "{}")
+    tc_raw = (stats_row["type_counts"] if stats_row else "{}") or "{}"
+    tc = json.loads(tc_raw)
     type_breakdown = sorted(
         [{"type": t, "count": c} for t, c in tc.items()],
         key=lambda x: x["count"],
@@ -211,7 +225,7 @@ async def _refresh_location(db, loc):
         "totalSize": total_size,
         "totalSizeFormatted": format_size(total_size),
         "duplicateFiles": dup_count,
-        "hiddenFiles": loc["hidden_count"] or 0,
+        "hiddenFiles": hidden_count,
         "typeBreakdown": type_breakdown,
         "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
         "scheduleDays": schedule_days,
@@ -231,26 +245,27 @@ async def get_stats(db):
     if cached is not None:
         return cached
 
-    # Cache miss — all four counters are stored on locations, so this is fast.
-    loc_agg_rows, loc_type_rows, recent_scans_rows = await asyncio.gather(
-        db.execute_fetchall(
+    # Cache miss — counters from stats.db, recent scans from catalog
+    from file_hunter.stats_db import read_stats as read_stats_db
+
+    async with read_stats_db() as sdb:
+        loc_agg_rows = await sdb.execute_fetchall(
             "SELECT COUNT(*) as c, COALESCE(SUM(total_size), 0) as s, "
             "COALESCE(SUM(file_count), 0) as fc, "
             "COALESCE(SUM(duplicate_count), 0) as dc "
-            "FROM locations WHERE name NOT LIKE '__deleting_%'"
-        ),
-        db.execute_fetchall(
-            "SELECT type_counts FROM locations "
-            "WHERE type_counts != '{}' AND name NOT LIKE '__deleting_%'"
-        ),
-        db.execute_fetchall(
-            """SELECT s.id, l.name as location_name, s.status, s.started_at,
-                      s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
-               FROM scans s
-               JOIN locations l ON l.id = s.location_id
-               ORDER BY s.started_at DESC
-               LIMIT 5"""
-        ),
+            "FROM location_stats"
+        )
+        loc_type_rows = await sdb.execute_fetchall(
+            "SELECT type_counts FROM location_stats WHERE type_counts != '{}'"
+        )
+
+    recent_scans_rows = await db.execute_fetchall(
+        """SELECT s.id, l.name as location_name, s.status, s.started_at,
+                  s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
+           FROM scans s
+           JOIN locations l ON l.id = s.location_id
+           ORDER BY s.started_at DESC
+           LIMIT 5"""
     )
 
     merged_types: dict[str, int] = {}
@@ -348,10 +363,11 @@ async def get_location_stats(db, location_id: int):
             "lastScanStatus": None,
         }
 
-    # Cache miss — all four counters stored on locations table, so this is fast.
+    # Cache miss — metadata from catalog, counters from stats.db
+    from file_hunter.stats_db import read_stats as read_stats_db
+
     loc_row = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, date_last_scanned, "
-        "total_size, file_count, duplicate_count, hidden_count, type_counts, "
         "scan_schedule_enabled, scan_schedule_days, scan_schedule_time, "
         "scan_schedule_last_run FROM locations WHERE id = ?",
         (location_id,),
@@ -359,6 +375,14 @@ async def get_location_stats(db, location_id: int):
     if not loc_row:
         return None
     loc = loc_row[0]
+
+    async with read_stats_db() as sdb:
+        stats_row = await sdb.execute_fetchall(
+            "SELECT file_count, total_size, duplicate_count, hidden_count, type_counts "
+            "FROM location_stats WHERE location_id = ?",
+            (location_id,),
+        )
+    sr = stats_row[0] if stats_row else None
 
     folder_rows, online = await asyncio.gather(
         db.execute_fetchall(
@@ -373,7 +397,11 @@ async def get_location_stats(db, location_id: int):
     days_str = loc["scan_schedule_days"] or ""
     schedule_days = [int(d) for d in days_str.split(",") if d.strip()]
 
-    tc = json.loads(loc["type_counts"] or "{}")
+    file_count = (sr["file_count"] if sr else 0) or 0
+    total_size = (sr["total_size"] if sr else 0) or 0
+    dup_count = (sr["duplicate_count"] if sr else 0) or 0
+    hidden_count = (sr["hidden_count"] if sr else 0) or 0
+    tc = json.loads((sr["type_counts"] if sr else "{}") or "{}")
     type_breakdown = sorted(
         [{"type": t, "count": c} for t, c in tc.items()],
         key=lambda x: x["count"],
@@ -384,12 +412,12 @@ async def get_location_stats(db, location_id: int):
         "name": loc["name"],
         "rootPath": loc["root_path"],
         "dateAdded": loc["date_added"],
-        "fileCount": loc["file_count"] or 0,
+        "fileCount": file_count,
         "folderCount": folder_rows[0]["c"],
-        "totalSize": loc["total_size"] or 0,
-        "totalSizeFormatted": format_size(loc["total_size"] or 0),
-        "duplicateFiles": loc["duplicate_count"] or 0,
-        "hiddenFiles": loc["hidden_count"] or 0,
+        "totalSize": total_size,
+        "totalSizeFormatted": format_size(total_size),
+        "duplicateFiles": dup_count,
+        "hiddenFiles": hidden_count,
         "typeBreakdown": type_breakdown,
         "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
         "scheduleDays": schedule_days,
@@ -436,10 +464,11 @@ async def get_folder_stats(db, folder_id: int):
         result["online"] = folder_online
         return result
 
-    # Folder metadata — includes stored counters (duplicate_count is cumulative)
+    # Folder metadata from catalog (structural), counters from stats.db
+    from file_hunter.stats_db import read_stats as read_stats_db
+
     folder_row = await db.execute_fetchall(
         """SELECT f.id, f.name, f.rel_path, f.location_id,
-                  f.total_size, f.file_count, f.duplicate_count, f.hidden_count,
                   f.dup_exclude,
                   l.name as location_name, l.root_path as location_root_path
            FROM folders f JOIN locations l ON l.id = f.location_id
@@ -450,7 +479,16 @@ async def get_folder_stats(db, folder_id: int):
         return None
     fld = folder_row[0]
 
-    # Run remaining queries concurrently — no recursive CTE against files needed
+    # Counters from stats.db
+    async with read_stats_db() as sdb:
+        fs_row = await sdb.execute_fetchall(
+            "SELECT file_count, total_size, duplicate_count, hidden_count "
+            "FROM folder_stats WHERE folder_id = ?",
+            (folder_id,),
+        )
+    fs = fs_row[0] if fs_row else None
+
+    # Run remaining queries concurrently
     (
         subfolder_rows,
         chain_rows,
@@ -480,7 +518,10 @@ async def get_folder_stats(db, folder_id: int):
         ),
     )
 
-    dup_count = fld["duplicate_count"] or 0
+    file_count = (fs["file_count"] if fs else 0) or 0
+    total_size = (fs["total_size"] if fs else 0) or 0
+    dup_count = (fs["duplicate_count"] if fs else 0) or 0
+    hidden_count = (fs["hidden_count"] if fs else 0) or 0
     subfolder_count = subfolder_rows[0]["c"]
 
     # Build breadcrumb from chain query results
@@ -489,21 +530,18 @@ async def get_folder_stats(db, folder_id: int):
         {"nodeId": f"fld-{r['id']}", "name": r["name"]} for r in chain_rows
     )
 
-    # All locations are agent-backed — if agent is online, folder is online
     folder_online = loc_online
 
-    # Cache everything except live-computed locationOnline
-    # _root_path is a private field used to compute online status on cache hit
     cached_result = {
         "name": fld["name"],
         "relPath": fld["rel_path"],
         "location": fld["location_name"],
         "locationId": f"loc-{fld['location_id']}",
-        "fileCount": fld["file_count"] or 0,
-        "totalSize": fld["total_size"] or 0,
-        "totalSizeFormatted": format_size(fld["total_size"] or 0),
+        "fileCount": file_count,
+        "totalSize": total_size,
+        "totalSizeFormatted": format_size(total_size),
         "duplicateFiles": dup_count,
-        "hiddenFiles": fld["hidden_count"] or 0,
+        "hiddenFiles": hidden_count,
         "subfolderCount": subfolder_count,
         "dupExcluded": bool(fld["dup_exclude"]),
         "breadcrumb": breadcrumb,

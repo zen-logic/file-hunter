@@ -56,7 +56,7 @@ async def recalculate_location_sizes(location_id: int):
     3. Bottom-up accumulation: leaf folders get direct values, parents sum children.
     4. Batch UPDATE folders, then UPDATE the location row (write via db_writer()).
     """
-    from file_hunter.db import db_writer, read_db
+    from file_hunter.db import read_db
 
     async with read_db() as db:
         # 1a. Direct file sizes and counts per folder
@@ -191,33 +191,49 @@ async def recalculate_location_sizes(location_id: int):
         for ftype, cnt in direct_types.get(fid, {}).items():
             loc_type_counts[ftype] = loc_type_counts.get(ftype, 0) + cnt
 
-    async with db_writer() as wdb:
-        await wdb.executemany(
-            "UPDATE folders SET total_size = ?, file_count = ?, "
-            "duplicate_count = ?, hidden_count = ?, type_counts = ? WHERE id = ?",
+    from file_hunter.stats_db import stats_writer
+
+    # Write to stats.db — own writer, no catalog contention
+    async with stats_writer() as sdb:
+        await sdb.executemany(
+            "INSERT INTO folder_stats "
+            "(folder_id, location_id, file_count, total_size, "
+            "duplicate_count, hidden_count, type_counts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(folder_id) DO UPDATE SET "
+            "file_count=excluded.file_count, total_size=excluded.total_size, "
+            "duplicate_count=excluded.duplicate_count, hidden_count=excluded.hidden_count, "
+            "type_counts=excluded.type_counts",
             [
                 (
-                    cum_size.get(fid, 0),
+                    fid,
+                    location_id,
                     cum_count.get(fid, 0),
+                    cum_size.get(fid, 0),
                     cum_dup.get(fid, 0),
                     cum_hidden.get(fid, 0),
                     json.dumps(cum_types.get(fid, {})),
-                    fid,
                 )
                 for fid in all_folder_ids
             ],
         )
 
-        await wdb.execute(
-            "UPDATE locations SET total_size = ?, file_count = ?, "
-            "duplicate_count = ?, hidden_count = ?, type_counts = ? WHERE id = ?",
+        await sdb.execute(
+            "INSERT INTO location_stats "
+            "(location_id, file_count, total_size, "
+            "duplicate_count, hidden_count, type_counts) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(location_id) DO UPDATE SET "
+            "file_count=excluded.file_count, total_size=excluded.total_size, "
+            "duplicate_count=excluded.duplicate_count, hidden_count=excluded.hidden_count, "
+            "type_counts=excluded.type_counts",
             (
-                loc_total_size,
+                location_id,
                 loc_total_count,
+                loc_total_size,
                 loc_dup_count,
                 loc_hidden_count,
                 json.dumps(loc_type_counts),
-                location_id,
             ),
         )
 

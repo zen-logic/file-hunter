@@ -66,19 +66,45 @@ async def get_shallow_tree(db):
     child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
 
     locations = await db.execute_fetchall(
-        "SELECT id, name, root_path, date_added, date_last_scanned, total_size "
+        "SELECT id, name, root_path, date_added, date_last_scanned "
         "FROM locations WHERE name NOT LIKE '__deleting_%' "
         "ORDER BY name COLLATE NOCASE"
     )
 
-    # Root-level folders (parent_id IS NULL) with has_children flag and stored size
+    # Root-level folders (parent_id IS NULL) with has_children flag
     root_folders = await db.execute_fetchall(
-        f"""SELECT f.id, f.location_id, f.name, f.total_size, f.hidden, f.dup_exclude,
+        f"""SELECT f.id, f.location_id, f.name, f.hidden, f.dup_exclude,
                   EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
            FROM folders f
            WHERE f.parent_id IS NULL{hidden_filter}
            ORDER BY f.name"""
     )
+
+    # Fetch sizes from stats.db
+    from file_hunter.stats_db import read_stats as read_stats_db
+
+    loc_ids = [loc["id"] for loc in locations]
+    folder_ids = [f["id"] for f in root_folders]
+
+    loc_sizes: dict[int, int] = {}
+    folder_sizes: dict[int, int] = {}
+    async with read_stats_db() as sdb:
+        if loc_ids:
+            ph = ",".join("?" for _ in loc_ids)
+            ls_rows = await sdb.execute_fetchall(
+                f"SELECT location_id, total_size FROM location_stats "
+                f"WHERE location_id IN ({ph})",
+                loc_ids,
+            )
+            loc_sizes = {r["location_id"]: r["total_size"] or 0 for r in ls_rows}
+        if folder_ids:
+            ph = ",".join("?" for _ in folder_ids)
+            fs_rows = await sdb.execute_fetchall(
+                f"SELECT folder_id, total_size FROM folder_stats "
+                f"WHERE folder_id IN ({ph})",
+                folder_ids,
+            )
+            folder_sizes = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
 
     # Group root folders by location_id (no I/O, do before gather)
     roots_by_loc = {}
@@ -113,7 +139,7 @@ async def get_shallow_tree(db):
                 "type": "folder",
                 "label": f["name"],
                 "hasChildren": bool(f["has_children"]),
-                "totalSize": f["total_size"],
+                "totalSize": folder_sizes.get(f["id"], 0),
                 "children": None,  # not loaded sentinel
             }
             if f["hidden"]:
@@ -130,7 +156,7 @@ async def get_shallow_tree(db):
             "type": "location",
             "label": label,
             "online": online,
-            "totalSize": loc["total_size"],
+            "totalSize": loc_sizes.get(loc["id"], 0),
             "diskStats": ds,
             "children": children,
         }
@@ -158,13 +184,28 @@ async def get_children(db, folder_ids: list[int]):
 
     placeholders = ",".join("?" * len(folder_ids))
     rows = await db.execute_fetchall(
-        f"""SELECT f.id, f.parent_id, f.name, f.total_size, f.hidden, f.dup_exclude,
+        f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude,
                    EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
             FROM folders f
             WHERE f.parent_id IN ({placeholders}){hidden_filter}
             ORDER BY f.name""",
         folder_ids,
     )
+
+    # Fetch sizes from stats.db
+    from file_hunter.stats_db import read_stats as read_stats_db
+
+    child_ids = [r["id"] for r in rows]
+    child_sizes: dict[int, int] = {}
+    if child_ids:
+        async with read_stats_db() as sdb:
+            ph = ",".join("?" for _ in child_ids)
+            fs_rows = await sdb.execute_fetchall(
+                f"SELECT folder_id, total_size FROM folder_stats "
+                f"WHERE folder_id IN ({ph})",
+                child_ids,
+            )
+            child_sizes = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
 
     result = {}
     for r in rows:
@@ -176,7 +217,7 @@ async def get_children(db, folder_ids: list[int]):
             "type": "folder",
             "label": r["name"],
             "hasChildren": bool(r["has_children"]),
-            "totalSize": r["total_size"],
+            "totalSize": child_sizes.get(r["id"], 0),
             "children": None,
         }
         if r["hidden"]:
@@ -242,13 +283,28 @@ async def get_expand_path(db, target_id: int):
     if parent_ids_to_fetch:
         placeholders = ",".join("?" * len(parent_ids_to_fetch))
         rows = await db.execute_fetchall(
-            f"""SELECT f.id, f.parent_id, f.name, f.total_size, f.hidden, f.dup_exclude,
+            f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude,
                        EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
                 FROM folders f
                 WHERE f.parent_id IN ({placeholders}){hidden_filter}
                 ORDER BY f.name""",
             parent_ids_to_fetch,
         )
+
+        # Fetch sizes from stats.db
+        from file_hunter.stats_db import read_stats as read_stats_db
+
+        all_ids = [r["id"] for r in rows]
+        sz_map: dict[int, int] = {}
+        if all_ids:
+            async with read_stats_db() as sdb:
+                ph = ",".join("?" for _ in all_ids)
+                fs_rows = await sdb.execute_fetchall(
+                    f"SELECT folder_id, total_size FROM folder_stats "
+                    f"WHERE folder_id IN ({ph})",
+                    all_ids,
+                )
+                sz_map = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
 
         for r in rows:
             key = f"fld-{r['parent_id']}"
@@ -259,7 +315,7 @@ async def get_expand_path(db, target_id: int):
                 "type": "folder",
                 "label": r["name"],
                 "hasChildren": bool(r["has_children"]),
-                "totalSize": r["total_size"],
+                "totalSize": sz_map.get(r["id"], 0),
                 "children": None,
             }
             if r["hidden"]:
@@ -270,13 +326,26 @@ async def get_expand_path(db, target_id: int):
 
     # Also fetch root-level siblings (children of the location)
     root_rows = await db.execute_fetchall(
-        f"""SELECT f.id, f.name, f.total_size, f.hidden, f.dup_exclude,
+        f"""SELECT f.id, f.name, f.hidden, f.dup_exclude,
                   EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
            FROM folders f
            WHERE f.location_id = ? AND f.parent_id IS NULL{hidden_filter}
            ORDER BY f.name""",
         (location_id,),
     )
+
+    # Fetch root folder sizes from stats.db
+    root_ids = [r["id"] for r in root_rows]
+    root_sz: dict[int, int] = {}
+    if root_ids:
+        async with read_stats_db() as sdb:
+            ph = ",".join("?" for _ in root_ids)
+            fs_rows = await sdb.execute_fetchall(
+                f"SELECT folder_id, total_size FROM folder_stats "
+                f"WHERE folder_id IN ({ph})",
+                root_ids,
+            )
+            root_sz = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
 
     loc_key = f"loc-{location_id}"
     children_by_parent[loc_key] = []
@@ -286,7 +355,7 @@ async def get_expand_path(db, target_id: int):
             "type": "folder",
             "label": r["name"],
             "hasChildren": bool(r["has_children"]),
-            "totalSize": r["total_size"],
+            "totalSize": root_sz.get(r["id"], 0),
             "children": None,
         }
         if r["hidden"]:
@@ -500,17 +569,16 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
         return None
     loc_name = loc_row[0]["name"]
 
-    # Fetch child folders
+    # Fetch child folders (structural data from catalog)
     if parent_folder_id is None:
         children_rows = await db.execute_fetchall(
-            """SELECT f.id, f.name, f.total_size,
+            """SELECT f.id, f.name,
                       EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id) AS has_children
                FROM folders f
                WHERE f.location_id = ? AND f.parent_id IS NULL
                ORDER BY f.name""",
             (location_id,),
         )
-        # Direct files at location root (no folder)
         direct_row = await db.execute_fetchall(
             """SELECT COALESCE(SUM(file_size), 0) AS total, COUNT(*) AS cnt
                FROM files WHERE location_id = ? AND folder_id IS NULL""",
@@ -518,7 +586,7 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
         )
     else:
         children_rows = await db.execute_fetchall(
-            """SELECT f.id, f.name, f.total_size,
+            """SELECT f.id, f.name,
                       EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id) AS has_children
                FROM folders f
                WHERE f.parent_id = ?
@@ -580,6 +648,21 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
         for a in ancestors:
             breadcrumb.append({"id": a["id"], "name": a["name"]})
 
+    # Fetch sizes from stats.db for treemap children
+    from file_hunter.stats_db import read_stats as read_stats_db
+
+    tm_ids = [r["id"] for r in children_rows]
+    tm_sizes: dict[int, int] = {}
+    if tm_ids:
+        async with read_stats_db() as sdb:
+            ph = ",".join("?" for _ in tm_ids)
+            fs_rows = await sdb.execute_fetchall(
+                f"SELECT folder_id, total_size FROM folder_stats "
+                f"WHERE folder_id IN ({ph})",
+                tm_ids,
+            )
+            tm_sizes = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
+
     # Build children list
     children = []
     for r in children_rows:
@@ -587,7 +670,7 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
             {
                 "id": r["id"],
                 "name": r["name"],
-                "totalSize": r["total_size"],
+                "totalSize": tm_sizes.get(r["id"], 0),
                 "hasChildren": bool(r["has_children"]),
                 "fileCount": file_counts.get(r["id"], 0),
             }
