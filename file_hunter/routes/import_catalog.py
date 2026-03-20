@@ -189,9 +189,9 @@ async def _run_and_notify(
     invalidate_stats_cache()
     await broadcast(
         {
-            "type": "location_changed",
-            "action": "imported",
-            "location": {"label": location_name},
+            "type": "import_completed",
+            "locationId": location_id,
+            "location": location_name,
         }
     )
 

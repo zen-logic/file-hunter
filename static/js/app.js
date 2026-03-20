@@ -1385,6 +1385,17 @@ WS.on('location_changed', async (msg) => {
     await refreshDetailPanel();
 });
 
+WS.on('import_completed', async (msg) => {
+    Tree.clearScanningLocation(msg.locationId);
+    StatusBar.renderActivity('idle');
+    ActivityLog.add(`Location imported: <b>${msg.location}</b>`);
+    Toast.success(`Import completed: ${msg.location}`);
+    await Tree.reload();
+    if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
+    await StatusBar.loadStats();
+    await Detail.refreshStats();
+});
+
 WS.on('location_deleting', (msg) => {
     ActivityLog.add(`Deleting location: <b>${msg.name}</b>...`);
     Tree.setDeletingLocation(msg.locationId);
