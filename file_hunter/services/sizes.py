@@ -66,14 +66,40 @@ async def recalculate_location_sizes(location_id: int):
             (location_id,),
         )
 
-        # 1b. Direct duplicate counts per folder
-        dup_rows = await db.execute_fetchall(
-            "SELECT folder_id, COUNT(*) AS cnt "
-            "FROM files WHERE location_id = ? AND stale = 0 "
-            "AND dup_exclude = 0 AND dup_count > 0 "
-            "GROUP BY folder_id",
-            (location_id,),
-        )
+        # 1b. Direct duplicate counts per folder — dup_count from hashes.db
+        from file_hunter.hashes_db import open_hashes_connection
+
+        hconn = await open_hashes_connection()
+        try:
+            dup_file_rows = await hconn.execute_fetchall(
+                "SELECT file_id FROM active_hashes "
+                "WHERE location_id = ? AND dup_count > 0",
+                (location_id,),
+            )
+        finally:
+            await hconn.close()
+
+        dup_rows = []
+        if dup_file_rows:
+            dup_ids = [r["file_id"] for r in dup_file_rows]
+            # Map file_ids to folder_ids from catalog
+            for i in range(0, len(dup_ids), 500):
+                batch = dup_ids[i : i + 500]
+                ph = ",".join("?" for _ in batch)
+                folder_rows_batch = await db.execute_fetchall(
+                    f"SELECT folder_id FROM files WHERE id IN ({ph})",
+                    batch,
+                )
+                dup_rows.extend(folder_rows_batch)
+
+        # Group by folder_id to get counts
+        from collections import Counter as _Counter
+
+        _dup_folder_counts = _Counter(r["folder_id"] for r in dup_rows)
+        dup_rows = [
+            {"folder_id": fid, "cnt": cnt}
+            for fid, cnt in _dup_folder_counts.items()
+        ]
 
         # 1c. Direct hidden counts per folder
         hidden_rows = await db.execute_fetchall(
