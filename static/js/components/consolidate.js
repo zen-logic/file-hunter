@@ -13,7 +13,10 @@ const Consolidate = {
     submitBtn: null,
     onConsolidate: null,
     _file: null,
+    _files: null,
     _dups: null,
+    _isMulti: false,
+    _isSearchMode: false,
     _selectedMode: 'keep_here',
     _selectedDest: null,
     _treeData: null,
@@ -59,23 +62,40 @@ const Consolidate = {
         });
     },
 
-    async open(file, dups) {
+    async open(file, dups, { files = null, searchMode = false } = {}) {
         this._file = file;
+        this._files = files;
         this._dups = dups;
-        this._selectedMode = 'keep_here';
+        this._isMulti = files && files.length > 1;
+        this._isSearchMode = searchMode;
         this._selectedDest = null;
         this._expandedNodes = new Set();
 
-        this.filenameEl.textContent = file.name;
-        this.locationsEl.innerHTML = dups
-            .map(d => `<li>${d.location} &mdash; ${d.path}</li>`)
-            .join('');
+        if (this._isMulti) {
+            this.filenameEl.textContent = `${files.length} files selected`;
+            this.locationsEl.innerHTML = '';
+        } else {
+            this.filenameEl.textContent = file.name;
+            this.locationsEl.innerHTML = dups
+                .map(d => `<li>${d.location} &mdash; ${d.path}</li>`)
+                .join('');
+        }
 
-        // Reset mode radios
+        // Reset mode radios — hide keep_here for search results
         const radios = this.modeGroup.querySelectorAll('input[name="consolidate-mode"]');
-        radios.forEach(r => { r.checked = r.value === 'keep_here'; });
+        const keepHereOption = this.modeGroup.querySelector('.consolidate-mode-option');
+        if (this._isSearchMode) {
+            keepHereOption.style.display = 'none';
+            this._selectedMode = 'copy_to';
+            radios.forEach(r => { r.checked = r.value === 'copy_to'; });
+        } else {
+            keepHereOption.style.display = '';
+            this._selectedMode = 'keep_here';
+            radios.forEach(r => { r.checked = r.value === 'keep_here'; });
+        }
         this.modeGroup.querySelectorAll('.consolidate-mode-option').forEach(l => l.classList.remove('selected'));
-        this.modeGroup.querySelector('.consolidate-mode-option').classList.add('selected');
+        const activeOption = this.modeGroup.querySelector(`.consolidate-mode-option:has(input[value="${this._selectedMode}"])`);
+        if (activeOption) activeOption.classList.add('selected');
 
         this._updateModeUI();
 
@@ -200,11 +220,20 @@ const Consolidate = {
     _doSubmit() {
         if (this._selectedMode === 'copy_to' && !this._selectedDest) return;
 
-        this.onConsolidate({
-            file_id: this._file.id,
-            mode: this._selectedMode,
-            destination_folder_id: this._selectedMode === 'copy_to' ? this._selectedDest : undefined,
-        });
+        if (this._isMulti) {
+            this.onConsolidate({
+                file_ids: this._files.map(f => f.id),
+                mode: this._selectedMode,
+                destination_folder_id: this._selectedMode === 'copy_to' ? this._selectedDest : undefined,
+                batch: true,
+            });
+        } else {
+            this.onConsolidate({
+                file_id: this._file.id,
+                mode: this._selectedMode,
+                destination_folder_id: this._selectedMode === 'copy_to' ? this._selectedDest : undefined,
+            });
+        }
         this.close();
     },
 };

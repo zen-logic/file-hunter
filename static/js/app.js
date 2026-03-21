@@ -421,14 +421,29 @@ scanBtn.addEventListener('click', async () => {
     if (!res.ok) Toast.error(res.error || 'Failed to start scan.');
 });
 
-Consolidate.init(async ({ file_id, mode, destination_folder_id }) => {
-    const payload = { file_id, mode };
-    if (destination_folder_id) payload.destination_folder_id = destination_folder_id;
-    await API.post('/api/consolidate', payload);
+Consolidate.init(async (params) => {
+    if (params.batch) {
+        const payload = { file_ids: params.file_ids, mode: params.mode };
+        if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
+        await API.post('/api/batch/consolidate', payload);
+    } else {
+        const payload = { file_id: params.file_id, mode: params.mode };
+        if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
+        await API.post('/api/consolidate', payload);
+    }
 });
 
 consolidateBtn.addEventListener('click', async () => {
-    if (selectedFile && selectedFileDups.length > 0) {
+    const selection = FileList.getSelection();
+    if (selection.length > 1) {
+        const files = selection.filter(i => i.type !== 'folder');
+        if (files.length > 0) {
+            await Consolidate.open(files[0], [], {
+                files,
+                searchMode: FileList._searchMode,
+            });
+        }
+    } else if (selectedFile && selectedFileDups.length > 0) {
         await Consolidate.open(selectedFile, selectedFileDups);
     }
 });
@@ -813,7 +828,8 @@ FileList.init(async (file) => {
 }, async (items) => {
     selectedFile = null;
     selectedFileDups = [];
-    consolidateBtn.disabled = true;
+    const hasFiles = items.some(i => i.type !== 'folder');
+    consolidateBtn.disabled = !hasFiles;
     await Detail.renderMultiSelect(items);
     wireBatchActions(items);
 });
