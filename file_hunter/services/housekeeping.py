@@ -354,27 +354,26 @@ async def _queue_pending_hash_candidates():
     logger.info("Housekeeping: checking for unprocessed dup candidates...")
 
     # Use a simple fast check first — any files with hash_partial but no hash_fast?
-    import time as _time
-
     conn = await open_hashes_connection()
     try:
-        t0 = _time.monotonic()
-        # Find locations with actual dup candidates that haven't been hashed.
-        # Uses idx_hashes_size_partial for the join.
-        rows = await conn.execute_fetchall(
-            """SELECT DISTINCT f1.location_id
-               FROM file_hashes f1
-               INNER JOIN file_hashes f2
-                 ON f2.file_size = f1.file_size
-                 AND f2.hash_partial = f1.hash_partial
-                 AND f2.file_id != f1.file_id
-               WHERE f1.hash_fast IS NULL
-                 AND f1.hash_partial IS NOT NULL"""
+        quick_check = await conn.execute_fetchall(
+            "SELECT COUNT(*) as c FROM file_hashes "
+            "WHERE hash_fast IS NULL AND hash_partial IS NOT NULL"
         )
+        unhashed_count = quick_check[0]["c"] if quick_check else 0
+        if unhashed_count == 0:
+            logger.info("Housekeeping: no unprocessed candidates found")
+            return
+
         logger.info(
-            "Housekeeping: candidate check found %d locations in %.1fs",
-            len(rows),
-            _time.monotonic() - t0,
+            "Housekeeping: %d files with hash_partial but no hash_fast — finding locations",
+            unhashed_count,
+        )
+
+        # Find which locations have these files
+        rows = await conn.execute_fetchall(
+            "SELECT DISTINCT location_id FROM file_hashes "
+            "WHERE hash_fast IS NULL AND hash_partial IS NOT NULL"
         )
     finally:
         await conn.close()
