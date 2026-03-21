@@ -666,10 +666,11 @@ const FileList = {
         const headerCheckbox = document.createElement('input');
         headerCheckbox.type = 'checkbox';
         const selCount = this.selectedItems.size;
+        const totalItems = this.totalFiles + (this.currentFolders ? this.currentFolders.length : 0);
         if (selCount === 0) {
             headerCheckbox.checked = false;
             headerCheckbox.indeterminate = false;
-        } else if (selCount === items.length && items.length > 0) {
+        } else if (selCount >= totalItems && totalItems > 0) {
             headerCheckbox.checked = true;
             headerCheckbox.indeterminate = false;
         } else {
@@ -678,7 +679,7 @@ const FileList = {
         }
         headerCheckbox.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (selCount === items.length && items.length > 0) {
+            if (selCount >= totalItems && totalItems > 0) {
                 this._deselectAll();
             } else {
                 this._selectAll();
