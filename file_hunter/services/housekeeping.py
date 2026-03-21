@@ -146,14 +146,15 @@ async def _recover_interrupted():
                 {"location_id": orphan["id"], "location_name": orphan["name"]},
             )
 
-    # Check for locations with unprocessed dup candidates
-    # (files with hash_partial but no hash_fast that have size+partial matches)
-    await _queue_pending_hash_candidates()
 
 
 async def _run():
     """Main loop — poll for housekeeping tasks, run when idle."""
     await _recover_interrupted()
+
+    # Delay candidate check so browsers have time to connect
+    await asyncio.sleep(5)
+    await _queue_pending_hash_candidates()
 
     while _running:
         try:
@@ -348,22 +349,34 @@ async def _queue_pending_hash_candidates():
     These are dup candidates that were never hashed — typically from
     scans/imports before the drain fix.
     """
-    from file_hunter.hashes_db import read_hashes
+    from file_hunter.hashes_db import open_hashes_connection
 
-    async with read_hashes() as hdb:
-        # Find locations with unhashed candidates
-        rows = await hdb.execute_fetchall(
-            """SELECT DISTINCT a.location_id
-               FROM file_hashes a
-               WHERE a.hash_fast IS NULL
-                 AND a.hash_partial IS NOT NULL
-                 AND EXISTS (
-                     SELECT 1 FROM file_hashes b
-                     WHERE b.file_size = a.file_size
-                       AND b.hash_partial = a.hash_partial
-                       AND b.file_id != a.file_id
-                 )"""
+    logger.info("Housekeeping: checking for unprocessed dup candidates...")
+
+    # Use a simple fast check first — any files with hash_partial but no hash_fast?
+    conn = await open_hashes_connection()
+    try:
+        quick_check = await conn.execute_fetchall(
+            "SELECT COUNT(*) as c FROM file_hashes "
+            "WHERE hash_fast IS NULL AND hash_partial IS NOT NULL"
         )
+        unhashed_count = quick_check[0]["c"] if quick_check else 0
+        if unhashed_count == 0:
+            logger.info("Housekeeping: no unprocessed candidates found")
+            return
+
+        logger.info(
+            "Housekeeping: %d files with hash_partial but no hash_fast — finding locations",
+            unhashed_count,
+        )
+
+        # Find which locations have these files
+        rows = await conn.execute_fetchall(
+            "SELECT DISTINCT location_id FROM file_hashes "
+            "WHERE hash_fast IS NULL AND hash_partial IS NOT NULL"
+        )
+    finally:
+        await conn.close()
 
     if not rows:
         return
