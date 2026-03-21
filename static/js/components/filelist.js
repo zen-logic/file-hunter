@@ -689,7 +689,9 @@ const FileList = {
         headerRow.appendChild(thCheck);
 
         // Icon column header
-        headerRow.innerHTML += '<th style="width: 2rem;"></th>';
+        const thIcon = document.createElement('th');
+        thIcon.style.width = '2rem';
+        headerRow.appendChild(thIcon);
 
         COLUMNS.forEach(col => {
             const th = document.createElement('th');
