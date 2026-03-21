@@ -677,12 +677,12 @@ const FileList = {
             headerCheckbox.checked = false;
             headerCheckbox.indeterminate = true;
         }
-        headerCheckbox.addEventListener('click', (e) => {
+        headerCheckbox.addEventListener('click', async (e) => {
             e.stopPropagation();
             if (selCount >= totalItems && totalItems > 0) {
                 this._deselectAll();
             } else {
-                this._selectAll();
+                await this._selectAll();
             }
         });
         thCheck.appendChild(headerCheckbox);
