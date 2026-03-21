@@ -4,6 +4,7 @@ Search results are cached in a temporary SQLite DB so paging and
 re-sorting work against the small result set, not the full files table.
 """
 
+import asyncio
 import os
 import re
 import secrets
@@ -93,38 +94,37 @@ async def _populate_search_db(db, where, params, search_path):
         strong_hashes=strong_list, fast_hashes=fast_list
     )
 
-    # Write to search DB
-    if os.path.exists(search_path):
-        os.unlink(search_path)
-    sdb = sqlite3.connect(str(search_path))
-    sdb.executescript(_SEARCH_SCHEMA)
-
-    batch = []
+    # Build insert data
+    insert_data = []
     for r in rows:
         h = hash_map.get(r["id"], {})
         hs = h.get("hash_strong")
         hf = h.get("hash_fast")
         dc = live_dups.get(hs or hf, 0)
-        batch.append((
+        insert_data.append((
             r["id"], r["filename"], r["file_type_high"], r["file_type_low"],
             r["file_size"], r["modified_date"], r["stale"], r["hidden"],
             r["location_id"], r["location_name"], hs, hf, dc,
         ))
-        if len(batch) >= 5000:
-            sdb.executemany(
-                "INSERT INTO results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                batch,
-            )
-            sdb.commit()
-            batch = []
-    if batch:
+
+    # Write to search DB in a thread (sync SQLite must not block event loop)
+    await asyncio.to_thread(_write_search_db, str(search_path), insert_data)
+    return len(rows)
+
+
+def _write_search_db(search_path: str, insert_data: list):
+    """Synchronous: write search results to a temp SQLite file."""
+    if os.path.exists(search_path):
+        os.unlink(search_path)
+    sdb = sqlite3.connect(search_path)
+    sdb.executescript(_SEARCH_SCHEMA)
+    for i in range(0, len(insert_data), 5000):
         sdb.executemany(
             "INSERT INTO results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            batch,
+            insert_data[i : i + 5000],
         )
         sdb.commit()
     sdb.close()
-    return len(rows)
 
 
 def _read_search_page(search_path, sort, sort_dir, page):
@@ -369,7 +369,7 @@ async def search_files(
         # Check if we have a cached search DB
         if search_id and _search_id == search_id and _search_db_path and os.path.exists(_search_db_path):
             # Cache hit — page from existing search DB
-            items, total = _read_search_page(_search_db_path, sort, sort_dir, page)
+            items, total = await asyncio.to_thread(_read_search_page, _search_db_path, sort, sort_dir, page)
         else:
             # New search — populate search DB
             search_dir = _search_db_dir()
@@ -389,7 +389,7 @@ async def search_files(
             _search_db_path = search_path
 
             # Read first page
-            items, total = _read_search_page(search_path, sort, sort_dir, page)
+            items, total = await asyncio.to_thread(_read_search_page, search_path, sort, sort_dir, page)
             search_id = new_id
 
     # Folder search (name filter only)
@@ -649,7 +649,7 @@ async def search_files_advanced(
     items = []
     if include_files:
         if search_id and _search_id == search_id and _search_db_path and os.path.exists(_search_db_path):
-            items, total = _read_search_page(_search_db_path, sort, sort_dir, page)
+            items, total = await asyncio.to_thread(_read_search_page, _search_db_path, sort, sort_dir, page)
         else:
             search_dir = _search_db_dir()
             search_dir.mkdir(parents=True, exist_ok=True)
@@ -665,7 +665,7 @@ async def search_files_advanced(
             total = await _populate_search_db(db, where, where_params, search_path)
             _search_id = new_id
             _search_db_path = search_path
-            items, total = _read_search_page(search_path, sort, sort_dir, page)
+            items, total = await asyncio.to_thread(_read_search_page, search_path, sort, sort_dir, page)
             search_id = new_id
 
     # Folder search — apply name conditions to folder name
