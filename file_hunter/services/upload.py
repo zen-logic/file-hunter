@@ -24,6 +24,13 @@ async def run_upload(
     duplicates = 0
     affected_hashes: set[str] = set()
 
+    # Look up agent_id for hash_partial computation
+    async with read_db() as db:
+        loc_row = await db.execute_fetchall(
+            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
+        )
+    agent_id = loc_row[0]["agent_id"] if loc_row else None
+
     await broadcast(
         {
             "type": "upload_started",
@@ -39,6 +46,20 @@ async def run_upload(
             hash_fast, hash_strong = await fs.file_hash(
                 sf["full_path"], location_id, strong=True
             )
+
+            # Compute hash_partial — needed for dup candidate detection
+            hash_partial = None
+            if agent_id is not None:
+                from file_hunter.services.agent_ops import hash_partial_batch
+
+                try:
+                    hp_result = await hash_partial_batch(agent_id, [sf["full_path"]])
+                    for hr in hp_result.get("results", []):
+                        if hr.get("path") == sf["full_path"]:
+                            hash_partial = hr.get("hash_partial")
+                            break
+                except Exception:
+                    pass  # hash_partial is optional — hash_fast/strong still work
 
             # Check for existing file with same strong hash (read)
             from file_hunter.hashes_db import read_hashes
@@ -142,9 +163,10 @@ async def run_upload(
                         """INSERT INTO files
                            (filename, full_path, rel_path, location_id, folder_id,
                             file_type_high, file_type_low, file_size,
-                            hash_fast, hash_strong, description, tags,
+                            hash_partial, hash_fast, hash_strong,
+                            description, tags,
                             created_date, modified_date, date_cataloged, date_last_seen, scan_id)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '',
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '',
                                    ?, ?, ?, ?, NULL)""",
                         (
                             sf["filename"],
@@ -155,6 +177,7 @@ async def run_upload(
                             type_high,
                             type_low,
                             file_size,
+                            hash_partial,
                             hash_fast,
                             hash_strong,
                             created,
@@ -163,11 +186,25 @@ async def run_upload(
                             now_iso,
                         ),
                     )
+                    # Get file ID inside same writer context
+                    cursor_lid = await wdb.execute("SELECT last_insert_rowid()")
+                    row_lid = await cursor_lid.fetchone()
+                    file_id = row_lid[0]
 
-                # Get the inserted file ID
-                cursor_lid = await wdb.execute("SELECT last_insert_rowid()")
-                row_lid = await cursor_lid.fetchone()
-                file_id = row_lid[0]
+                # Register in hashes.db for dup detection
+                from file_hunter.hashes_db import hashes_writer
+
+                async with hashes_writer() as hdb:
+                    await hdb.execute(
+                        "INSERT INTO file_hashes "
+                        "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+                        "VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(file_id) DO UPDATE SET "
+                        "hash_partial=COALESCE(excluded.hash_partial, file_hashes.hash_partial), "
+                        "hash_fast=excluded.hash_fast, "
+                        "hash_strong=excluded.hash_strong",
+                        (file_id, location_id, file_size, hash_partial, hash_fast, hash_strong),
+                    )
 
                 affected_hashes.add(hash_strong)
                 cataloged += 1
