@@ -165,7 +165,9 @@ async def run_upload(
                     )
 
                 # Get the inserted file ID
-                file_id = (await wdb.execute("SELECT last_insert_rowid()")).fetchone()[0]
+                cursor_lid = await wdb.execute("SELECT last_insert_rowid()")
+                row_lid = await cursor_lid.fetchone()
+                file_id = row_lid[0]
 
                 affected_hashes.add(hash_strong)
                 cataloged += 1
