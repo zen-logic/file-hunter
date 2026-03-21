@@ -269,15 +269,27 @@ async def recalculate_location_sizes(location_id: int):
 
 
 async def populate_all_sizes_if_needed():
-    """One-time migration: populate sizes for locations where total_size IS NULL."""
+    """Populate stats for locations missing from stats.db."""
     import time
 
     from file_hunter.db import read_db
+    from file_hunter.stats_db import read_stats
 
     async with read_db() as db:
-        null_locs = await db.execute_fetchall(
-            "SELECT id, name FROM locations WHERE total_size IS NULL"
+        all_locs = await db.execute_fetchall(
+            "SELECT id, name FROM locations WHERE name NOT LIKE '__deleting_%'"
         )
+    if not all_locs:
+        return
+
+    # Check which locations have no entry in stats.db
+    async with read_stats() as sdb:
+        existing = await sdb.execute_fetchall(
+            "SELECT location_id FROM location_stats"
+        )
+    existing_ids = {r["location_id"] for r in existing}
+    null_locs = [loc for loc in all_locs if loc["id"] not in existing_ids]
+
     if not null_locs:
         return
 
