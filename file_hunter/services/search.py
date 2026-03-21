@@ -1,25 +1,8 @@
-"""Dynamic search query builder.
-
-Search results are cached server-side: the first query filters 10M+ rows
-and stores matching file IDs. Subsequent page/sort requests work against
-the cached IDs, avoiding re-filtering the entire files table.
-"""
+"""Dynamic search query builder."""
 
 import re
-import secrets
-import logging
-
-logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 120
-
-# In-memory cache: search_id -> list of matching file IDs
-# Only one active search per server (single-user product)
-_search_cache: dict = {
-    "id": None,
-    "file_ids": [],
-    "total": 0,
-}
 
 
 def _escape_like(value: str) -> str:
@@ -90,35 +73,6 @@ def parse_size(value: str) -> int | None:
     return int(num * multipliers[unit])
 
 
-async def _fetch_page_from_ids(db, file_ids, sort_col, direction, limit, offset):
-    """Fetch a page of files from a cached ID list using a temp table join."""
-    # Create temp table with the cached IDs
-    await db.execute("CREATE TEMP TABLE IF NOT EXISTS _search_ids (file_id INTEGER PRIMARY KEY)")
-    await db.execute("DELETE FROM _search_ids")
-    for i in range(0, len(file_ids), 500):
-        batch = file_ids[i : i + 500]
-        await db.execute(
-            f"INSERT OR IGNORE INTO _search_ids VALUES {','.join('(?)' for _ in batch)}",
-            batch,
-        )
-    await db.commit()
-
-    rows = await db.execute_fetchall(
-        f"""SELECT f.id, f.filename, f.file_type_high, f.file_type_low,
-                   f.file_size, f.modified_date, f.full_path,
-                   f.stale, f.location_id, f.hidden, l.root_path
-            FROM files f
-            JOIN locations l ON l.id = f.location_id
-            JOIN _search_ids s ON s.file_id = f.id
-            ORDER BY {sort_col} {direction}
-            LIMIT ? OFFSET ?""",
-        [limit, offset],
-    )
-
-    await db.execute("DELETE FROM _search_ids")
-    return rows
-
-
 async def search_files(
     db,
     *,
@@ -143,7 +97,6 @@ async def search_files(
     sort="name",
     sort_dir="asc",
     cached_total=None,
-    search_id=None,
 ):
     """Search files with optional filters. Returns paged envelope."""
     from file_hunter.services.settings import get_setting
@@ -252,33 +205,28 @@ async def search_files(
     total = 0
     items = []
     if include_files:
-        # Use cached result IDs if available, otherwise run the full filter
-        if search_id and _search_cache["id"] == search_id:
-            # Cache hit — use stored IDs for paging/sorting
-            cached_ids = _search_cache["file_ids"]
-            total = _search_cache["total"]
+        # Count total matching — skip if client cached it from a previous page
+        if cached_total is not None:
+            total = cached_total
         else:
-            # First query or new search — filter and cache IDs
-            id_rows = await db.execute_fetchall(
-                f"SELECT f.id FROM files f WHERE {where}",
+            count_row = await db.execute_fetchall(
+                f"SELECT COUNT(*) as cnt FROM files f WHERE {where}",
                 params,
             )
-            cached_ids = [r["id"] for r in id_rows]
-            total = len(cached_ids)
-            new_id = secrets.token_hex(8)
-            _search_cache["id"] = new_id
-            _search_cache["file_ids"] = cached_ids
-            _search_cache["total"] = total
-            search_id = new_id
+            total = count_row[0]["cnt"] if count_row else 0
 
-        # Fetch paged results from cached IDs
-        if cached_ids:
-            # Build temp table for efficient join
-            rows = await _fetch_page_from_ids(
-                db, cached_ids, col, direction, PAGE_SIZE, offset
-            )
-        else:
-            rows = []
+        # Fetch paged results (structural data — hashes from hashes.db)
+        rows = await db.execute_fetchall(
+            f"""SELECT f.id, f.filename, f.file_type_high, f.file_type_low,
+                       f.file_size, f.modified_date, f.full_path,
+                       f.stale, f.location_id, f.hidden, l.root_path
+                FROM files f
+                JOIN locations l ON l.id = f.location_id
+                WHERE {where}
+                ORDER BY {col} {direction}
+                LIMIT ? OFFSET ?""",
+            params + [PAGE_SIZE, offset],
+        )
 
         # All locations are agent-backed — no local file existence checks
         missing_set = set()
@@ -369,7 +317,6 @@ async def search_files(
         "total": total,
         "page": page,
         "pageSize": PAGE_SIZE,
-        "searchId": search_id,
     }
 
 
@@ -541,7 +488,6 @@ async def search_files_advanced(
     sort="name",
     sort_dir="asc",
     cached_total=None,
-    search_id=None,
 ):
     """Search files with advanced include/exclude conditions."""
     from file_hunter.services.settings import get_setting
@@ -579,28 +525,26 @@ async def search_files_advanced(
     total = 0
     items = []
     if include_files:
-        if search_id and _search_cache["id"] == search_id:
-            cached_ids = _search_cache["file_ids"]
-            total = _search_cache["total"]
+        if cached_total is not None:
+            total = cached_total
         else:
-            id_rows = await db.execute_fetchall(
-                f"SELECT f.id FROM files f WHERE {where}",
+            count_row = await db.execute_fetchall(
+                f"SELECT COUNT(*) as cnt FROM files f WHERE {where}",
                 where_params,
             )
-            cached_ids = [r["id"] for r in id_rows]
-            total = len(cached_ids)
-            new_id = secrets.token_hex(8)
-            _search_cache["id"] = new_id
-            _search_cache["file_ids"] = cached_ids
-            _search_cache["total"] = total
-            search_id = new_id
+            total = count_row[0]["cnt"] if count_row else 0
 
-        if cached_ids:
-            rows = await _fetch_page_from_ids(
-                db, cached_ids, col, direction, PAGE_SIZE, offset
-            )
-        else:
-            rows = []
+        rows = await db.execute_fetchall(
+            f"""SELECT f.id, f.filename, f.file_type_high, f.file_type_low,
+                       f.file_size, f.modified_date, f.full_path,
+                       f.stale, f.location_id, f.hidden, l.root_path
+                FROM files f
+                JOIN locations l ON l.id = f.location_id
+                WHERE {where}
+                ORDER BY {col} {direction}
+                LIMIT ? OFFSET ?""",
+            where_params + [PAGE_SIZE, offset],
+        )
 
         missing_set = set()
 
@@ -695,5 +639,4 @@ async def search_files_advanced(
         "total": total,
         "page": page,
         "pageSize": PAGE_SIZE,
-        "searchId": search_id,
     }
