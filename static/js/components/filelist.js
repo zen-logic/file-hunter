@@ -68,6 +68,7 @@ const FileList = {
     _searchMode: false,
     _searchParams: null,
     _dupGroupMode: false,
+    _searchId: null,
     _ac: null,
     pendingFocusFile: null,
 
@@ -460,8 +461,8 @@ const FileList = {
         params.set('page', this.currentPage);
         params.set('sort', this.sortKey);
         params.set('sortDir', this._sortDirStr());
-        if (this.currentPage > 0 && this.totalFiles > 0) {
-            params.set('cachedTotal', this.totalFiles);
+        if (this._searchId) {
+            params.set('searchId', this._searchId);
         }
 
         let res;
@@ -476,6 +477,7 @@ const FileList = {
             this.currentFolders = res.data.folders && res.data.folders.length ? res.data.folders : null;
             this.totalFiles = res.data.total;
             this.currentPage = res.data.page;
+            if (res.data.searchId) this._searchId = res.data.searchId;
         } else {
             this.currentItems = [];
             this.currentFolders = null;
@@ -534,6 +536,7 @@ const FileList = {
 
         this.currentFolder = folderId;
         this._clearSelection();
+        this._searchId = null;
         this.filterText = '';
         this.filterEl.value = '';
         this.sortKey = 'name';
@@ -569,6 +572,7 @@ const FileList = {
         this.currentFolder = null;
         this.currentBreadcrumb = null;
         this._clearSelection();
+        this._searchId = null;
         this.filterText = '';
         this.filterEl.value = '';
         this.sortKey = 'name';
@@ -585,6 +589,7 @@ const FileList = {
         this.currentFolder = null;
         this.currentBreadcrumb = null;
         this._clearSelection();
+        this._searchId = data.searchId || null;
         this.filterText = '';
         this.filterEl.value = '';
         this.sortKey = 'name';
