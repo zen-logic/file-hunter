@@ -184,14 +184,23 @@ const FileList = {
 
         for (let page = 0; page < totalPages; page++) {
             if (page === this.currentPage) continue;
-            const params = new URLSearchParams({
-                folder_id: this.currentFolder,
-                page,
-                sort: this.sortKey,
-                sortDir: this._sortDirStr(),
-            });
-            if (this.filterText) params.set('filter', this.filterText);
-            const res = await API.get(`/api/files?${params.toString()}`);
+            let res;
+            if (this._searchMode) {
+                const params = new URLSearchParams(this._searchParams);
+                params.set('page', page);
+                params.set('sort', this.sortKey);
+                params.set('sortDir', this._sortDirStr());
+                res = await API.get(`/api/search?${params.toString()}`);
+            } else {
+                const params = new URLSearchParams({
+                    folder_id: this.currentFolder,
+                    page,
+                    sort: this.sortKey,
+                    sortDir: this._sortDirStr(),
+                });
+                if (this.filterText) params.set('filter', this.filterText);
+                res = await API.get(`/api/files?${params.toString()}`);
+            }
             if (res.ok && res.data.items) {
                 res.data.items.forEach(item => {
                     this.selectedItems.set(itemKey(item), item);
