@@ -196,8 +196,31 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 location_name,
             )
 
-            # --- Phase 3: find dup candidates for new/changed/recovered files ---
-            if new_count > 0 or changed_count > 0 or recovered_count > 0:
+            # --- Phase 3: find dup candidates ---
+            # Also check for pre-existing unprocessed candidates (hash_partial
+            # but no hash_fast) from scans before the drain fix.
+            has_unprocessed = False
+            if new_count == 0 and changed_count == 0 and recovered_count == 0:
+                from file_hunter.hashes_db import open_hashes_connection
+
+                hconn = await open_hashes_connection()
+                try:
+                    uc = await hconn.execute_fetchall(
+                        "SELECT 1 FROM file_hashes "
+                        "WHERE location_id = ? AND hash_fast IS NULL "
+                        "AND hash_partial IS NOT NULL LIMIT 1",
+                        (location_id,),
+                    )
+                    has_unprocessed = bool(uc)
+                finally:
+                    await hconn.close()
+                if has_unprocessed:
+                    logger.info(
+                        "Rescan: location %d has unprocessed dup candidates, running detection",
+                        location_id,
+                    )
+
+            if new_count > 0 or changed_count > 0 or recovered_count > 0 or has_unprocessed:
                 from file_hunter.services.dup_counts import post_ingest_dup_processing
 
                 candidates_total = await post_ingest_dup_processing(

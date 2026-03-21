@@ -152,10 +152,6 @@ async def _run():
     """Main loop — poll for housekeeping tasks, run when idle."""
     await _recover_interrupted()
 
-    # Delay candidate check so browsers have time to connect
-    await asyncio.sleep(5)
-    await _queue_pending_hash_candidates()
-
     while _running:
         try:
             # Only run when system is idle
@@ -235,8 +231,6 @@ async def _execute(task_type: str, task_id: int, agent_id: int | None, params: d
     """Dispatch a housekeeping task to its handler."""
     if task_type == "purge_location":
         await _run_purge_location(task_id, agent_id, params)
-    elif task_type == "hash_candidates":
-        await _run_hash_candidates(task_id, agent_id, params)
     else:
         raise ValueError(f"Unknown housekeeping task type: {task_type}")
 
@@ -341,153 +335,3 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
     )
 
 
-async def _queue_pending_hash_candidates():
-    """Check for locations with unprocessed dup candidates and queue them.
-
-    Finds locations that have files with hash_partial but no hash_fast
-    where another file shares the same (file_size, hash_partial).
-    These are dup candidates that were never hashed — typically from
-    scans/imports before the drain fix.
-    """
-    from file_hunter.hashes_db import open_hashes_connection
-
-    logger.info("Housekeeping: checking for unprocessed dup candidates...")
-
-    # Use a simple fast check first — any files with hash_partial but no hash_fast?
-    conn = await open_hashes_connection()
-    try:
-        quick_check = await conn.execute_fetchall(
-            "SELECT COUNT(*) as c FROM file_hashes "
-            "WHERE hash_fast IS NULL AND hash_partial IS NOT NULL"
-        )
-        unhashed_count = quick_check[0]["c"] if quick_check else 0
-        if unhashed_count == 0:
-            logger.info("Housekeeping: no unprocessed candidates found")
-            return
-
-        logger.info(
-            "Housekeeping: %d files with hash_partial but no hash_fast — finding locations",
-            unhashed_count,
-        )
-
-        # Find which locations have these files
-        rows = await conn.execute_fetchall(
-            "SELECT DISTINCT location_id FROM file_hashes "
-            "WHERE hash_fast IS NULL AND hash_partial IS NOT NULL"
-        )
-    finally:
-        await conn.close()
-
-    if not rows:
-        return
-
-    # Check which locations already have a pending hash_candidates task
-    async with read_db() as db:
-        existing = await db.execute_fetchall(
-            "SELECT params FROM housekeeping_queue "
-            "WHERE type = 'hash_candidates' AND status IN ('pending', 'running')"
-        )
-    existing_ids = set()
-    for row in existing:
-        p = json.loads(row["params"] or "{}")
-        lid = p.get("location_id")
-        if lid is not None:
-            existing_ids.add(lid)
-
-    # Get location names and agent IDs
-    loc_ids = [r["location_id"] for r in rows if r["location_id"] not in existing_ids]
-    if not loc_ids:
-        return
-
-    async with read_db() as db:
-        ph = ",".join("?" for _ in loc_ids)
-        loc_rows = await db.execute_fetchall(
-            f"SELECT id, name, agent_id FROM locations WHERE id IN ({ph})",
-            loc_ids,
-        )
-
-    for loc in loc_rows:
-        logger.info(
-            "Housekeeping: queuing hash_candidates for %s (location %d)",
-            loc["name"],
-            loc["id"],
-        )
-        await enqueue(
-            "hash_candidates",
-            loc["agent_id"],
-            {"location_id": loc["id"], "location_name": loc["name"]},
-        )
-
-    names = ", ".join(loc["name"] for loc in loc_rows)
-    await broadcast({
-        "type": "activity",
-        "message": f"Duplicate detection queued for: {names}",
-    })
-
-
-async def _run_hash_candidates(task_id: int, agent_id: int | None, params: dict):
-    """Find and hash dup candidates for a location.
-
-    Same logic as post_ingest_dup_processing + drain, but triggered
-    by housekeeping for locations with pre-existing unhashed candidates.
-    Runs with idle checks between batches.
-    """
-    location_id = params["location_id"]
-    location_name = params.get("location_name", f"location {location_id}")
-
-    logger.info(
-        "Housekeeping hash_candidates: starting for %s (location %d)",
-        location_name,
-        location_id,
-    )
-
-    from file_hunter.services.dup_counts import (
-        post_ingest_dup_processing,
-        drain_pending_hashes,
-    )
-
-    # Find candidates and queue large files
-    candidates = await post_ingest_dup_processing(
-        location_id, agent_id, location_name,
-    )
-
-    if candidates == 0:
-        logger.info(
-            "Housekeeping hash_candidates: no candidates for %s",
-            location_name,
-        )
-        return
-
-    # Drain pending_hashes for this location — with idle checks
-    # Use a wrapper that checks idle between agent batches
-    async def _idle_drain_progress(done, total):
-        # Yield to user operations between batches
-        while not _is_idle():
-            await asyncio.sleep(2)
-
-    await drain_pending_hashes(
-        agent_id, location_id, location_name,
-        on_progress=_idle_drain_progress,
-    )
-
-    # Rebuild stats with correct dup counts
-    from file_hunter.services.sizes import recalculate_location_sizes
-
-    await recalculate_location_sizes(location_id)
-
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
-
-    await broadcast(
-        {
-            "type": "activity",
-            "message": f"{location_name} duplicate detection completed",
-        }
-    )
-
-    logger.info(
-        "Housekeeping hash_candidates: completed for %s — %d candidates processed",
-        location_name,
-        candidates,
-    )
