@@ -108,9 +108,7 @@ const Consolidate = {
             if (input && input.value === this._selectedMode) o.classList.add('selected');
         });
 
-        this._updateModeUI();
-
-        // Fetch tree data for picker
+        // Fetch tree data before rendering mode UI
         const res = await API.get('/api/locations');
         if (res.ok) {
             this._treeData = res.data;
@@ -118,6 +116,7 @@ const Consolidate = {
             this._treeData = [];
         }
 
+        this._updateModeUI();
         this.overlay.classList.remove('hidden');
     },
 
