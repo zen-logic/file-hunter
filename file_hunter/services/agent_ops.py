@@ -72,7 +72,7 @@ async def _post(host, port, token, path, body, timeout=60.0):
         )
     result = resp.json()
     if not result.get("ok"):
-        raise RuntimeError(f"Agent error on {path}: {result.get('error', resp.text)}")
+        raise ValueError(result.get("error", resp.text))
     return result.get("data", {})
 
 
@@ -83,7 +83,7 @@ async def _get(host, port, token, path, timeout=60.0):
         resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
     result = resp.json()
     if not result.get("ok"):
-        raise RuntimeError(f"Agent error on {path}: {result.get('error', resp.text)}")
+        raise ValueError(result.get("error", resp.text))
     return result.get("data", {})
 
 

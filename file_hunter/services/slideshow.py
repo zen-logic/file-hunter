@@ -187,8 +187,22 @@ async def _ids_for_search(db, search_params, hidden_filter):
 
     hash_val = search_params.get("hash")
     if hash_val:
-        conditions.append("(f.hash_strong = ? OR f.hash_fast = ?)")
-        params.extend([hash_val, hash_val])
+        # Hashes live in hashes.db, not catalog — look up file IDs there
+        from file_hunter.hashes_db import read_hashes
+
+        async with read_hashes() as hdb:
+            hash_rows = await hdb.execute_fetchall(
+                "SELECT file_id FROM active_hashes "
+                "WHERE hash_strong = ? OR hash_fast = ?",
+                (hash_val, hash_val),
+            )
+        if hash_rows:
+            hash_file_ids = [r["file_id"] for r in hash_rows]
+            ph = ",".join("?" for _ in hash_file_ids)
+            conditions.append(f"f.id IN ({ph})")
+            params.extend(hash_file_ids)
+        else:
+            conditions.append("0")
 
     base_where = " AND ".join(conditions)
 

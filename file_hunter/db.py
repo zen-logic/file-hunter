@@ -147,6 +147,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ignored_files_global
 CREATE INDEX IF NOT EXISTS idx_files_hash_strong ON files(hash_strong);
 CREATE INDEX IF NOT EXISTS idx_files_folder_id ON files(folder_id);
 CREATE INDEX IF NOT EXISTS idx_files_location_id ON files(location_id);
+CREATE INDEX IF NOT EXISTS idx_files_location_folder ON files(location_id, folder_id);
 CREATE INDEX IF NOT EXISTS idx_files_file_size ON files(file_size);
 CREATE INDEX IF NOT EXISTS idx_folders_location_parent ON folders(location_id, parent_id);
 CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);
@@ -338,6 +339,9 @@ async def init_db(db: aiosqlite.Connection):
     )
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_files_location_hash_fast ON files(location_id, hash_fast)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_files_location_folder ON files(location_id, folder_id)"
     )
     await db.execute("DROP INDEX IF EXISTS idx_files_hidden")
     await db.execute(

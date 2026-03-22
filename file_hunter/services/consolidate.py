@@ -151,10 +151,13 @@ async def run_consolidation(file_id: int, mode: str, dest_folder_id: str | None)
                 canonical_path, selected_loc_id, strong=True
             )
             if real_strong != hash_strong:
-                # DB hash was stale — update the canonical record
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        "UPDATE files SET hash_fast=?, hash_strong=? WHERE id=?",
+                # DB hash was stale — update in hashes.db
+                from file_hunter.hashes_db import hashes_writer
+
+                async with hashes_writer() as hdb:
+                    await hdb.execute(
+                        "UPDATE file_hashes SET hash_fast=?, hash_strong=? "
+                        "WHERE file_id=?",
                         (real_fast, real_strong, file_id),
                     )
                 selected["hash_fast"] = real_fast

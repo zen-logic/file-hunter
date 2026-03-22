@@ -792,14 +792,29 @@ async def _load_source_files(db, source_id, source_info):
 
 async def _build_dest_hash_index(db, location_id):
     """Build a hash->file dict for all hashed files in the destination location."""
-    rows = await db.execute_fetchall(
-        "SELECT id, hash_strong, full_path FROM files WHERE location_id = ? AND hash_strong IS NOT NULL",
+    from file_hunter.hashes_db import read_hashes
+
+    # Get file IDs and paths from catalog
+    file_rows = await db.execute_fetchall(
+        "SELECT id, full_path FROM files WHERE location_id = ?",
         (location_id,),
     )
-    return {
-        row["hash_strong"]: {"id": row["id"], "full_path": row["full_path"]}
-        for row in rows
-    }
+    if not file_rows:
+        return {}
+
+    # Get hashes from hashes.db
+    file_ids = [r["id"] for r in file_rows]
+    from file_hunter.hashes_db import get_file_hashes
+
+    hash_map = await get_file_hashes(file_ids)
+
+    path_by_id = {r["id"]: r["full_path"] for r in file_rows}
+    result = {}
+    for fid, h in hash_map.items():
+        hs = h.get("hash_strong")
+        if hs:
+            result[hs] = {"id": fid, "full_path": path_by_id[fid]}
+    return result
 
 
 async def _upsert_sources_record(
