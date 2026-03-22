@@ -496,19 +496,15 @@ async def move_file(
     if moved and not await fs.dir_exists(dest_dir, final_location_id):
         raise ValueError("Destination directory does not exist on disk.")
 
-    # Check collision on disk (unless it's the same file — rename case)
+    # Handle collision — auto-rename when moving, error when renaming
     if new_full_path != f["full_path"]:
-        if await fs.path_exists(new_full_path, final_location_id):
+        if moved and not renamed:
+            # Moving to a different folder — auto-rename on collision
+            new_full_path = await fs.unique_dest_path(new_full_path, final_location_id)
+            final_name = os.path.basename(new_full_path)
+            new_rel_path = os.path.relpath(new_full_path, final_root)
+        elif await fs.path_exists(new_full_path, final_location_id):
             raise ValueError("A file with that name already exists at the destination.")
-
-    # Check collision in DB
-    if new_rel_path != f["rel_path"] or final_location_id != f["location_id"]:
-        existing = await db.execute_fetchall(
-            "SELECT id FROM files WHERE location_id = ? AND rel_path = ? AND id != ?",
-            (final_location_id, new_rel_path, file_id),
-        )
-        if existing:
-            raise ValueError("A file with that path already exists in the catalog.")
 
     # Move/rename on disk
     if new_full_path != f["full_path"]:

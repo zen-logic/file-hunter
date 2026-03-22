@@ -990,7 +990,12 @@ const Detail = {
                 verifyBtn.textContent = 'Verifying\u2026';
                 const res = await API.post(`/api/files/${detail.id}/verify`);
                 if (res.ok) {
-                    if (res.data.deferred) {
+                    if (res.data.verifying) {
+                        const gs = res.data.groupSize;
+                        verifyBtn.textContent = gs > 1
+                            ? `Verifying ${gs} files\u2026`
+                            : 'Verifying\u2026';
+                    } else if (res.data.deferred) {
                         verifyBtn.textContent = 'Queued';
                     } else {
                         this._lastDetail = res.data;

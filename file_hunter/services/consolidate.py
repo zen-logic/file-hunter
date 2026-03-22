@@ -145,31 +145,6 @@ async def run_consolidation(
                 )
                 return
 
-            # Compute real hashes (seed data may have fakes)
-            await broadcast(
-                {
-                    "type": "consolidate_progress",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "phase": "verifying",
-                }
-            )
-            real_fast, real_strong = await fs.file_hash(
-                canonical_path, selected_loc_id, strong=True
-            )
-            if real_strong != hash_strong:
-                # DB hash was stale — update in hashes.db
-                from file_hunter.hashes_db import hashes_writer
-
-                async with hashes_writer() as hdb:
-                    await hdb.execute(
-                        "UPDATE file_hashes SET hash_fast=?, hash_strong=? "
-                        "WHERE file_id=?",
-                        (real_fast, real_strong, file_id),
-                    )
-                selected["hash_fast"] = real_fast
-                selected["hash_strong"] = real_strong
-
         elif mode == "copy_to":
             # Resolve destination path and location_id
             async with read_db() as db:
@@ -198,19 +173,14 @@ async def run_consolidation(
                 )
                 return
 
-            canonical_path = os.path.join(dest_dir, filename)
-
-            # Prevent overwriting existing file
-            if await fs.path_exists(canonical_path, dest_loc_id):
-                await broadcast(
-                    {
-                        "type": "consolidate_error",
-                        "fileId": file_id,
-                        "filename": filename,
-                        "error": f"File already exists at destination: {canonical_path}",
-                    }
-                )
-                return
+            canonical_path = await fs.unique_dest_path(
+                os.path.join(dest_dir, filename), dest_loc_id
+            )
+            # Update filename if collision rename happened
+            actual_filename = os.path.basename(canonical_path)
+            if actual_filename != filename:
+                selected["filename"] = actual_filename
+                filename = actual_filename
 
             # Find a source copy that's online
             source_path = None
@@ -262,7 +232,7 @@ async def run_consolidation(
                     pass
                 raise RuntimeError(f"Copy failed: {copy_exc}") from copy_exc
 
-            # Hash-verify against source (not DB hash, which may be stale)
+            # Hash-verify the copy against source using hash_fast
             await broadcast(
                 {
                     "type": "consolidate_progress",
@@ -271,14 +241,9 @@ async def run_consolidation(
                     "phase": "verifying",
                 }
             )
-            source_hash_fast, source_hash_strong = await fs.file_hash(
-                source_path, source_loc_id, strong=True
-            )
-            copy_hash_fast, copy_hash_strong = await fs.file_hash(
-                canonical_path, dest_loc_id, strong=True
-            )
-            if copy_hash_strong != source_hash_strong:
-                # Hash mismatch — clean up and fail
+            (source_hash_fast,) = await fs.file_hash(source_path, source_loc_id)
+            (copy_hash_fast,) = await fs.file_hash(canonical_path, dest_loc_id)
+            if copy_hash_fast != source_hash_fast:
                 await fs.file_delete(canonical_path, dest_loc_id)
                 await broadcast(
                     {
@@ -290,9 +255,7 @@ async def run_consolidation(
                 )
                 return
 
-            # Update selected record with real hashes (seed data may have fakes)
             selected["hash_fast"] = source_hash_fast
-            selected["hash_strong"] = source_hash_strong
 
             # Create DB record for the canonical copy at destination
             canonical_id = await _ensure_canonical_record(

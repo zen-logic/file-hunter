@@ -180,22 +180,22 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
             src_rel = os.path.relpath(src_path, source_info["abs_path"])
             is_hidden = 1 if src_file["hidden"] else 0
 
-            # Hash file if needed
+            # Hash file if needed (hash_fast only — SHA-256 is user-triggered)
             hash_strong = src_file["hash_strong"]
             hash_fast = src_file["hash_fast"]
-            if not hash_strong:
+            effective_hash = hash_strong or hash_fast
+            if not effective_hash:
                 try:
-                    hash_fast, hash_strong = await fs.file_hash(
-                        src_path, src_loc_id, strong=True
-                    )
+                    (hash_fast,) = await fs.file_hash(src_path, src_loc_id)
+                    effective_hash = hash_fast
                     files_hashed += 1
                     from file_hunter.hashes_db import hashes_writer
 
                     async with hashes_writer() as hdb:
                         await hdb.execute(
-                            "UPDATE file_hashes SET hash_fast=?, hash_strong=? "
+                            "UPDATE file_hashes SET hash_fast=? "
                             "WHERE file_id=?",
-                            (hash_fast, hash_strong, src_file["id"]),
+                            (hash_fast, src_file["id"]),
                         )
                 except (PermissionError, FileNotFoundError, OSError, ConnectionError) as e:
                     files_skipped += 1
@@ -207,11 +207,11 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     continue
 
             # Check if duplicate exists in destination location
-            if hash_strong in dest_hash_index:
+            if effective_hash in dest_hash_index:
                 # Duplicate — already at destination
-                dest_entry = dest_hash_index[hash_strong]
+                dest_entry = dest_hash_index[effective_hash]
                 dest_canonical = dest_entry["full_path"]
-                affected_hashes.add(hash_strong)
+                affected_hashes.add(effective_hash)
                 files_stubbed += 1
 
                 # Best-effort: stub at source, .sources at destination
@@ -334,10 +334,9 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     actual_dest = await fs.unique_dest_path(dest_rel_path, dest_loc_id)
                     await fs.copy_file(src_path, src_loc_id, actual_dest, dest_loc_id)
 
-                    copy_fast, copy_strong = await fs.file_hash(
-                        actual_dest, dest_loc_id, strong=True
-                    )
-                    if copy_strong != hash_strong:
+                    (copy_fast,) = await fs.file_hash(actual_dest, dest_loc_id)
+                    copy_strong = None
+                    if copy_fast != hash_fast:
                         await fs.file_delete(actual_dest, dest_loc_id)
                         files_skipped += 1
                         await append_row(
@@ -436,11 +435,11 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         added=[(dest_folder_id, file_size, type_high, is_hidden)],
                     )
 
-                    dest_hash_index[copy_strong] = {
+                    dest_hash_index[copy_fast] = {
                         "id": new_dest_file_id,
                         "full_path": actual_dest,
                     }
-                    affected_hashes.add(hash_strong)
+                    affected_hashes.add(effective_hash)
                     files_copied += 1
                 except Exception as e:
                     files_skipped += 1
@@ -609,8 +608,12 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
 
         from file_hunter.services.dup_counts import recalculate_dup_counts
 
+        affected_strong = {h for h in affected_hashes if len(h) == 64}
+        affected_fast = {h for h in affected_hashes if len(h) == 16}
         await recalculate_dup_counts(
-            strong_hashes=affected_hashes, source=f"merge {source_label} → {dest_label}"
+            strong_hashes=affected_strong or None,
+            fast_hashes=affected_fast or None,
+            source=f"merge {source_label} → {dest_label}",
         )
 
     except Exception as exc:
@@ -699,9 +702,9 @@ async def _build_dest_hash_index(db, location_id):
     path_by_id = {r["id"]: r["full_path"] for r in file_rows}
     result = {}
     for fid, h in hash_map.items():
-        hs = h.get("hash_strong")
-        if hs:
-            result[hs] = {"id": fid, "full_path": path_by_id[fid]}
+        effective = h.get("hash_strong") or h.get("hash_fast")
+        if effective:
+            result[effective] = {"id": fid, "full_path": path_by_id[fid]}
     return result
 
 

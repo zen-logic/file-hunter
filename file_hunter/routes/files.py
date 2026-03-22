@@ -209,7 +209,7 @@ async def file_delete(request: Request):
 
 
 async def file_verify(request: Request):
-    """POST /api/files/{id:int}/verify — compute SHA-256 for duplicate verification."""
+    """POST /api/files/{id:int}/verify — compute SHA-256 for the entire dup group."""
     file_id = int(request.path_params["id"])
 
     async with read_db() as db:
@@ -225,57 +225,113 @@ async def file_verify(request: Request):
 
         f = dict(row[0])
 
-        # Check hashes from hashes.db
         from file_hunter.hashes_db import get_file_hashes
 
         h_map = await get_file_hashes([file_id])
         h = h_map.get(file_id, {})
+        hash_fast = h.get("hash_fast")
+
         if h.get("hash_strong"):
+            # Already verified — return detail
             detail = await get_file_detail(db, file_id)
             return json_ok(detail)
 
+        if not hash_fast:
+            return json_error("File has no hash — scan or re-hash it first.", 400)
+
+    # Find all files in the same hash_fast group
+    from file_hunter.hashes_db import read_hashes
+
+    async with read_hashes() as hdb:
+        group_rows = await hdb.execute_fetchall(
+            "SELECT file_id FROM active_hashes WHERE hash_fast = ?",
+            (hash_fast,),
+        )
+    group_file_ids = [r["file_id"] for r in group_rows]
+
+    # Launch background task to verify the whole group
+    asyncio.create_task(_run_group_verify(file_id, f["filename"], hash_fast, group_file_ids))
+
+    return json_ok({"verifying": True, "filename": f["filename"], "groupSize": len(group_file_ids)})
+
+
+async def _run_group_verify(trigger_file_id: int, trigger_filename: str, hash_fast: str, file_ids: list[int]):
+    """Background: compute SHA-256 for all files in a hash_fast group."""
     from file_hunter.services import fs
+    from file_hunter.hashes_db import update_file_hash, get_file_hashes
+    from file_hunter.services.deferred_ops import queue_deferred_op
 
-    online = await fs.dir_exists(f["root_path"], f["location_id"])
-    if not online:
-        # Defer — verify when location comes back online
-        from file_hunter.services.deferred_ops import queue_deferred_op
+    verified = 0
+    skipped = 0
+    deferred = 0
+    strong_hashes: set[str] = set()
 
-        await execute_write(queue_deferred_op, file_id, f["location_id"], "verify")
+    async with read_db() as db:
+        ph = ",".join("?" for _ in file_ids)
+        all_rows = await db.execute_fetchall(
+            f"""SELECT f.id, f.filename, f.full_path, f.location_id, l.root_path
+               FROM files f
+               JOIN locations l ON l.id = f.location_id
+               WHERE f.id IN ({ph})""",
+            file_ids,
+        )
+
+    # Check which already have hash_strong
+    h_map = await get_file_hashes(file_ids)
+
+    for f in all_rows:
+        fid = f["id"]
+        h = h_map.get(fid, {})
+        if h.get("hash_strong"):
+            strong_hashes.add(h["hash_strong"])
+            verified += 1
+            continue
+
+        try:
+            online = await fs.dir_exists(f["root_path"], f["location_id"])
+        except Exception:
+            online = False
+
+        if not online:
+            try:
+                await execute_write(queue_deferred_op, fid, f["location_id"], "verify")
+            except Exception:
+                pass
+            deferred += 1
+            continue
+
+        try:
+            exists = await fs.file_exists(f["full_path"], f["location_id"])
+            if not exists:
+                skipped += 1
+                continue
+
+            new_fast, new_strong = await fs.file_hash(
+                f["full_path"], f["location_id"], strong=True
+            )
+            await update_file_hash(fid, hash_fast=new_fast, hash_strong=new_strong)
+            strong_hashes.add(new_strong)
+            verified += 1
+        except Exception as exc:
+            logger.warning("Verify failed for file %d: %s", fid, exc)
+            skipped += 1
+
         await broadcast(
             {
-                "type": "deferred_op_created",
-                "fileId": file_id,
-                "opType": "verify",
+                "type": "verify_progress",
+                "triggerFileId": trigger_file_id,
+                "verified": verified,
+                "total": len(all_rows),
                 "filename": f["filename"],
             }
         )
-        return json_ok({"deferred": True, "filename": f["filename"]})
 
-    exists = await fs.file_exists(f["full_path"], f["location_id"])
-    if not exists:
-        return json_error("File not found on disk.", 400)
-
-    try:
-        hash_fast, hash_strong = await fs.file_hash(
-            f["full_path"], f["location_id"], strong=True
-        )
-    except Exception as exc:
-        logger.warning("Verify failed for %s: %r", f["full_path"], exc)
-        return json_error(f"Hash computation failed: {exc}", 500)
-
-    from file_hunter.hashes_db import update_file_hash
-
-    await update_file_hash(file_id, hash_fast=hash_fast, hash_strong=hash_strong)
-
-    # Recalc dup counts: new hash_strong group + old hash_fast group
     from file_hunter.services.dup_counts import submit_hashes_for_recalc
 
-    old_hash_fast = h.get("hash_fast")
     submit_hashes_for_recalc(
-        strong_hashes={hash_strong},
-        fast_hashes={old_hash_fast} if old_hash_fast else None,
-        source=f"verify {f['filename']}",
+        strong_hashes=strong_hashes or None,
+        fast_hashes={hash_fast},
+        source=f"verify group ({trigger_filename})",
     )
 
     from file_hunter.services.stats import invalidate_stats_cache
@@ -284,16 +340,15 @@ async def file_verify(request: Request):
 
     await broadcast(
         {
-            "type": "file_verified",
-            "fileId": file_id,
-            "filename": f["filename"],
-            "hashStrong": hash_strong,
+            "type": "verify_completed",
+            "triggerFileId": trigger_file_id,
+            "filename": trigger_filename,
+            "verified": verified,
+            "deferred": deferred,
+            "skipped": skipped,
+            "total": len(all_rows),
         }
     )
-
-    async with read_db() as db:
-        detail = await get_file_detail(db, file_id)
-    return json_ok(detail)
 
 
 async def file_rehash(request: Request):
@@ -324,6 +379,7 @@ async def file_rehash(request: Request):
     # Read old hashes before overwriting
     old_h = (await get_file_hashes([file_id])).get(file_id, {})
     old_fast = old_h.get("hash_fast")
+    old_strong = old_h.get("hash_strong")
 
     online = await fs.dir_exists(f["root_path"], f["location_id"])
     if not online:
@@ -358,11 +414,12 @@ async def file_rehash(request: Request):
 
     async with hashes_writer() as hdb:
         await hdb.execute(
-            "INSERT INTO file_hashes (file_id, location_id, file_size, hash_partial, hash_fast) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO file_hashes (file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+            "VALUES (?, ?, ?, ?, ?, NULL) "
             "ON CONFLICT(file_id) DO UPDATE SET "
             "hash_partial=COALESCE(excluded.hash_partial, file_hashes.hash_partial), "
-            "hash_fast=excluded.hash_fast",
+            "hash_fast=excluded.hash_fast, "
+            "hash_strong=NULL",
             (file_id, f["location_id"], f["file_size"], hash_partial, hash_fast),
         )
 
@@ -371,7 +428,9 @@ async def file_rehash(request: Request):
     recalc_fast = {hash_fast}
     if old_fast and old_fast != hash_fast:
         recalc_fast.add(old_fast)
+    recalc_strong = {old_strong} if old_strong else None
     submit_hashes_for_recalc(
+        strong_hashes=recalc_strong,
         fast_hashes=recalc_fast,
         source=f"rehash {f['filename']}",
     )
@@ -403,6 +462,7 @@ async def _run_batch_rehash(file_ids: list[int]):
     from file_hunter.services.dup_counts import submit_hashes_for_recalc
 
     affected_fast: set[str] = set()
+    affected_strong: set[str] = set()
     total = len(file_ids)
 
     for i, file_id in enumerate(file_ids):
@@ -434,6 +494,7 @@ async def _run_batch_rehash(file_ids: list[int]):
 
             old_h = (await get_file_hashes([file_id])).get(file_id, {})
             old_fast = old_h.get("hash_fast")
+            old_strong = old_h.get("hash_strong")
 
             (hash_fast,) = await fs.file_hash(f["full_path"], f["location_id"])
 
@@ -453,17 +514,20 @@ async def _run_batch_rehash(file_ids: list[int]):
             async with hashes_writer() as hdb:
                 await hdb.execute(
                     "INSERT INTO file_hashes "
-                    "(file_id, location_id, file_size, hash_partial, hash_fast) "
-                    "VALUES (?, ?, ?, ?, ?) "
+                    "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+                    "VALUES (?, ?, ?, ?, ?, NULL) "
                     "ON CONFLICT(file_id) DO UPDATE SET "
                     "hash_partial=COALESCE(excluded.hash_partial, file_hashes.hash_partial), "
-                    "hash_fast=excluded.hash_fast",
+                    "hash_fast=excluded.hash_fast, "
+                    "hash_strong=NULL",
                     (file_id, f["location_id"], f["file_size"], hash_partial, hash_fast),
                 )
 
             affected_fast.add(hash_fast)
             if old_fast and old_fast != hash_fast:
                 affected_fast.add(old_fast)
+            if old_strong:
+                affected_strong.add(old_strong)
 
             await broadcast(
                 {
@@ -476,9 +540,10 @@ async def _run_batch_rehash(file_ids: list[int]):
         except Exception as exc:
             logger.warning("Rehash failed for file %d: %s", file_id, exc)
 
-    if affected_fast:
+    if affected_fast or affected_strong:
         submit_hashes_for_recalc(
-            fast_hashes=affected_fast,
+            strong_hashes=affected_strong or None,
+            fast_hashes=affected_fast or None,
             source=f"batch rehash ({total} files)",
         )
 

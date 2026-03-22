@@ -43,9 +43,8 @@ async def run_upload(
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for i, sf in enumerate(saved_files):
         try:
-            hash_fast, hash_strong = await fs.file_hash(
-                sf["full_path"], location_id, strong=True
-            )
+            (hash_fast,) = await fs.file_hash(sf["full_path"], location_id)
+            hash_strong = None
 
             # Compute hash_partial — needed for dup candidate detection
             hash_partial = None
@@ -61,13 +60,13 @@ async def run_upload(
                 except Exception:
                     pass  # hash_partial is optional — hash_fast/strong still work
 
-            # Check for existing file with same strong hash (read)
+            # Check for existing file with same hash (read)
             from file_hunter.hashes_db import read_hashes
 
             async with read_hashes() as hdb:
                 hash_rows = await hdb.execute_fetchall(
-                    "SELECT file_id FROM active_hashes WHERE hash_strong = ? LIMIT 1",
-                    (hash_strong,),
+                    "SELECT file_id FROM active_hashes WHERE hash_fast = ? LIMIT 1",
+                    (hash_fast,),
                 )
             rows = []
             if hash_rows:
@@ -123,7 +122,7 @@ async def run_upload(
                         ),
                     )
 
-                affected_hashes.add(hash_strong)
+                affected_hashes.add(hash_fast)
                 duplicates += 1
 
                 # Stats: stub file added
@@ -202,7 +201,7 @@ async def run_upload(
                         (file_id, location_id, file_size, hash_partial, hash_fast, hash_strong),
                     )
 
-                affected_hashes.add(hash_strong)
+                affected_hashes.add(hash_fast)
                 cataloged += 1
 
                 # Broadcast so the file list can show the new file immediately
@@ -285,7 +284,7 @@ async def run_upload(
 
     try:
         await recalculate_dup_counts(
-            strong_hashes=affected_hashes, source=f"upload to {location_name}"
+            fast_hashes=affected_hashes, source=f"upload to {location_name}"
         )
     except Exception:
         pass

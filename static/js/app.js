@@ -36,6 +36,16 @@ const scanBtn = document.getElementById('btn-scan');
 const consolidateBtn = document.getElementById('btn-consolidate');
 const uploadBtn = document.getElementById('btn-upload');
 
+async function reloadTreeAndFileList(focusFileId) {
+    const folderId = selectedNode ? selectedNode.id : null;
+    await Tree.reload();
+    if (folderId) {
+        selectedNode = Tree._findNode(folderId);
+        if (focusFileId) FileList.pendingFocusFile = focusFileId;
+        await FileList.showFolder(folderId);
+    }
+}
+
 async function refreshDetailPanel() {
     if (selectedFile) {
         const result = await Detail.renderFile(selectedFile);
@@ -641,9 +651,11 @@ MoveFileModal.init(async (item, destinationFolderId) => {
         selectedFile = null;
         selectedFileDups = [];
         consolidateBtn.disabled = true;
+        const currentFolderId = selectedNode ? selectedNode.id : null;
         await Tree.reload();
-        if (selectedNode) {
-            await FileList.showFolder(selectedNode.id);
+        if (currentFolderId) {
+            selectedNode = Tree._findNode(currentFolderId);
+            await FileList.showFolder(currentFolderId);
         }
         await StatusBar.loadStats();
         await refreshDetailPanel();
@@ -1266,12 +1278,7 @@ WS.on('backfill_completed', async (msg) => {
     const label = msg.cancelled ? 'Hash backfill cancelled' : 'Hash backfill completed';
     ActivityLog.add(`${label}: <b>${msg.location}</b> — ${summary}`);
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await Detail.refreshStats();
 });
 
@@ -1362,11 +1369,7 @@ WS.on('dup_exclude_completed', async msg => {
     _stopDupExcludePoll();
     const verb = msg.direction === 'exclude' ? 'excluded' : 'included';
     ActivityLog.add(`Duplicate exclusion updated: <b>${msg.folder}</b> ${verb} — ${(msg.fileCount || 0).toLocaleString()} files, ${(msg.hashCount || 0).toLocaleString()} hashes recalculated`);
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList();
     await Detail.refreshStats();
     await StatusBar.loadStats();
 });
@@ -1454,23 +1457,13 @@ WS.on('file_deleted', async (msg) => {
 });
 
 WS.on('folder_created', async (msg) => {
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
 
 WS.on('folder_moved', async (msg) => {
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
@@ -1481,11 +1474,11 @@ WS.on('file_moved', async (msg) => {
         selectedFileDups = [];
         consolidateBtn.disabled = true;
     }
+    const currentFolderId = selectedNode ? selectedNode.id : null;
     await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
+    if (currentFolderId) {
+        selectedNode = Tree._findNode(currentFolderId);
+        await FileList.showFolder(currentFolderId);
     }
     await StatusBar.loadStats();
     await refreshDetailPanel();
@@ -1517,34 +1510,21 @@ WS.on('deferred_ops_drained', async (msg) => {
 });
 
 WS.on('batch_deleted', async (msg) => {
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
 
 WS.on('batch_moved', async (msg) => {
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    selectedFile = null;
+    selectedFileDups = [];
+    await reloadTreeAndFileList();
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
 
 WS.on('folder_deleted', async (msg) => {
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
@@ -1575,12 +1555,7 @@ WS.on('consolidate_completed', async (msg) => {
     selectedFileDups = [];
     consolidateBtn.disabled = true;
     await StatusBar.loadStats();
-    await Tree.reload();
-    // Reload file list for current folder
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList();
     await refreshDetailPanel();
 });
 
@@ -1604,11 +1579,7 @@ WS.on('batch_consolidate_completed', async (msg) => {
     ActivityLog.add(`Batch consolidation completed: ${msg.completed} of ${msg.total} files`);
     Toast.success(`Batch consolidation completed: ${msg.completed} of ${msg.total} files`);
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList();
     await refreshDetailPanel();
 });
 
@@ -1619,6 +1590,22 @@ WS.on('rehash_progress', (msg) => {
 WS.on('rehash_completed', async (msg) => {
     StatusBar.renderActivity('idle');
     Toast.success(`Re-hash completed: ${msg.total} file${msg.total !== 1 ? 's' : ''}`);
+    if (selectedNode) {
+        await FileList.showFolder(selectedNode.id);
+    }
+    await refreshDetailPanel();
+});
+
+WS.on('verify_progress', (msg) => {
+    StatusBar.renderActivity('rehashing', `Verifying ${msg.verified}/${msg.total} — ${msg.filename}`);
+});
+
+WS.on('verify_completed', async (msg) => {
+    StatusBar.renderActivity('idle');
+    const parts = [`${msg.verified} verified`];
+    if (msg.deferred > 0) parts.push(`${msg.deferred} queued`);
+    if (msg.skipped > 0) parts.push(`${msg.skipped} skipped`);
+    Toast.success(`Verification complete: ${parts.join(', ')}`);
     if (selectedNode) {
         await FileList.showFolder(selectedNode.id);
     }
@@ -1670,12 +1657,7 @@ WS.on('upload_completed', async (msg) => {
     ActivityLog.add(`Upload completed: <b>${msg.location}</b> — ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`);
     Toast.success(`Upload completed: ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`);
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await refreshDetailPanel();
 });
 
@@ -1694,12 +1676,7 @@ WS.on('merge_completed', async (msg) => {
     ActivityLog.add(`Merge completed: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.filesCopied} copied, ${msg.filesStubbed} stubbed, ${msg.filesSkipped} skipped`);
     Toast.success(`Merge completed: ${msg.filesCopied} copied, ${msg.filesStubbed} stubbed`);
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await refreshDetailPanel();
 });
 
@@ -1708,12 +1685,7 @@ WS.on('merge_cancelled', async (msg) => {
     ActivityLog.add(`Merge cancelled: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.copied} copied, ${msg.stubbed} stubbed before cancel`);
     Toast.info(`Merge cancelled: ${msg.source} → ${msg.destination}`);
     await StatusBar.loadStats();
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedFile) FileList.pendingFocusFile = selectedFile.id;
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await refreshDetailPanel();
 });
 
@@ -1733,11 +1705,7 @@ WS.on('settings_changed', async (msg) => {
         document.getElementById('app-title').textContent = 'File Hunter';
     }
     // Reload tree and file list when showHiddenFiles changes
-    await Tree.reload();
-    if (selectedNode) {
-        selectedNode = Tree._findNode(selectedNode.id);
-        if (selectedNode) await FileList.showFolder(selectedNode.id);
-    }
+    await reloadTreeAndFileList();
     await refreshDetailPanel();
 });
 
