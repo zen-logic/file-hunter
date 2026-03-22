@@ -1,6 +1,7 @@
 import API from '../api.js';
 import icons from '../icons.js';
 import Keyboard from '../keyboard.js';
+import Tree from './tree.js';
 
 const PAGE_SIZE = 120;
 
@@ -523,15 +524,12 @@ const FileList = {
             }
             const seg = document.createElement('span');
             seg.textContent = entry.name;
-            if (i < this.currentBreadcrumb.length - 1) {
-                seg.className = 'breadcrumb-segment';
-                seg.addEventListener('click', () => {
-                    if (this.onBreadcrumbNav) this.onBreadcrumbNav(entry.nodeId);
-                });
-            } else {
-                seg.style.cursor = 'default';
-                seg.style.color = 'var(--color-text)';
-            }
+            seg.className = i < this.currentBreadcrumb.length - 1
+                ? 'breadcrumb-segment'
+                : 'breadcrumb-segment breadcrumb-current';
+            seg.addEventListener('click', () => {
+                if (this.onBreadcrumbNav) this.onBreadcrumbNav(entry.nodeId);
+            });
             this.breadcrumbEl.appendChild(seg);
         });
     },
@@ -797,8 +795,9 @@ const FileList = {
             const pendingHtml = file.pendingOp
                 ? `<span class="pending-indicator">pending ${file.pendingOp}</span>`
                 : '';
-            const locHtml = file.location
-                ? `<span class="file-location-label">${file.location}</span>`
+            const locLabel = (file.locationId && Tree.getLocationLabel(file.locationId)) || file.location;
+            const locHtml = locLabel
+                ? `<span class="file-location-label">${locLabel}</span>`
                 : '';
 
             // Remaining cells via innerHTML on a temp fragment

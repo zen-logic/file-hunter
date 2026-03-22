@@ -253,9 +253,18 @@ async def on_shutdown():
     await close_stats_db()
 
 
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app):
+    await on_startup()
+    yield
+    await on_shutdown()
+
+
 app = Starlette(
-    on_startup=[on_startup],
-    on_shutdown=[on_shutdown],
+    lifespan=lifespan,
     routes=[
         Route("/api/auth/status", auth_status, methods=["GET"]),
         Route("/api/auth/setup", auth_setup, methods=["POST"]),

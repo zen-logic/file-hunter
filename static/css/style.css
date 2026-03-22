@@ -1133,6 +1133,11 @@ body::after {
     text-decoration: underline;
 }
 
+.breadcrumb-current {
+    color: var(--color-text);
+    font-weight: 600;
+}
+
 .breadcrumb-sep {
     margin: 0 0.2rem;
     color: var(--color-text-muted);

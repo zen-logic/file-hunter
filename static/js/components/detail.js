@@ -1,5 +1,6 @@
 import API from '../api.js';
 import ConfirmModal from './confirm.js';
+import Tree from './tree.js';
 
 function _authUrl(url) {
     const token = localStorage.getItem('fh-token');
@@ -710,9 +711,13 @@ const Detail = {
 
     _buildBreadcrumb(breadcrumb) {
         if (!breadcrumb || breadcrumb.length === 0) return '';
-        const segments = breadcrumb.map(entry =>
-            `<span class="breadcrumb-segment" data-node-id="${entry.nodeId}">${entry.name}</span>`
-        );
+        const last = breadcrumb.length - 1;
+        const segments = breadcrumb.map((entry, i) => {
+            const label = (i === 0 && entry.nodeId)
+                ? (Tree.getLocationLabel(entry.nodeId) || entry.name)
+                : entry.name;
+            return `<span class="breadcrumb-segment${i === last ? ' breadcrumb-current' : ''}" data-node-id="${entry.nodeId}">${label}</span>`;
+        });
         return `<div class="detail-breadcrumb">${segments.join('<span class="breadcrumb-sep">/</span>')}</div>`;
     },
 

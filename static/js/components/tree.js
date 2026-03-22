@@ -21,6 +21,13 @@ const Tree = {
     onDeselect: null,
     filterText: '',
     treeData: [],
+
+    getLocationLabel(locationId) {
+        // locationId can be "loc-49" or just 49
+        const id = String(locationId).startsWith('loc-') ? locationId : `loc-${locationId}`;
+        const node = this.treeData.find(n => n.id === id);
+        return node ? node.label : null;
+    },
     _expandedIds: new Set(),
     _scanningLocations: new Set(),
     _scanningPhases: new Map(),

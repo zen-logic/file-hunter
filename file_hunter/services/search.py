@@ -162,6 +162,7 @@ def _read_search_page(search_path, sort, sort_dir, page):
             "missing": False,
             "hidden": bool(r["hidden"]),
             "location": r["location_name"],
+            "locationId": r["location_id"],
         })
 
     return items, total
