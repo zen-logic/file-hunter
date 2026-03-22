@@ -1427,7 +1427,7 @@ const Detail = {
         const effectiveHash = detail.hashStrong || detail.hashFast;
         if (btn && effectiveHash && this.onShowDuplicates) {
             btn.addEventListener('click', () => {
-                this.onShowDuplicates(effectiveHash);
+                this.onShowDuplicates(effectiveHash, detail.id);
             });
         }
     },

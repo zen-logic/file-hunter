@@ -16,7 +16,7 @@ class ProgressTracker(dict):
     """Dict subclass for pollable progress state.
 
     Drop-in replacement for the module-level _progress dicts used by
-    import, fast scan, dup exclude, and repair.  Inherits from dict so
+    import, dup exclude, and repair.  Inherits from dict so
     all existing access patterns work unchanged:
         _progress["status"] = "running"
         _progress.update(status="error", error=str(e))

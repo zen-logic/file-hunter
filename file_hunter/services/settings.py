@@ -14,8 +14,3 @@ async def get_all_settings(db) -> dict:
     cursor = await db.execute("SELECT key, value FROM settings")
     rows = await cursor.fetchall()
     return {row["key"]: row["value"] for row in rows}
-
-
-async def is_turbo_mode(db) -> bool:
-    val = await get_setting(db, "turboMode")
-    return val == "1"

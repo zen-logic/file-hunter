@@ -55,10 +55,6 @@ async def update_settings(request: Request):
             await settings_svc.set_setting(
                 conn, "showHiddenFiles", "1" if b["showHiddenFiles"] else "0"
             )
-        if "turboMode" in b:
-            await settings_svc.set_setting(
-                conn, "turboMode", "1" if b["turboMode"] else "0"
-            )
 
     await execute_write(_update, body)
 

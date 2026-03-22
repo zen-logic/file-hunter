@@ -63,16 +63,6 @@ const Settings = {
                 </div>
             </div>
             <div class="settings-section">
-                <h3 class="settings-section-title">Advanced</h3>
-                <div class="settings-row">
-                    <label class="modal-label">
-                        <input type="checkbox" id="settings-turbo-mode" ${settings.turboMode === '1' ? 'checked' : ''}>
-                        Turbo Mode
-                    </label>
-                    <span class="settings-hint">Maximise scan speed at the cost of UI responsiveness. Larger batch sizes, fewer progress updates.</span>
-                </div>
-            </div>
-            <div class="settings-section">
                 <h3 class="settings-section-title">Users</h3>
                 <table class="settings-users-table">
                     <thead>
@@ -128,11 +118,6 @@ const Settings = {
         // Show hidden files toggle
         document.getElementById('settings-show-hidden').addEventListener('change', async (e) => {
             await API.patch('/api/settings', { showHiddenFiles: e.target.checked });
-        });
-
-        // Turbo mode toggle
-        document.getElementById('settings-turbo-mode').addEventListener('change', async (e) => {
-            await API.patch('/api/settings', { turboMode: e.target.checked });
         });
 
         // Add user

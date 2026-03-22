@@ -870,8 +870,8 @@ Detail.init({
         if (fileId) FileList.pendingFocusFile = fileId;
         await Tree.navigateTo(nodeId);
     },
-    onShowDuplicates(hashStrong) {
-        FileList.showDuplicateGroup(hashStrong);
+    onShowDuplicates(hash, fileId) {
+        FileList.showDuplicateGroup(hash, fileId);
     },
     async onNavigateToFile(fileId) {
         Search.close();

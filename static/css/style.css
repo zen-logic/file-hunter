@@ -774,6 +774,13 @@ body::after {
     filter: brightness(1.3);
 }
 
+.dup-indicator.dup-selected {
+    background: var(--color-primary);
+    color: var(--color-bg);
+    cursor: default;
+    text-shadow: none;
+}
+
 .file-table tr.missing {
     opacity: var(--opacity-offline);
 }

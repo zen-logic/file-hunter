@@ -585,7 +585,7 @@ const FileList = {
         this._renderContent();
     },
 
-    async showDuplicateGroup(hash) {
+    async showDuplicateGroup(hash, sourceFileId) {
         this.currentFolder = null;
         this.currentBreadcrumb = null;
         this._clearSelection();
@@ -598,6 +598,7 @@ const FileList = {
         this._searchMode = true;
         this._searchParams = { hash };
         this._dupGroupMode = true;
+        this._dupGroupSourceId = sourceFileId || null;
 
         await this._fetchSearch();
     },
@@ -777,9 +778,16 @@ const FileList = {
             tdCheck.appendChild(cb);
             tr.appendChild(tdCheck);
 
-            const dupHtml = file.dups > 0 && file.size > 0
-                ? `<span class="dup-indicator" data-dup-file-id="${file.id}">${file.dups} dup${file.dups > 1 ? 's' : ''}</span>`
-                : '';
+            let dupHtml = '';
+            if (this._dupGroupMode) {
+                if (file.id === this._dupGroupSourceId) {
+                    dupHtml = '<span class="dup-indicator dup-selected">selected</span>';
+                } else {
+                    dupHtml = `<span class="dup-indicator" data-dup-file-id="${file.id}">duplicate</span>`;
+                }
+            } else if (file.dups > 0 && file.size > 0) {
+                dupHtml = `<span class="dup-indicator" data-dup-file-id="${file.id}">${file.dups} dup${file.dups > 1 ? 's' : ''}</span>`;
+            }
             const staleHtml = file.stale
                 ? '<span class="stale-indicator">stale</span>'
                 : '';
@@ -806,12 +814,20 @@ const FileList = {
                 tr.appendChild(tempRow.firstChild);
             }
 
-            // Dup indicator click — show duplicate group
-            const dupEl = tr.querySelector('.dup-indicator');
+            // Dup indicator click — show duplicate group or update selected
+            const dupEl = tr.querySelector('.dup-indicator:not(.dup-selected)');
             if (dupEl) {
                 dupEl.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    this.showDuplicateGroup(file.hashStrong || file.hashFast);
+                    if (this._dupGroupMode) {
+                        // Already in dup group view — change selected and show detail
+                        this._dupGroupSourceId = file.id;
+                        this._selectOnly(file, idx);
+                        this._fireSelectionChange();
+                        this.render();
+                    } else {
+                        this.showDuplicateGroup(file.hashStrong || file.hashFast, file.id);
+                    }
                 });
             }
 
@@ -834,6 +850,7 @@ const FileList = {
                 } else {
                     // Single select
                     this._selectOnly(file, idx);
+                    if (this._dupGroupMode) this._dupGroupSourceId = file.id;
                     this.render();
                     this._fireSelectionChange();
                 }
@@ -913,7 +930,7 @@ const FileList = {
                     span.textContent = text;
                     span.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        this.showDuplicateGroup(item.hashStrong || item.hashFast);
+                        this.showDuplicateGroup(item.hashStrong || item.hashFast, item.id);
                     });
                     nameCell.appendChild(span);
                 }

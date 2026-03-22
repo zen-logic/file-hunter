@@ -277,35 +277,6 @@ async def hash_fast_batch(agent_id: int, paths: list[str]) -> dict:
     )
 
 
-async def reconcile_directory(
-    agent_id: int, path: str, root_path: str, expected: list[dict], cursor=None
-) -> dict:
-    """Call agent /reconcile endpoint for a single directory.
-
-    Args:
-        cursor: pagination offset. 0 = first page (new server, enables pagination).
-            None = don't send cursor field (backward compat with old agents).
-
-    Returns dict with keys: unchanged, changed, gone, new, subdirs,
-    and when paginating: cursor, total_new, total_changed.
-    """
-    resolved = _resolve_agent(agent_id)
-    if not resolved:
-        raise ConnectionError(f"Agent {agent_id} is offline")
-    host, port, token = resolved
-    body = {"path": path, "root_path": root_path, "expected": expected}
-    if cursor is not None:
-        body["cursor"] = cursor
-    return await _post(
-        host,
-        port,
-        token,
-        "/reconcile",
-        body,
-        timeout=None,
-    )
-
-
 async def stream_copy(
     src_path: str,
     src_loc_id: int,
