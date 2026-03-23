@@ -1718,6 +1718,7 @@ const Detail = {
                     <button class="btn" id="detail-new-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>New Folder</button>
                     <button class="btn" id="detail-download-zip"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Download ZIP</button>
                     <button class="btn" id="detail-merge-btn"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Merge</button>
+                    <button class="btn" id="detail-rename-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Rename</button>
                     <button class="btn" id="detail-move-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Move</button>
                     <button class="btn btn-danger" id="detail-delete-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : ''}>Delete Folder</button>
                 </div>

@@ -708,9 +708,14 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
     }
 
 
-async def move_folder(db, folder_id: int, destination_parent_id: str):
-    """Move a folder (and its entire subtree) on disk and in the catalog."""
+async def move_folder(
+    db, folder_id: int, destination_parent_id: str = None, *, new_name: str = None
+):
+    """Move and/or rename a folder (and its entire subtree) on disk and in the catalog."""
     from file_hunter.services import fs
+
+    if not destination_parent_id and not new_name:
+        raise ValueError("Provide destination_parent_id and/or new_name.")
 
     # Fetch folder record + location info
     row = await db.execute_fetchall(
@@ -726,12 +731,26 @@ async def move_folder(db, folder_id: int, destination_parent_id: str):
     src_root = fld["root_path"]
     src_loc_id = fld["location_id"]
 
+    effective_name = new_name if new_name else fld["name"]
+
     # Source location must be online
     if not await fs.dir_exists(src_root, src_loc_id):
         raise ValueError("Source location is offline.")
 
     # Resolve destination parent
-    if destination_parent_id.startswith("loc-"):
+    if destination_parent_id is None:
+        # Rename only — stay in current parent
+        dest_loc_id = src_loc_id
+        dest_root = src_root
+        dest_parent_fld_id = fld["parent_id"]
+        if dest_parent_fld_id:
+            parent_row = await db.execute_fetchall(
+                "SELECT rel_path FROM folders WHERE id = ?", (dest_parent_fld_id,)
+            )
+            dest_parent_rel = parent_row[0]["rel_path"] if parent_row else ""
+        else:
+            dest_parent_rel = ""
+    elif destination_parent_id.startswith("loc-"):
         dest_loc_id = int(destination_parent_id[4:])
         dest_row = await db.execute_fetchall(
             "SELECT id, root_path FROM locations WHERE id = ?", (dest_loc_id,)
@@ -783,9 +802,15 @@ async def move_folder(db, folder_id: int, destination_parent_id: str):
     # Build source and destination absolute paths
     src_abs = os.path.join(src_root, fld["rel_path"])
     new_rel = (
-        os.path.join(dest_parent_rel, fld["name"]) if dest_parent_rel else fld["name"]
+        os.path.join(dest_parent_rel, effective_name)
+        if dest_parent_rel
+        else effective_name
     )
     dest_abs = os.path.join(dest_root, new_rel)
+
+    # No-op check
+    if src_abs == dest_abs:
+        raise ValueError("Source and destination are the same.")
 
     # Check collision on disk
     if await fs.path_exists(dest_abs, dest_loc_id):
@@ -794,7 +819,7 @@ async def move_folder(db, folder_id: int, destination_parent_id: str):
     # Check collision in DB
     existing = await db.execute_fetchall(
         "SELECT id FROM folders WHERE location_id = ? AND parent_id IS ? AND name = ?",
-        (dest_loc_id, dest_parent_fld_id, fld["name"]),
+        (dest_loc_id, dest_parent_fld_id, effective_name),
     )
     if existing:
         raise ValueError("A folder with that name already exists in the catalog.")
@@ -818,9 +843,10 @@ async def move_folder(db, folder_id: int, destination_parent_id: str):
     )
 
     # Update moved folder
+    new_hidden = 1 if effective_name.startswith(".") else 0
     await db.execute(
-        "UPDATE folders SET parent_id = ?, rel_path = ?, location_id = ? WHERE id = ?",
-        (dest_parent_fld_id, new_rel, dest_loc_id, folder_id),
+        "UPDATE folders SET parent_id = ?, name = ?, rel_path = ?, location_id = ?, hidden = ? WHERE id = ?",
+        (dest_parent_fld_id, effective_name, new_rel, dest_loc_id, new_hidden, folder_id),
     )
 
     # Update descendant folders: replace rel_path prefix
@@ -867,4 +893,12 @@ async def move_folder(db, folder_id: int, destination_parent_id: str):
     else:
         schedule_size_recalc(src_loc_id)
 
-    return {"id": folder_id, "name": fld["name"], "moved": True}
+    renamed = effective_name != fld["name"]
+    moved = destination_parent_id is not None
+    return {
+        "id": folder_id,
+        "name": effective_name,
+        "old_name": fld["name"],
+        "renamed": renamed,
+        "moved": moved,
+    }

@@ -13,6 +13,7 @@ import DeleteFileModal from './components/deletefile.js';
 import RenameLocationModal from './components/renamelocation.js';
 import NewFolderModal from './components/newfolder.js';
 import RenameFileModal from './components/renamefile.js';
+import RenameFolderModal from './components/renamefolder.js';
 import MoveFileModal from './components/movefile.js';
 import IgnoreFileModal from './components/ignorefile.js';
 import Treemap from './components/treemap.js';
@@ -55,6 +56,7 @@ async function refreshDetailPanel() {
             wireMergeBtn(selectedFile);
             wireNewFolderBtn(selectedFile);
             wireDownloadZipBtn(selectedFile);
+            wireRenameFolderBtn(selectedFile);
             wireMoveFolder(selectedFile);
             wireDeleteFolderBtn(selectedFile);
         } else {
@@ -82,6 +84,7 @@ async function refreshDetailPanel() {
             wireNewFolderBtn();
             wireDownloadZipBtn();
             wireMergeBtn();
+            wireRenameFolderBtn();
             wireMoveFolder();
             wireDeleteFolderBtn();
             if (result) updateLocationOnline(result.locationId, result.locationOnline);
@@ -229,6 +232,14 @@ function wireDeleteFolderBtn(node) {
                 name: target.name || target.label,
             });
         });
+    }
+}
+
+function wireRenameFolderBtn(node) {
+    const btn = document.getElementById('detail-rename-folder');
+    const target = node || selectedNode;
+    if (btn && target) {
+        btn.addEventListener('click', () => RenameFolderModal.open(target));
     }
 }
 
@@ -635,6 +646,19 @@ RenameFileModal.init(async (file, newName) => {
     return { ok: true };
 });
 
+RenameFolderModal.init(async (folder, newName) => {
+    const folderId = String(folder.id).replace('fld-', '');
+    const res = await API.post(`/api/folders/${folderId}/move`, { name: newName });
+    if (!res.ok) {
+        return { error: res.error || 'Rename failed.' };
+    }
+    ActivityLog.add(`Folder renamed: <b>${folder.label || folder.name}</b> &rarr; <b>${newName}</b>`);
+    Toast.success(`Folder renamed to ${newName}`);
+    await reloadTreeAndFileList();
+    await refreshDetailPanel();
+    return { ok: true };
+});
+
 MoveFileModal.init(async (item, destinationFolderId) => {
     if (item.id === 'batch') {
         const res = await API.post('/api/batch/move', {
@@ -753,6 +777,7 @@ Tree.init(async (node) => {
         wireNewFolderBtn();
         wireDownloadZipBtn();
         wireMergeBtn();
+        wireRenameFolderBtn();
         wireMoveFolder();
         wireDeleteFolderBtn();
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
@@ -785,6 +810,7 @@ FileList.init(async (file) => {
         wireMergeBtn(file);
         wireNewFolderBtn(file);
         wireDownloadZipBtn(file);
+        wireRenameFolderBtn(file);
         wireMoveFolder(file);
         wireDeleteFolderBtn(file);
     } else {
@@ -821,6 +847,7 @@ FileList.init(async (file) => {
     wireNewFolderBtn();
     wireDownloadZipBtn();
     wireMergeBtn();
+    wireRenameFolderBtn();
     wireMoveFolder();
     wireDeleteFolderBtn();
     if (result) updateLocationOnline(result.locationId, result.locationOnline);
@@ -847,6 +874,7 @@ FileList.init(async (file) => {
             wireNewFolderBtn();
             wireDownloadZipBtn();
             wireMergeBtn();
+            wireRenameFolderBtn();
             wireMoveFolder();
             wireDeleteFolderBtn();
             if (result) updateLocationOnline(result.locationId, result.locationOnline);

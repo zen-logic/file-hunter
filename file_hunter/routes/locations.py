@@ -267,15 +267,26 @@ async def treemap_data(request: Request):
 
 
 async def folder_move(request: Request):
-    """POST /api/folders/{id:int}/move — move a folder to a new parent."""
+    """POST /api/folders/{id:int}/move — move and/or rename a folder."""
     folder_id = int(request.path_params["id"])
     body = await request.json()
-    destination_parent_id = body.get("destination_parent_id", "").strip()
-    if not destination_parent_id:
-        return json_error("destination_parent_id is required.")
+    destination_parent_id = body.get("destination_parent_id", "").strip() or None
+    new_name = body.get("name")
+
+    if new_name is not None:
+        new_name = new_name.strip()
+        if not new_name:
+            return json_error("Name cannot be empty.")
+        if "/" in new_name or "\\" in new_name:
+            return json_error("Name cannot contain path separators.")
+
+    if not destination_parent_id and not new_name:
+        return json_error("Provide destination_parent_id and/or name.")
 
     try:
-        result = await execute_write(move_folder, folder_id, destination_parent_id)
+        result = await execute_write(
+            move_folder, folder_id, destination_parent_id, new_name=new_name
+        )
     except ValueError as e:
         return json_error(str(e), 400)
 
@@ -286,6 +297,8 @@ async def folder_move(request: Request):
             "type": "folder_moved",
             "folderId": folder_id,
             "name": result.get("name"),
+            "oldName": result.get("old_name"),
+            "renamed": result.get("renamed", False),
         }
     )
 
