@@ -17,13 +17,14 @@ async def _run(base_dir: Path):
     data_dir.mkdir(exist_ok=True)
 
     # Initialize the database (creates tables, runs migrations)
-    from file_hunter.db import read_db
+    from file_hunter.db import get_db
 
-    async with read_db() as db:
-        # Create the local agent if it doesn't exist
-        from file_hunter.services.agents import ensure_local_agent
+    db = await get_db()
 
-        token = await ensure_local_agent(db)
+    # Create the local agent if it doesn't exist
+    from file_hunter.services.agents import ensure_local_agent
+
+    token = await ensure_local_agent(db)
 
     # Write agent config if this is first run (token returned)
     agent_config_path = data_dir / "agent_config.json"

@@ -1268,7 +1268,7 @@ async def _diff_and_update(
                 )
 
             # Clear hashes in hashes.db for changed files (need re-hashing)
-            changed_ids = [r["file_id"] for r in batch]
+            changed_ids = [r["file_id"] for r in batch_rows]
             for ci in range(0, len(changed_ids), 500):
                 cbatch = changed_ids[ci : ci + 500]
                 cph = ",".join("?" for _ in cbatch)
