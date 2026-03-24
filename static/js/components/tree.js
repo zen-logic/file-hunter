@@ -201,6 +201,18 @@ const Tree = {
         }
     },
 
+    updateOnlineStatus(locationIds, online) {
+        let changed = false;
+        for (const id of locationIds) {
+            const node = this._findNode(id);
+            if (node && node.online !== online) {
+                node.online = online;
+                changed = true;
+            }
+        }
+        if (changed) this.render();
+    },
+
     updateLocationSize(locationId, totalSize) {
         const node = this._findNode('loc-' + locationId);
         if (node) {

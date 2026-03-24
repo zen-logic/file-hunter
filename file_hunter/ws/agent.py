@@ -366,7 +366,15 @@ async def agent_ws_endpoint(websocket: WebSocket):
     await websocket.send_text(json.dumps({"type": "registered", "agentId": agent_id}))
 
     # Broadcast status to UI browsers
-    await broadcast({"type": "agent_status", "agentId": agent_id, "status": "online"})
+    loc_ids = [f"loc-{lid}" for lid in _agent_location_ids.get(agent_id, set())]
+    await broadcast(
+        {
+            "type": "agent_status",
+            "agentId": agent_id,
+            "status": "online",
+            "locationIds": loc_ids,
+        }
+    )
     await broadcast(
         {
             "type": "location_changed",
@@ -481,6 +489,10 @@ async def agent_ws_endpoint(websocket: WebSocket):
 
                 clear_location_path_status(agent_id)
 
+                disc_loc_ids = [
+                    f"loc-{lid}" for lid in _agent_location_ids.get(agent_id, set())
+                ]
+
                 _agent_connections.pop(agent_id, None)
                 _agent_tokens.pop(agent_id, None)
                 _agent_info.pop(agent_id, None)
@@ -498,7 +510,12 @@ async def agent_ws_endpoint(websocket: WebSocket):
                 await execute_write(_set_offline, agent_id, now)
 
                 await broadcast(
-                    {"type": "agent_status", "agentId": agent_id, "status": "offline"}
+                    {
+                        "type": "agent_status",
+                        "agentId": agent_id,
+                        "status": "offline",
+                        "locationIds": disc_loc_ids,
+                    }
                 )
                 await broadcast(
                     {

@@ -1436,6 +1436,10 @@ WS.on('dup_exclude_completed', async msg => {
 
 WS.on('location_changed', async (msg) => {
     ActivityLog.add(`Location ${msg.action}: <b>${msg.location?.label || msg.locationId || ''}</b>`);
+    if (msg.action === 'connected' || msg.action === 'disconnected') {
+        // Online status already handled by agent_status event
+        return;
+    }
     await Tree.reload();
     if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
     await StatusBar.loadStats();
@@ -1788,11 +1792,13 @@ WS.on('settings_changed', async (msg) => {
     await refreshDetailPanel();
 });
 
-WS.on('agent_status', async (msg) => {
+WS.on('agent_status', (msg) => {
     const label = msg.agentId ? `Agent #${msg.agentId}` : 'Agent';
     ActivityLog.add(`${label} ${msg.status}`);
-    await Tree.reload();
-    await StatusBar.loadStats();
+    const online = msg.status === 'online';
+    if (msg.locationIds) {
+        Tree.updateOnlineStatus(msg.locationIds, online);
+    }
 });
 
 WS.on('agent_capabilities', (msg) => {
