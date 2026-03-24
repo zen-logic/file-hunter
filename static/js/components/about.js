@@ -1,4 +1,5 @@
 import API from '../api.js';
+import WS from '../ws.js';
 
 const About = {
     _modal: null,
@@ -83,25 +84,7 @@ const About = {
     },
 
     _waitForRestart() {
-        let attempts = 0;
-        const poll = setInterval(async () => {
-            attempts++;
-            if (attempts > 30) {
-                clearInterval(poll);
-                const el = document.getElementById('about-update');
-                if (el) el.innerHTML = '<span style="color: var(--color-error);">Server did not come back. Check the server manually.</span>';
-                return;
-            }
-            try {
-                const res = await fetch('/api/version', { credentials: 'same-origin', signal: AbortSignal.timeout(2000) });
-                if (res.ok) {
-                    clearInterval(poll);
-                    window.location.reload();
-                }
-            } catch (_) {
-                // Server still down, keep polling
-            }
-        }, 2000);
+        WS.on('__open', () => location.reload());
     },
 
     close() {
