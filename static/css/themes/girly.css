@@ -1,0 +1,67 @@
+:root {
+    /* Girly — pastel pink, playful, bubbly */
+    --font-family: 'Comic Sans MS', 'Chalkboard SE', cursive;
+
+    --color-bg: #fff0f6;
+    --color-surface: #fff8fb;
+    --color-surface-raised: #ffe8f2;
+    --color-surface-hover: #ffd8ea;
+    --color-surface-active: #ffe0ee;
+
+    --color-border: #f0b8d0;
+    --color-border-subtle: #fce0ee;
+    --color-border-hover: #e84090;
+    --color-border-card: #f0c8d8;
+
+    --color-text: #5a2848;
+    --color-text-muted: #a06888;
+    --color-text-secondary: #804868;
+    --color-text-dim: #6a3858;
+    --color-text-bright: #3a0828;
+    --color-text-placeholder: #d0a0b8;
+
+    --color-selected: #fce0f0;
+
+    --color-primary: #e84090;
+    --color-primary-hover: #d03080;
+    --color-btn-active: #c02870;
+
+    --color-offline-bg: #fff0f0;
+    --color-offline-text: #e04848;
+
+    --color-stale-bg: #f0e8f8;
+    --color-stale-text: #9060b0;
+    --opacity-stale: 0.55;
+
+    --color-dup-bg: #fef8e0;
+    --color-dup-text: #c07820;
+
+    --color-tag-bg: #f0e8ff;
+    --color-tag-text: #8040c0;
+
+    --color-scan-bg: #f0fff0;
+    --color-scan-border: #c0e8c0;
+    --color-scan-text: #40a840;
+    --color-progress-track: #ffe8f2;
+    --color-progress-fill: #e84090;
+
+    --color-overlay: rgba(90, 40, 72, 0.35);
+
+    --color-statusbar-bg: #fff0f6;
+    --color-status-ok: #40a840;
+    --color-status-warn: #d09020;
+    --color-status-error: #e04848;
+
+    --btn-primary-bg: var(--color-primary);
+    --btn-primary-bg-hover: var(--color-primary-hover);
+    --btn-primary-text: #ffffff;
+
+    --treemap-color-1: #e84090;
+    --treemap-color-2: #c060c0;
+    --treemap-color-3: #80a0e0;
+    --treemap-color-4: #e08060;
+    --treemap-color-5: #60c080;
+    --treemap-color-6: #d0a040;
+    --treemap-color-7: #a070d0;
+    --treemap-color-8: #e06080;
+}

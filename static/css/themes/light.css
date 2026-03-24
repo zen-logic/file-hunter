@@ -1,0 +1,67 @@
+:root {
+    /* Light — warm, readable, editorial feel */
+    --font-family: Georgia, 'Times New Roman', serif;
+
+    --color-bg: #f0efe8;
+    --color-surface: #ffffff;
+    --color-surface-raised: #f8f7f2;
+    --color-surface-hover: #eae9e2;
+    --color-surface-active: #e4e3dc;
+
+    --color-border: #cccbc4;
+    --color-border-subtle: #e4e3dc;
+    --color-border-hover: #2563eb;
+    --color-border-card: #d8d7d0;
+
+    --color-text: #2a2a28;
+    --color-text-muted: #787870;
+    --color-text-secondary: #585850;
+    --color-text-dim: #484840;
+    --color-text-bright: #000000;
+    --color-text-placeholder: #a8a8a0;
+
+    --color-selected: #dbeafe;
+
+    --color-primary: #2563eb;
+    --color-primary-hover: #1d4fd8;
+    --color-btn-active: #1e40af;
+
+    --color-offline-bg: #fef2f2;
+    --color-offline-text: #dc2626;
+
+    --color-stale-bg: #f5f0ff;
+    --color-stale-text: #7c3aed;
+    --opacity-stale: 0.55;
+
+    --color-dup-bg: #fefce8;
+    --color-dup-text: #a16207;
+
+    --color-tag-bg: #eff6ff;
+    --color-tag-text: #2563eb;
+
+    --color-scan-bg: #f0fdf4;
+    --color-scan-border: #bbf7d0;
+    --color-scan-text: #16a34a;
+    --color-progress-track: #e4e3dc;
+    --color-progress-fill: #2563eb;
+
+    --color-overlay: rgba(0, 0, 0, 0.35);
+
+    --color-statusbar-bg: #f8f7f2;
+    --color-status-ok: #16a34a;
+    --color-status-warn: #d97706;
+    --color-status-error: #dc2626;
+
+    --btn-primary-bg: var(--color-primary);
+    --btn-primary-bg-hover: var(--color-primary-hover);
+    --btn-primary-text: #ffffff;
+
+    --treemap-color-1: #4a7aba;
+    --treemap-color-2: #2a8a7a;
+    --treemap-color-3: #7a5ac0;
+    --treemap-color-4: #c06030;
+    --treemap-color-5: #4a8a3a;
+    --treemap-color-6: #c04040;
+    --treemap-color-7: #a07820;
+    --treemap-color-8: #9050a0;
+}

@@ -1,9 +1,11 @@
-import { themeNames, applyTheme } from '../themes.js';
+import { loadThemeNames, applyTheme } from '../themes.js';
 
 const ThemeSelector = {
-    init() {
+    async init() {
         this._el = document.getElementById('theme-select');
         if (!this._el) return;
+
+        const themeNames = await loadThemeNames();
 
         // Populate options — default first, rest alphabetical
         this._el.innerHTML = '';
@@ -11,7 +13,7 @@ const ThemeSelector = {
         for (const name of sorted) {
             const opt = document.createElement('option');
             opt.value = name;
-            opt.textContent = name.replace(/\b\w/g, c => c.toUpperCase());
+            opt.textContent = name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             this._el.appendChild(opt);
         }
 

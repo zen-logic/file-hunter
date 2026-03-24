@@ -86,6 +86,7 @@ from file_hunter.routes.settings import (
     get_version,
     get_pro_status,
     reset_queues,
+    list_themes,
 )
 from file_hunter.routes.ignore import (
     list_ignore_rules,
@@ -280,6 +281,7 @@ app = Starlette(
         Route("/api/version", get_version, methods=["GET"]),
         Route("/api/settings", get_settings, methods=["GET"]),
         Route("/api/settings", update_settings, methods=["PATCH"]),
+        Route("/api/themes", list_themes, methods=["GET"]),
         Route("/api/pro/status", get_pro_status, methods=["GET"]),
         Route("/api/update/check", check_update, methods=["POST"]),
         Route("/api/update/install", install_update, methods=["POST"]),

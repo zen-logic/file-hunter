@@ -10,6 +10,7 @@ _PUBLIC_PATHS = {
     "/api/auth/setup",
     "/api/auth/login",
     "/api/pro/status",
+    "/api/themes",
 }
 
 

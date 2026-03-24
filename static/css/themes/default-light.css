@@ -1,0 +1,77 @@
+:root {
+    /* Default Light — the default dark theme flipped to light */
+    --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+    --color-bg: #e8e8f0;
+    --color-surface: #f4f4fa;
+    --color-surface-raised: #eeeef6;
+    --color-surface-hover: #dcdce8;
+    --color-surface-active: #d4d4e2;
+
+    --color-border: #c0c0d0;
+    --color-border-subtle: #d8d8e4;
+    --color-border-hover: #5b8def;
+    --color-border-card: #ccccd8;
+
+    --color-text: #2a2a38;
+    --color-text-muted: #707088;
+    --color-text-secondary: #505068;
+    --color-text-dim: #404058;
+    --color-text-bright: #1a1a28;
+    --color-text-placeholder: #9898a8;
+
+    --color-selected: #d8e4ff;
+
+    --color-primary: #4a78d8;
+    --color-primary-hover: #3a68c8;
+    --color-btn-active: #3060b8;
+
+    --color-offline-bg: #fceaea;
+    --color-offline-text: #cc2828;
+
+    --color-stale-bg: #ece8f4;
+    --color-stale-text: #7060a0;
+    --opacity-stale: 0.55;
+
+    --color-dup-bg: #f8f4e0;
+    --color-dup-text: #906800;
+
+    --color-tag-bg: #e0ecfc;
+    --color-tag-text: #3868c0;
+
+    --color-scan-bg: #e8f8ec;
+    --color-scan-border: #b0d8b8;
+    --color-scan-text: #287030;
+    --color-progress-track: #d4d4e2;
+    --color-progress-fill: #4a78d8;
+
+    --color-overlay: rgba(0, 0, 0, 0.3);
+
+    --color-statusbar-bg: #e0e0ec;
+    --color-status-ok: #287030;
+    --color-status-warn: #906800;
+    --color-status-error: #cc2828;
+
+    --text-glow: none;
+    --scanline-opacity: 0;
+    --title-glow: none;
+    --glow-primary: none;
+    --glow-primary-hover: none;
+    --glow-focus: 0 0 4px rgba(74, 120, 216, 0.3);
+    --glow-modal: none;
+    --glow-stat: none;
+    --glow-status-dot: none;
+    --glow-dup: none;
+    --btn-primary-bg: var(--color-primary);
+    --btn-primary-bg-hover: var(--color-primary-hover);
+    --btn-primary-text: #ffffff;
+
+    --treemap-color-1: #4a78d8;
+    --treemap-color-2: #38a870;
+    --treemap-color-3: #7858c0;
+    --treemap-color-4: #c86030;
+    --treemap-color-5: #48a048;
+    --treemap-color-6: #c04848;
+    --treemap-color-7: #a08020;
+    --treemap-color-8: #8060b0;
+}

@@ -43,6 +43,17 @@ async def get_pro_status(request: Request):
         return json_ok({"active": False, "features": []})
 
 
+async def list_themes(request: Request):
+    """GET /api/themes — list available theme names."""
+    themes_dir = (
+        Path(__file__).resolve().parent.parent.parent / "static" / "css" / "themes"
+    )
+    names = ["default"]
+    if themes_dir.is_dir():
+        names += sorted(p.stem for p in themes_dir.glob("*.css"))
+    return json_ok(names)
+
+
 async def update_settings(request: Request):
     body = await request.json()
 

@@ -1,0 +1,77 @@
+:root {
+    /* Corporate — clean, neutral, professional. No glow, no flair. */
+    --font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+    --color-bg: #f4f5f7;
+    --color-surface: #ffffff;
+    --color-surface-raised: #f8f9fa;
+    --color-surface-hover: #e9ecef;
+    --color-surface-active: #dee2e6;
+
+    --color-border: #ced4da;
+    --color-border-subtle: #e9ecef;
+    --color-border-hover: #0d6efd;
+    --color-border-card: #dee2e6;
+
+    --color-text: #212529;
+    --color-text-muted: #6c757d;
+    --color-text-secondary: #495057;
+    --color-text-dim: #343a40;
+    --color-text-bright: #000000;
+    --color-text-placeholder: #adb5bd;
+
+    --color-selected: #e7f1ff;
+
+    --color-primary: #0d6efd;
+    --color-primary-hover: #0b5ed7;
+    --color-btn-active: #0a58ca;
+
+    --color-offline-bg: #fff5f5;
+    --color-offline-text: #dc3545;
+
+    --color-stale-bg: #f8f9fa;
+    --color-stale-text: #6c757d;
+    --opacity-stale: 0.55;
+
+    --color-dup-bg: #fff8e1;
+    --color-dup-text: #856404;
+
+    --color-tag-bg: #e7f1ff;
+    --color-tag-text: #0d6efd;
+
+    --color-scan-bg: #f0fdf4;
+    --color-scan-border: #b7e1cd;
+    --color-scan-text: #198754;
+    --color-progress-track: #e9ecef;
+    --color-progress-fill: #0d6efd;
+
+    --color-overlay: rgba(0, 0, 0, 0.4);
+
+    --color-statusbar-bg: #e9ecef;
+    --color-status-ok: #198754;
+    --color-status-warn: #ffc107;
+    --color-status-error: #dc3545;
+
+    --text-glow: none;
+    --scanline-opacity: 0;
+    --title-glow: none;
+    --glow-primary: none;
+    --glow-primary-hover: none;
+    --glow-focus: 0 0 4px rgba(13, 110, 253, 0.3);
+    --glow-modal: none;
+    --glow-stat: none;
+    --glow-status-dot: none;
+    --glow-dup: none;
+    --btn-primary-bg: var(--color-primary);
+    --btn-primary-bg-hover: var(--color-primary-hover);
+    --btn-primary-text: #ffffff;
+
+    --treemap-color-1: #0d6efd;
+    --treemap-color-2: #198754;
+    --treemap-color-3: #6f42c1;
+    --treemap-color-4: #fd7e14;
+    --treemap-color-5: #20c997;
+    --treemap-color-6: #dc3545;
+    --treemap-color-7: #ffc107;
+    --treemap-color-8: #0dcaf0;
+}

@@ -1,5 +1,5 @@
 import API from '../api.js';
-import { themeNames, applyTheme } from '../themes.js';
+import { loadThemeNames, applyTheme } from '../themes.js';
 
 const Login = {
     _onAuthenticated: null,
@@ -153,15 +153,16 @@ const Login = {
         el.classList.remove('hidden');
     },
 
-    _wireThemeSelector() {
+    async _wireThemeSelector() {
         const sel = document.getElementById('login-theme');
         if (!sel) return;
+        const themeNames = await loadThemeNames();
         const saved = localStorage.getItem('fh-theme') || 'default';
         const sorted = ['default', ...themeNames.filter(n => n !== 'default').sort()];
         for (const name of sorted) {
             const opt = document.createElement('option');
             opt.value = name;
-            opt.textContent = name.replace(/\b\w/g, c => c.toUpperCase());
+            opt.textContent = name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             sel.appendChild(opt);
         }
         if (themeNames.includes(saved)) sel.value = saved;

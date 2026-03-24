@@ -1,0 +1,78 @@
+:root {
+    /* Green Monitor — 1980s green phosphor CRT terminal (P1 phosphor) */
+    --font-family: 'Lucida Console', Monaco, monospace;
+
+    --color-bg: #000a00;
+    --color-surface: #041004;
+    --color-surface-raised: #081608;
+    --color-surface-hover: #0c200c;
+    --color-surface-active: #0a1c0a;
+
+    --color-border: #003a00;
+    --color-border-subtle: #0a1c0a;
+    --color-border-hover: #00cc00;
+    --color-border-card: #002a00;
+
+    --color-text: #00b800;
+    --color-text-muted: #006800;
+    --color-text-secondary: #009000;
+    --color-text-dim: #00a000;
+    --color-text-bright: #60ff60;
+    --color-text-placeholder: #004800;
+
+    --color-selected: #001a00;
+
+    --color-primary: #00b800;
+    --color-primary-hover: #00d800;
+    --color-btn-active: #009800;
+
+    --color-offline-bg: #1a0808;
+    --color-offline-text: #cc4020;
+
+    --color-stale-bg: #080e08;
+    --color-stale-text: #407040;
+    --opacity-stale: 0.5;
+
+    --color-dup-bg: #1a1a00;
+    --color-dup-text: #c0d040;
+
+    --color-tag-bg: #001218;
+    --color-tag-text: #60a0b0;
+
+    --color-scan-bg: #001a00;
+    --color-scan-border: #003a00;
+    --color-scan-text: #00cc00;
+    --color-progress-track: #081608;
+    --color-progress-fill: #00b800;
+
+    --color-overlay: rgba(0, 10, 0, 0.85);
+
+    --color-statusbar-bg: #000800;
+    --color-status-ok: #00cc00;
+    --color-status-warn: #c0d040;
+    --color-status-error: #cc4020;
+
+    /* CRT effects — green phosphor glow */
+    --text-glow: 0 0 4px rgba(0, 184, 0, 0.35);
+    --scanline-opacity: 0.6;
+    --title-letter-spacing: 0.15em;
+    --title-text-transform: uppercase;
+    --title-glow: 0 0 8px rgba(0, 184, 0, 0.5), 0 0 20px rgba(0, 184, 0, 0.15);
+    --glow-primary: 0 0 6px rgba(0, 184, 0, 0.25), inset 0 0 6px rgba(0, 184, 0, 0.08);
+    --glow-primary-hover: 0 0 12px rgba(0, 216, 0, 0.35), inset 0 0 10px rgba(0, 216, 0, 0.12);
+    --glow-focus: 0 0 5px rgba(0, 184, 0, 0.35);
+    --glow-modal: 0 0 20px rgba(0, 184, 0, 0.12);
+    --glow-status-dot: 0 0 4px var(--color-status-ok);
+    --btn-primary-bg: transparent;
+    --btn-primary-bg-hover: rgba(0, 184, 0, 0.08);
+    --btn-primary-text: #00b800;
+
+    --treemap-color-1: #00aa00;
+    --treemap-color-2: #008400;
+    --treemap-color-3: #00c030;
+    --treemap-color-4: #1a9a1a;
+    --treemap-color-5: #00b050;
+    --treemap-color-6: #3a9a00;
+    --treemap-color-7: #008830;
+    --treemap-color-8: #50aa00;
+}

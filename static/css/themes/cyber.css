@@ -1,0 +1,78 @@
+:root {
+    --font-family: 'Courier New', 'Lucida Console', monospace;
+
+    --color-bg: #0a0a0a;
+    --color-surface: #0d1117;
+    --color-surface-raised: #0a0e14;
+    --color-surface-hover: #111e2a;
+    --color-surface-active: #0f1a24;
+
+    --color-border: #0f3;
+    --color-border-subtle: #0a1a10;
+    --color-border-hover: #0f6;
+    --color-border-card: #0b2e14;
+
+    --color-text: #0f0;
+    --color-text-muted: #0a7a30;
+    --color-text-secondary: #0c9940;
+    --color-text-dim: #0bb848;
+    --color-text-bright: #3f3;
+    --color-text-placeholder: #064a1c;
+
+    --color-selected: #0a2e14;
+
+    --color-primary: #00cc44;
+    --color-primary-hover: #00ff55;
+    --color-btn-active: #00aa33;
+
+    --color-offline-bg: #1a0a0a;
+    --color-offline-text: #ff2040;
+
+    --color-stale-bg: #0a1a0a;
+    --color-stale-text: #66cc66;
+    --opacity-stale: 0.5;
+
+    --color-dup-bg: #1a1a00;
+    --color-dup-text: #ff0;
+
+    --color-tag-bg: #001a1a;
+    --color-tag-text: #0ff;
+
+    --color-scan-bg: #001a00;
+    --color-scan-border: #003a00;
+    --color-scan-text: #0f0;
+    --color-progress-track: #0a1a0a;
+    --color-progress-fill: #0f0;
+
+    --color-overlay: rgba(0, 10, 0, 0.8);
+
+    --color-statusbar-bg: #050a05;
+    --color-status-ok: #0f0;
+    --color-status-warn: #ff0;
+    --color-status-error: #f00;
+
+    --text-glow: 0 0 4px currentColor;
+    --scanline-opacity: 1;
+    --title-letter-spacing: 0.2em;
+    --title-text-transform: uppercase;
+    --title-glow: 0 0 8px currentColor, 0 0 20px currentColor;
+    --glow-primary: 0 0 6px var(--color-primary), inset 0 0 6px rgba(0, 204, 68, 0.15);
+    --glow-primary-hover: 0 0 12px var(--color-primary-hover), inset 0 0 10px rgba(0, 255, 85, 0.2);
+    --glow-focus: 0 0 6px var(--color-primary);
+    --glow-modal: 0 0 30px rgba(0, 255, 0, 0.15), 0 0 60px rgba(0, 255, 0, 0.05);
+    --glow-stat: 0 0 8px rgba(0, 255, 0, 0.08);
+    --glow-status-dot: 0 0 6px var(--color-status-ok), 0 0 12px var(--color-status-ok);
+    --glow-dup: 0 0 6px var(--color-dup-text);
+    --btn-primary-bg: transparent;
+    --btn-primary-bg-hover: rgba(0, 255, 85, 0.1);
+    --btn-primary-text: var(--color-primary);
+
+    --treemap-color-1: #00aa00;
+    --treemap-color-2: #008800;
+    --treemap-color-3: #00cc44;
+    --treemap-color-4: #22aa22;
+    --treemap-color-5: #00bb66;
+    --treemap-color-6: #44aa00;
+    --treemap-color-7: #009944;
+    --treemap-color-8: #66bb00;
+}

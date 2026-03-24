@@ -1,0 +1,88 @@
+:root {
+    /* Solaris Light — the same observatory at dawn. The shutters are open, */
+    /* warm sunlight floods the room. Deep indigo-violet text (the void */
+    /* remembered), solar gold accents, pale lavender-cream surfaces */
+    /* catching the light. */
+    --font-family: 'Avenir Next', 'Avenir', 'Century Gothic', 'Futura', -apple-system, sans-serif;
+
+    /* Surfaces — distinctly lavender, violet saturation prominent */
+    --color-bg: #dfd6f2;
+    --color-surface: #f2edfc;
+    --color-surface-raised: #eae2f8;
+    --color-surface-hover: #d6cced;
+    --color-surface-active: #d0c6e8;
+
+    /* Borders — violet with golden hover */
+    --color-border: #b0a4d0;
+    --color-border-subtle: #c8bede;
+    --color-border-hover: #b87820;
+    --color-border-card: #bab0d8;
+
+    /* Text — deep indigo with real weight */
+    --color-text: #1e1834;
+    --color-text-muted: #706890;
+    --color-text-secondary: #443c60;
+    --color-text-dim: #3a3258;
+    --color-text-bright: #120e24;
+    --color-text-placeholder: #9890b0;
+
+    /* Selection — solar light landing on the surface */
+    --color-selected: #f4e4c8;
+
+    /* Primary — rich solar gold */
+    --color-primary: #b07018;
+    --color-primary-hover: #986010;
+    --color-btn-active: #885408;
+
+    --color-offline-bg: #fceaea;
+    --color-offline-text: #c02020;
+
+    --color-stale-bg: #eee4f4;
+    --color-stale-text: #6a4c90;
+    --opacity-stale: 0.55;
+
+    --color-dup-bg: #fcf4dc;
+    --color-dup-text: #886000;
+
+    --color-tag-bg: #dceef4;
+    --color-tag-text: #1c6878;
+
+    --color-scan-bg: #e8f4e8;
+    --color-scan-border: #a8d4a8;
+    --color-scan-text: #286828;
+    --color-progress-track: #c8bede;
+    --color-progress-fill: #b07018;
+
+    --color-overlay: rgba(26, 20, 48, 0.4);
+
+    --color-statusbar-bg: #dfd6f2;
+    --color-status-ok: #286828;
+    --color-status-warn: #886000;
+    --color-status-error: #c02020;
+
+    /* Effects — restrained; corona glow on title only */
+    --text-glow: none;
+    --scanline-opacity: 0;
+    --title-letter-spacing: 0.12em;
+    --title-text-transform: uppercase;
+    --title-glow: 0 0 12px rgba(176, 112, 24, 0.3), 0 0 30px rgba(176, 112, 24, 0.1);
+    --glow-primary: none;
+    --glow-primary-hover: none;
+    --glow-focus: 0 0 6px rgba(176, 112, 24, 0.3);
+    --glow-modal: 0 0 30px rgba(26, 20, 48, 0.1);
+    --glow-stat: none;
+    --glow-status-dot: none;
+    --glow-dup: none;
+    --btn-primary-bg: var(--color-primary);
+    --btn-primary-bg-hover: var(--color-primary-hover);
+    --btn-primary-text: #ffffff;
+
+    --treemap-color-1: #b07018;
+    --treemap-color-2: #286828;
+    --treemap-color-3: #1c6878;
+    --treemap-color-4: #c02020;
+    --treemap-color-5: #886000;
+    --treemap-color-6: #5a3c90;
+    --treemap-color-7: #a05030;
+    --treemap-color-8: #2060a0;
+}

@@ -1,5 +1,5 @@
 import API from '../api.js';
-import { themeNames, applyTheme } from '../themes.js';
+import { loadThemeNames, applyTheme } from '../themes.js';
 import Update from './update.js';
 import RepairCatalog from './repaircatalog.js';
 
@@ -21,10 +21,11 @@ const Settings = {
         const content = document.getElementById('settings-content');
         content.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div>Loading…</div>';
 
-        const [settingsRes, usersRes, proRes] = await Promise.all([
+        const [settingsRes, usersRes, proRes, themeNames] = await Promise.all([
             API.get('/api/settings'),
             API.get('/api/auth/users'),
             API.get('/api/pro/status'),
+            loadThemeNames(),
         ]);
 
         const settings = settingsRes.ok ? settingsRes.data : {};
@@ -100,7 +101,7 @@ const Settings = {
         for (const name of sorted) {
             const opt = document.createElement('option');
             opt.value = name;
-            opt.textContent = name.replace(/\b\w/g, c => c.toUpperCase());
+            opt.textContent = name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             themeSelect.appendChild(opt);
         }
         if (themeNames.includes(savedTheme)) themeSelect.value = savedTheme;

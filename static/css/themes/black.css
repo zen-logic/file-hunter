@@ -1,0 +1,67 @@
+:root {
+    /* Black — pure OLED black, monochrome, brutally minimal */
+    --font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+
+    --color-bg: #000000;
+    --color-surface: #0a0a0a;
+    --color-surface-raised: #111111;
+    --color-surface-hover: #1a1a1a;
+    --color-surface-active: #151515;
+
+    --color-border: #222222;
+    --color-border-subtle: #141414;
+    --color-border-hover: #ffffff;
+    --color-border-card: #1c1c1c;
+
+    --color-text: #a0a0a0;
+    --color-text-muted: #555555;
+    --color-text-secondary: #707070;
+    --color-text-dim: #888888;
+    --color-text-bright: #ffffff;
+    --color-text-placeholder: #333333;
+
+    --color-selected: #1a1a1a;
+
+    --color-primary: #ffffff;
+    --color-primary-hover: #cccccc;
+    --color-btn-active: #aaaaaa;
+
+    --color-offline-bg: #140808;
+    --color-offline-text: #a04040;
+
+    --color-stale-bg: #100810;
+    --color-stale-text: #806080;
+    --opacity-stale: 0.5;
+
+    --color-dup-bg: #141408;
+    --color-dup-text: #a0a040;
+
+    --color-tag-bg: #080814;
+    --color-tag-text: #6868a0;
+
+    --color-scan-bg: #081008;
+    --color-scan-border: #183018;
+    --color-scan-text: #40a040;
+    --color-progress-track: #111111;
+    --color-progress-fill: #ffffff;
+
+    --color-overlay: rgba(0, 0, 0, 0.9);
+
+    --color-statusbar-bg: #050505;
+    --color-status-ok: #40a040;
+    --color-status-warn: #a0a040;
+    --color-status-error: #a04040;
+
+    --btn-primary-bg: transparent;
+    --btn-primary-bg-hover: rgba(255, 255, 255, 0.06);
+    --btn-primary-text: #ffffff;
+
+    --treemap-color-1: #707070;
+    --treemap-color-2: #4a4a4a;
+    --treemap-color-3: #888888;
+    --treemap-color-4: #3a3a3a;
+    --treemap-color-5: #606060;
+    --treemap-color-6: #555555;
+    --treemap-color-7: #7a7a7a;
+    --treemap-color-8: #484848;
+}

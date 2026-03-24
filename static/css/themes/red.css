@@ -1,0 +1,76 @@
+:root {
+    /* Red — dark crimson, menacing, sharp */
+    --font-family: 'Trebuchet MS', 'Lucida Sans', sans-serif;
+
+    --color-bg: #100404;
+    --color-surface: #180808;
+    --color-surface-raised: #1e0c0c;
+    --color-surface-hover: #2a1212;
+    --color-surface-active: #241010;
+
+    --color-border: #3a1818;
+    --color-border-subtle: #241010;
+    --color-border-hover: #dd2222;
+    --color-border-card: #301414;
+
+    --color-text: #d4a8a8;
+    --color-text-muted: #804848;
+    --color-text-secondary: #a06868;
+    --color-text-dim: #b88080;
+    --color-text-bright: #ffe0e0;
+    --color-text-placeholder: #5a2828;
+
+    --color-selected: #2a0e0e;
+
+    --color-primary: #dd2222;
+    --color-primary-hover: #ee3838;
+    --color-btn-active: #bb1a1a;
+
+    --color-offline-bg: #1e0606;
+    --color-offline-text: #ff5050;
+
+    --color-stale-bg: #1a0c14;
+    --color-stale-text: #a06080;
+    --opacity-stale: 0.55;
+
+    --color-dup-bg: #1a1808;
+    --color-dup-text: #d4a030;
+
+    --color-tag-bg: #140810;
+    --color-tag-text: #c060a0;
+
+    --color-scan-bg: #0a1408;
+    --color-scan-border: #1a3018;
+    --color-scan-text: #80c060;
+    --color-progress-track: #1e0c0c;
+    --color-progress-fill: #dd2222;
+
+    --color-overlay: rgba(10, 2, 2, 0.85);
+
+    --color-statusbar-bg: #0c0404;
+    --color-status-ok: #80c060;
+    --color-status-warn: #d4a030;
+    --color-status-error: #ff5050;
+
+    --text-glow: 0 0 3px rgba(220, 34, 34, 0.2);
+    --title-letter-spacing: 0.06em;
+    --title-text-transform: uppercase;
+    --title-glow: 0 0 8px rgba(220, 34, 34, 0.5), 0 0 20px rgba(220, 34, 34, 0.15);
+    --glow-primary: 0 0 6px rgba(220, 34, 34, 0.3), inset 0 0 6px rgba(220, 34, 34, 0.1);
+    --glow-primary-hover: 0 0 12px rgba(238, 56, 56, 0.4), inset 0 0 10px rgba(238, 56, 56, 0.15);
+    --glow-focus: 0 0 6px rgba(220, 34, 34, 0.3);
+    --glow-modal: 0 0 30px rgba(220, 34, 34, 0.12);
+    --glow-status-dot: 0 0 4px var(--color-status-ok);
+    --btn-primary-bg: transparent;
+    --btn-primary-bg-hover: rgba(220, 34, 34, 0.1);
+    --btn-primary-text: #dd2222;
+
+    --treemap-color-1: #cc3333;
+    --treemap-color-2: #aa2020;
+    --treemap-color-3: #dd5544;
+    --treemap-color-4: #993333;
+    --treemap-color-5: #cc5522;
+    --treemap-color-6: #bb4444;
+    --treemap-color-7: #aa3322;
+    --treemap-color-8: #dd6655;
+}

@@ -1,0 +1,94 @@
+:root {
+    /* Solaris — solar observatory: the cold void of deep space illuminated */
+    /* by the fierce golden light of a star. Inspired by false-colour solar */
+    /* imagery and the visual drama of a total eclipse — darkness meets */
+    /* brilliance. Pale starlight text, warm solar-gold accents, and a */
+    /* three-layer corona glow on the title. */
+    --font-family: 'Avenir Next', 'Avenir', 'Century Gothic', 'Futura', -apple-system, sans-serif;
+
+    /* Surfaces — deep space indigo, barely distinguishable layers */
+    --color-bg: #0c0a16;
+    --color-surface: #12101e;
+    --color-surface-raised: #181428;
+    --color-surface-hover: #221e36;
+    --color-surface-active: #1e1a30;
+
+    /* Borders — muted violet, golden hover reveals the star's light */
+    --color-border: #302848;
+    --color-border-subtle: #1e1a30;
+    --color-border-hover: #d4943c;
+    --color-border-card: #282240;
+
+    /* Text — starlight: pale lavender tones that contrast against warm gold */
+    --color-text: #c4bcd4;
+    --color-text-muted: #685e80;
+    --color-text-secondary: #8e84a8;
+    --color-text-dim: #a69cc0;
+    --color-text-bright: #f0e8ff;
+    --color-text-placeholder: #443c58;
+
+    --color-selected: #2a2048;
+
+    /* Primary — solar gold, the hero accent */
+    --color-primary: #d4943c;
+    --color-primary-hover: #e8a850;
+    --color-btn-active: #c08430;
+
+    /* Offline — red dwarf */
+    --color-offline-bg: #1a0a0c;
+    --color-offline-text: #e05050;
+
+    /* Stale — faded nebula */
+    --color-stale-bg: #1a1428;
+    --color-stale-text: #8878b0;
+    --opacity-stale: 0.55;
+
+    /* Duplicates — supernova amber */
+    --color-dup-bg: #1a1808;
+    --color-dup-text: #e0b840;
+
+    /* Tags — cosmic teal (cool contrast to the warm palette) */
+    --color-tag-bg: #0c1820;
+    --color-tag-text: #50b8c8;
+
+    /* Scan — nebula green */
+    --color-scan-bg: #0c180c;
+    --color-scan-border: #1a3820;
+    --color-scan-text: #68c860;
+    --color-progress-track: #181428;
+    --color-progress-fill: #d4943c;
+
+    --color-overlay: rgba(6, 4, 12, 0.85);
+
+    /* Status bar — deepest void */
+    --color-statusbar-bg: #08060f;
+    --color-status-ok: #68c860;
+    --color-status-warn: #e0b840;
+    --color-status-error: #e05050;
+
+    /* Effects — solar corona: warm golden glow, no CRT artifacts */
+    --text-glow: none;
+    --scanline-opacity: 0;
+    --title-letter-spacing: 0.12em;
+    --title-text-transform: uppercase;
+    --title-glow: 0 0 10px rgba(212, 148, 60, 0.6), 0 0 30px rgba(212, 148, 60, 0.2), 0 0 60px rgba(212, 148, 60, 0.05);
+    --glow-primary: 0 0 8px rgba(212, 148, 60, 0.35), inset 0 0 8px rgba(212, 148, 60, 0.08);
+    --glow-primary-hover: 0 0 14px rgba(232, 168, 80, 0.45), inset 0 0 12px rgba(232, 168, 80, 0.12);
+    --glow-focus: 0 0 8px rgba(212, 148, 60, 0.4);
+    --glow-modal: 0 0 40px rgba(212, 148, 60, 0.12), 0 0 80px rgba(212, 148, 60, 0.04);
+    --glow-stat: 0 0 10px rgba(212, 148, 60, 0.06);
+    --glow-status-dot: 0 0 6px var(--color-status-ok), 0 0 12px var(--color-status-ok);
+    --glow-dup: 0 0 6px rgba(224, 184, 64, 0.4);
+    --btn-primary-bg: transparent;
+    --btn-primary-bg-hover: rgba(212, 148, 60, 0.1);
+    --btn-primary-text: #d4943c;
+
+    --treemap-color-1: #d4943c;
+    --treemap-color-2: #68c860;
+    --treemap-color-3: #50b8c8;
+    --treemap-color-4: #e05050;
+    --treemap-color-5: #e0b840;
+    --treemap-color-6: #8070c0;
+    --treemap-color-7: #c07048;
+    --treemap-color-8: #50a0d0;
+}

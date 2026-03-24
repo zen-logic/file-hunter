@@ -6,15 +6,12 @@
     <title>File Hunter</title>
     <link rel="stylesheet" href="/css/brand.css">
     <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" id="theme-link">
     <script>
-    // Apply saved theme before first paint to prevent flash
-    try {
-        var v = localStorage.getItem('fh-theme-vars');
-        if (v) {
-            var vars = JSON.parse(v);
-            for (var p in vars) document.documentElement.style.setProperty(p, vars[p]);
-        }
-    } catch(e) {}
+    // Apply saved theme before first paint
+    var t = localStorage.getItem('fh-theme');
+    if (t) { t = t.replace(/ /g, '-'); localStorage.setItem('fh-theme', t); }
+    if (t && t !== 'default') document.getElementById('theme-link').href = '/css/themes/' + t + '.css';
     </script>
 </head>
 <body>

@@ -1,0 +1,91 @@
+:root {
+    /* Commodore 64 (1982) — based on the MOS 6567/6569 VIC-II 16-colour palette */
+    /* Boot screen: light blue (colour 14) text on blue (colour 6) background */
+    --font-family: 'Courier New', 'Lucida Console', monospace;
+
+    /* Surfaces — built around C64 blue (colour 6: #352879) */
+    --color-bg: #352879;
+    --color-surface: #3d308a;
+    --color-surface-raised: #453898;
+    --color-surface-hover: #5043a6;
+    --color-surface-active: #4a3d9e;
+
+    /* Borders — light blue (colour 14: #6c5eb5) */
+    --color-border: #6c5eb5;
+    --color-border-subtle: #453898;
+    --color-border-hover: #9a8ee0;
+    --color-border-card: #584aaa;
+
+    /* Text — light blue tones */
+    --color-text: #a09aee;
+    --color-text-muted: #6c5eb5;
+    --color-text-secondary: #867acc;
+    --color-text-dim: #9690dd;
+    --color-text-bright: #ffffff;
+    --color-text-placeholder: #584aaa;
+
+    --color-selected: #5043b0;
+
+    /* Primary — C64 cyan (colour 3: #70a4b2) */
+    --color-primary: #70a4b2;
+    --color-primary-hover: #8cc0cc;
+    --color-btn-active: #5e909e;
+
+    /* Offline — C64 red (colour 2: #68372b) / light red (colour 10: #9a6759) */
+    --color-offline-bg: #4a2828;
+    --color-offline-text: #9a6759;
+
+    /* Stale — C64 purple (colour 4: #6f3d86) */
+    --color-stale-bg: #3a2848;
+    --color-stale-text: #8e6aaa;
+    --opacity-stale: 0.55;
+
+    /* Duplicates — C64 yellow (colour 7: #b8c76f) */
+    --color-dup-bg: #3a3828;
+    --color-dup-text: #b8c76f;
+
+    /* Tags — C64 cyan */
+    --color-tag-bg: #2a3848;
+    --color-tag-text: #70a4b2;
+
+    /* Scan — C64 green (colour 5: #588d43) / light green (colour 13: #9ad284) */
+    --color-scan-bg: #2e3828;
+    --color-scan-border: #406838;
+    --color-scan-text: #9ad284;
+    --color-progress-track: #3d308a;
+    --color-progress-fill: #70a4b2;
+
+    --color-overlay: rgba(53, 40, 121, 0.85);
+
+    /* Status bar — deeper blue */
+    --color-statusbar-bg: #2a2068;
+    --color-status-ok: #9ad284;
+    --color-status-warn: #b8c76f;
+    --color-status-error: #9a6759;
+
+    /* Effects — subtle CRT phosphor glow, authentic scanlines */
+    --text-glow: 0 0 3px rgba(160, 154, 238, 0.4);
+    --scanline-opacity: 0.5;
+    --title-letter-spacing: 0.15em;
+    --title-text-transform: uppercase;
+    --title-glow: 0 0 6px rgba(160, 154, 238, 0.5);
+    --glow-primary: none;
+    --glow-primary-hover: none;
+    --glow-focus: 0 0 4px rgba(112, 164, 178, 0.5);
+    --glow-modal: 0 0 20px rgba(108, 94, 181, 0.25);
+    --glow-stat: none;
+    --glow-status-dot: 0 0 4px var(--color-status-ok);
+    --glow-dup: none;
+    --btn-primary-bg: var(--color-primary);
+    --btn-primary-bg-hover: var(--color-primary-hover);
+    --btn-primary-text: #352879;
+
+    --treemap-color-1: #6c5eb5;
+    --treemap-color-2: #70a4b2;
+    --treemap-color-3: #9ad284;
+    --treemap-color-4: #b8c76f;
+    --treemap-color-5: #9a6759;
+    --treemap-color-6: #7c70da;
+    --treemap-color-7: #588d43;
+    --treemap-color-8: #a09aee;
+}
