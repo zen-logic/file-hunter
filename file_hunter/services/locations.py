@@ -708,6 +708,114 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
     }
 
 
+async def _cross_location_dir_move(
+    db,
+    fld,
+    src_abs,
+    dest_abs,
+    src_loc_id,
+    dest_loc_id,
+    old_prefix,
+    new_prefix,
+    dest_root,
+    desc_folder_rows,
+):
+    """Copy a folder tree between agents, then delete the source.
+
+    Creates the destination folder structure via fs.dir_create, copies every
+    file via fs.copy_file (streaming, 1MB chunks, constant memory), then
+    deletes the source tree via fs.dir_delete after ALL copies succeed.
+    On failure the partial destination is cleaned up and the source is untouched.
+    """
+    import logging
+
+    from file_hunter.services import fs
+    from file_hunter.services.activity import (
+        register as _act_reg,
+        unregister as _act_unreg,
+        update as _act_upd,
+    )
+    from file_hunter.ws.scan import broadcast
+
+    log = logging.getLogger(__name__)
+
+    # Count total files for progress
+    all_folder_ids = [fld["id"]] + [df["id"] for df in desc_folder_rows]
+    ph = ",".join("?" for _ in all_folder_ids)
+    count_row = await db.execute_fetchall(
+        f"SELECT COUNT(*) AS cnt FROM files WHERE folder_id IN ({ph})",
+        all_folder_ids,
+    )
+    total_files = count_row[0]["cnt"] if count_row else 0
+
+    act_name = f"cross-move-{fld['id']}"
+    _act_reg(act_name, f"Moving {fld['name']}", f"0/{total_files} files")
+
+    try:
+        # 1. Create destination root folder
+        await fs.dir_create(dest_abs, dest_loc_id)
+
+        # 2. Create subfolder structure (sorted by depth so parents exist first)
+        sorted_descs = sorted(desc_folder_rows, key=lambda r: r["rel_path"].count("/"))
+        for df in sorted_descs:
+            dest_sub_rel = new_prefix + df["rel_path"][len(old_prefix) :]
+            dest_sub_abs = os.path.join(dest_root, dest_sub_rel)
+            await fs.dir_create(dest_sub_abs, dest_loc_id)
+
+        # 3. Copy every file (skip files missing from disk — catalog-only)
+        copied = 0
+        skipped = 0
+        for fid in all_folder_ids:
+            file_rows = await db.execute_fetchall(
+                "SELECT id, full_path, rel_path FROM files WHERE folder_id = ?",
+                (fid,),
+            )
+            for fr in file_rows:
+                dest_file_rel = new_prefix + fr["rel_path"][len(old_prefix) :]
+                dest_file_abs = os.path.join(dest_root, dest_file_rel)
+                try:
+                    await fs.copy_file(
+                        fr["full_path"], src_loc_id, dest_file_abs, dest_loc_id
+                    )
+                    copied += 1
+                except RuntimeError as e:
+                    if "404" in str(e):
+                        log.warning("Skipping missing file: %s", fr["full_path"])
+                        skipped += 1
+                    else:
+                        raise
+                _act_upd(act_name, progress=f"{copied}/{total_files} files")
+                await broadcast(
+                    {
+                        "type": "batch_move_progress",
+                        "done": copied + skipped,
+                        "total": total_files,
+                        "name": fld["name"],
+                    }
+                )
+
+        # 4. All copies succeeded — delete source tree
+        await fs.dir_delete(src_abs, src_loc_id)
+        log.info(
+            "Cross-location dir move complete: %s -> %s (%d files, %d skipped)",
+            src_abs,
+            dest_abs,
+            copied,
+            skipped,
+        )
+
+    except Exception:
+        # Clean up partial destination, leave source untouched
+        try:
+            await fs.dir_delete(dest_abs, dest_loc_id)
+        except Exception:
+            pass  # best-effort cleanup
+        raise
+    finally:
+        _act_unreg(act_name)
+        await broadcast({"type": "status_bar_idle"})
+
+
 async def move_folder(
     db, folder_id: int, destination_parent_id: str = None, *, new_name: str = None
 ):
@@ -824,14 +932,12 @@ async def move_folder(
     if existing:
         raise ValueError("A folder with that name already exists in the catalog.")
 
-    # Move on disk via the source location's agent
-    await fs.dir_move(src_abs, dest_abs, src_loc_id)
-
     # Compute old/new rel_path prefix for batch updates
     old_prefix = fld["rel_path"]
     new_prefix = new_rel
 
-    # Get all descendant folder IDs (excluding the moved folder itself)
+    # Get all descendant folder IDs BEFORE disk operation (needed by both
+    # cross-location copy and DB updates below)
     desc_folder_rows = await db.execute_fetchall(
         """WITH RECURSIVE desc(id) AS (
                SELECT f.id FROM folders f WHERE f.parent_id = ?
@@ -842,11 +948,35 @@ async def move_folder(
         (folder_id,),
     )
 
+    # Move on disk
+    if cross_location:
+        await _cross_location_dir_move(
+            db,
+            fld,
+            src_abs,
+            dest_abs,
+            src_loc_id,
+            dest_loc_id,
+            old_prefix,
+            new_prefix,
+            dest_root,
+            desc_folder_rows,
+        )
+    else:
+        await fs.dir_move(src_abs, dest_abs, src_loc_id)
+
     # Update moved folder
     new_hidden = 1 if effective_name.startswith(".") else 0
     await db.execute(
         "UPDATE folders SET parent_id = ?, name = ?, rel_path = ?, location_id = ?, hidden = ? WHERE id = ?",
-        (dest_parent_fld_id, effective_name, new_rel, dest_loc_id, new_hidden, folder_id),
+        (
+            dest_parent_fld_id,
+            effective_name,
+            new_rel,
+            dest_loc_id,
+            new_hidden,
+            folder_id,
+        ),
     )
 
     # Update descendant folders: replace rel_path prefix

@@ -1569,6 +1569,13 @@ WS.on('deferred_ops_drained', async (msg) => {
     await refreshDetailPanel();
 });
 
+WS.on('batch_delete_progress', (msg) => {
+    const label = msg.name
+        ? `Deleting: ${msg.name} (${msg.done}/${msg.total})`
+        : `Deleting files: ${msg.done}/${msg.total}`;
+    StatusBar.renderActivity('scanning', label);
+});
+
 WS.on('batch_deleted', async (msg) => {
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
@@ -1580,6 +1587,10 @@ WS.on('batch_move_progress', (msg) => {
         ? `Moving: ${msg.name} (${msg.done}/${msg.total})`
         : `Moving files: ${msg.done}/${msg.total}`;
     StatusBar.renderActivity('scanning', label);
+});
+
+WS.on('status_bar_idle', () => {
+    StatusBar.renderActivity('idle');
 });
 
 WS.on('batch_moved', async (msg) => {

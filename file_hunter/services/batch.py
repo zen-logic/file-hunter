@@ -14,7 +14,11 @@ async def batch_delete(
     from file_hunter.services import fs
     from file_hunter.hashes_db import get_file_hashes, remove_file_hashes
     from file_hunter.services.deferred_ops import queue_deferred_op
-    from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg, update as _act_upd
+    from file_hunter.services.activity import (
+        register as _act_reg,
+        unregister as _act_unreg,
+        update as _act_upd,
+    )
     from file_hunter.ws.scan import broadcast
 
     total = len(file_ids) + len(folder_ids)
@@ -49,9 +53,12 @@ async def batch_delete(
             from file_hunter.hashes_db import read_hashes
 
             h_map = await get_file_hashes(file_ids)
-            strong_set = {h["hash_strong"] for h in h_map.values() if h.get("hash_strong")}
+            strong_set = {
+                h["hash_strong"] for h in h_map.values() if h.get("hash_strong")
+            }
             fast_set = {
-                h["hash_fast"] for h in h_map.values()
+                h["hash_fast"]
+                for h in h_map.values()
                 if not h.get("hash_strong") and h.get("hash_fast")
             }
 
@@ -77,7 +84,7 @@ async def batch_delete(
         # Load all file records in one query
         ph = ",".join("?" for _ in file_ids)
         all_rows = await db.execute_fetchall(
-            f"""SELECT f.id, f.full_path, f.location_id, f.folder_id,
+            f"""SELECT f.id, f.filename, f.full_path, f.location_id, f.folder_id,
                       f.file_size, f.file_type_high, f.hidden, l.root_path
                FROM files f
                JOIN locations l ON l.id = f.location_id
@@ -125,7 +132,12 @@ async def batch_delete(
                 if loc_id not in removed_by_loc:
                     removed_by_loc[loc_id] = []
                 removed_by_loc[loc_id].append(
-                    (rec["folder_id"], rec["file_size"] or 0, rec["file_type_high"], rec["hidden"])
+                    (
+                        rec["folder_id"],
+                        rec["file_size"] or 0,
+                        rec["file_type_high"],
+                        rec["hidden"],
+                    )
                 )
             else:
                 await queue_deferred_op(db, fid, loc_id, "delete")
@@ -138,6 +150,14 @@ async def batch_delete(
 
             done += 1
             _act_upd(act_name, progress=f"{done}/{total}")
+            await broadcast(
+                {
+                    "type": "batch_delete_progress",
+                    "done": done,
+                    "total": total,
+                    "name": rec["filename"],
+                }
+            )
 
         # Bulk delete from catalog
         if deleted_ids:
@@ -175,6 +195,7 @@ async def batch_delete(
         }
     finally:
         _act_unreg(act_name)
+        await broadcast({"type": "status_bar_idle"})
 
 
 async def batch_move(
@@ -182,7 +203,11 @@ async def batch_move(
 ) -> dict:
     """Move multiple files and folders to a destination."""
     from file_hunter.services.locations import move_folder
-    from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg, update as _act_upd
+    from file_hunter.services.activity import (
+        register as _act_reg,
+        unregister as _act_unreg,
+        update as _act_upd,
+    )
     from file_hunter.ws.scan import broadcast
 
     total = len(file_ids) + len(folder_ids)
@@ -231,7 +256,14 @@ async def batch_move(
         # Move folders
         for fid in folder_ids:
             name = name_map.get(fid, f"Folder {fid}")
-            await broadcast({"type": "batch_move_progress", "done": done, "total": total, "name": name})
+            await broadcast(
+                {
+                    "type": "batch_move_progress",
+                    "done": done,
+                    "total": total,
+                    "name": name,
+                }
+            )
             try:
                 await move_folder(db, fid, destination_folder_id)
                 moved_folders += 1
@@ -243,10 +275,19 @@ async def batch_move(
         # Move files
         for fid in file_ids:
             name = name_map.get(fid, f"File {fid}")
-            await broadcast({"type": "batch_move_progress", "done": done, "total": total, "name": name})
+            await broadcast(
+                {
+                    "type": "batch_move_progress",
+                    "done": done,
+                    "total": total,
+                    "name": name,
+                }
+            )
             try:
                 result = await move_file(
-                    db, fid, destination_folder_id=destination_folder_id,
+                    db,
+                    fid,
+                    destination_folder_id=destination_folder_id,
                     skip_post_processing=True,
                 )
                 moved_files += 1

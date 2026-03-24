@@ -38,6 +38,16 @@ async def list_files(
     hidden_filter = "" if show_hidden else " AND f.hidden = 0"
     folder_hidden_filter = "" if show_hidden else " AND fld.hidden = 0"
 
+    # Build folder name filter (applied to subfolders below)
+    folder_name_filter = ""
+    folder_name_params = []
+    if filter_text:
+        escaped_fld = (
+            filter_text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        folder_name_filter = " AND fld.name LIKE ? ESCAPE '\\'"
+        folder_name_params = [f"%{escaped_fld}%"]
+
     # Build WHERE clause for files
     if folder_id.startswith("loc-"):
         loc_id = int(folder_id[4:])
@@ -47,8 +57,8 @@ async def list_files(
         folders = await db.execute_fetchall(
             f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, l.root_path
                FROM folders fld JOIN locations l ON l.id = fld.location_id
-               WHERE fld.location_id = ? AND fld.parent_id IS NULL{folder_hidden_filter} ORDER BY fld.name""",
-            (loc_id,),
+               WHERE fld.location_id = ? AND fld.parent_id IS NULL{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name""",
+            [loc_id] + folder_name_params,
         )
     elif folder_id.startswith("fld-"):
         fld_id = int(folder_id[4:])
@@ -58,8 +68,8 @@ async def list_files(
         folders = await db.execute_fetchall(
             f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, l.root_path, fld.location_id
                FROM folders fld JOIN locations l ON l.id = fld.location_id
-               WHERE fld.parent_id = ?{folder_hidden_filter} ORDER BY fld.name""",
-            (fld_id,),
+               WHERE fld.parent_id = ?{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name""",
+            [fld_id] + folder_name_params,
         )
     else:
         return {
@@ -391,7 +401,11 @@ async def update_file(db, file_id: int, description: str = None, tags: list = No
 
 
 async def move_file(
-    db, file_id: int, *, new_name: str = None, destination_folder_id: str = None,
+    db,
+    file_id: int,
+    *,
+    new_name: str = None,
+    destination_folder_id: str = None,
     skip_post_processing: bool = False,
 ):
     """Move and/or rename a file on disk and in the catalog."""
