@@ -99,6 +99,8 @@ from file_hunter.routes.update import (
     install_update,
     upload_update,
     restart_server,
+    check_release,
+    apply_release,
 )
 from file_hunter.routes.import_catalog import (
     import_catalog_upload,
@@ -282,6 +284,8 @@ app = Starlette(
         Route("/api/update/check", check_update, methods=["POST"]),
         Route("/api/update/install", install_update, methods=["POST"]),
         Route("/api/update/upload", upload_update, methods=["POST"]),
+        Route("/api/update/check-release", check_release, methods=["GET"]),
+        Route("/api/update/apply-release", apply_release, methods=["POST"]),
         Route("/api/restart", restart_server, methods=["POST"]),
         Route("/api/locations", list_locations, methods=["GET"]),
         Route("/api/locations", add_location, methods=["POST"]),

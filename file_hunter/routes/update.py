@@ -80,3 +80,22 @@ async def upload_update(request: Request):
 async def restart_server(request: Request):
     schedule_restart()
     return json_ok({"message": "Server restarting…"})
+
+
+async def check_release(request: Request):
+    """GET /api/update/check-release — check GitHub for latest version."""
+    try:
+        result = await update_svc.check_github_release()
+    except Exception as e:
+        return json_error(f"Could not check for updates: {e}")
+    return json_ok(result)
+
+
+async def apply_release(request: Request):
+    """POST /api/update/apply-release — download and install latest from GitHub, then restart."""
+    try:
+        result = await update_svc.apply_github_update()
+    except Exception as e:
+        return json_error(f"Update failed: {e}")
+    schedule_restart()
+    return json_ok({"message": f"Updated to v{result['version']}. Restarting…"})
