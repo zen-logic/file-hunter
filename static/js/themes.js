@@ -1284,9 +1284,11 @@ export function applyTheme(name) {
     }
 
     localStorage.setItem('fh-theme', name);
+    localStorage.setItem('fh-theme-vars', JSON.stringify(vars));
 }
 
-// Auto-apply saved theme on load
+// Backfill fh-theme-vars for existing users and apply theme if the
+// inline head script couldn't (first load after update, or default theme).
 const saved = localStorage.getItem('fh-theme');
 if (saved && themes[saved]) {
     applyTheme(saved);
