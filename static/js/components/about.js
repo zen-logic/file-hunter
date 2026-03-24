@@ -93,7 +93,7 @@ const About = {
                 return;
             }
             try {
-                const res = await fetch('/api/version', { signal: AbortSignal.timeout(2000) });
+                const res = await fetch('/api/version', { credentials: 'same-origin', signal: AbortSignal.timeout(2000) });
                 if (res.ok) {
                     clearInterval(poll);
                     window.location.reload();
