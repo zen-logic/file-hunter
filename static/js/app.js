@@ -735,22 +735,40 @@ MoveFileModal.init(async (item, destinationFolderId) => {
 function wireSlideshowBtn() {
     const slot = document.getElementById('detail-slideshow-slot');
     if (!slot) return;
-    // Check current page for any images to decide whether to show button
-    const hasImages = (FileList.currentItems || []).some(f => (f.typeHigh || '').toLowerCase() === 'image');
-    if (!hasImages) return;
+    const items = FileList.currentItems || [];
+    const hasImages = items.some(f => (f.typeHigh || '').toLowerCase() === 'image');
+    const hasVideo = items.some(f => (f.typeHigh || '').toLowerCase() === 'video');
+    if (!hasImages && !hasVideo) return;
     const folderId = FileList.currentFolder;
     if (!folderId) return;
-    slot.innerHTML = `<button class="btn" id="detail-slideshow">Slideshow</button>`;
-    document.getElementById('detail-slideshow').addEventListener('click', async () => {
-        const btn = document.getElementById('detail-slideshow');
-        btn.disabled = true;
-        btn.textContent = 'Loading\u2026';
-        await Detail.startSlideshow({ type: 'folder', folderId });
-        if (Detail._slideshowTotal === 0) {
-            btn.textContent = 'No images available';
-            setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
-        }
-    });
+    let html = '';
+    if (hasImages) html += `<button class="btn" id="detail-slideshow">Slideshow</button>`;
+    if (hasVideo) html += `<button class="btn" id="detail-playlist">Playlist</button>`;
+    slot.innerHTML = html;
+    if (hasImages) {
+        document.getElementById('detail-slideshow').addEventListener('click', async () => {
+            const btn = document.getElementById('detail-slideshow');
+            btn.disabled = true;
+            btn.textContent = 'Loading\u2026';
+            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'slideshow' });
+            if (Detail._slideshowTotal === 0) {
+                btn.textContent = 'No images available';
+                setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
+            }
+        });
+    }
+    if (hasVideo) {
+        document.getElementById('detail-playlist').addEventListener('click', async () => {
+            const btn = document.getElementById('detail-playlist');
+            btn.disabled = true;
+            btn.textContent = 'Loading\u2026';
+            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'playlist' });
+            if (Detail._slideshowTotal === 0) {
+                btn.textContent = 'No videos available';
+                setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);
+            }
+        });
+    }
 }
 
 Tree.init(async (node) => {

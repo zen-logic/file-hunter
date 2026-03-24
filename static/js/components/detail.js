@@ -281,7 +281,15 @@ const Detail = {
             } else if (this._slideshowTotal > 0) {
                 if (e.key === 'ArrowLeft') { this._stopAutoplay(); this._slideshowNav(-1); }
                 else if (e.key === 'ArrowRight') { this._stopAutoplay(); this._slideshowNav(1); }
-                else if (e.key === ' ') { e.preventDefault(); this._toggleAutoplay(); }
+                else if (e.key === ' ') {
+                    e.preventDefault();
+                    if (this._slideshowMode === 'playlist') {
+                        const v = this._previewModal.content.querySelector('video');
+                        if (v) { v.paused ? v.play() : v.pause(); }
+                    } else {
+                        this._toggleAutoplay();
+                    }
+                }
                 else if (e.key === 'd') { this._slideshowToggleMark('delete'); }
                 else if (e.key === 'c') { this._slideshowToggleMark('consolidate'); }
                 else if (e.key === 't') { this._slideshowToggleMark('tag'); }
@@ -404,9 +412,11 @@ const Detail = {
         this._slideshowDeleteSet = new Set();
         this._slideshowConsolidateSet = new Set();
         this._slideshowTagSet = new Set();
-        // Reset slideshow button in detail panel
+        // Reset slideshow/playlist buttons in detail panel
         const ssBtn = document.getElementById('detail-slideshow');
         if (ssBtn) { ssBtn.textContent = 'Slideshow'; ssBtn.disabled = false; }
+        const plBtn = document.getElementById('detail-playlist');
+        if (plBtn) { plBtn.textContent = 'Playlist'; plBtn.disabled = false; }
         // Stop any playing media
         m.content.querySelectorAll('video, audio').forEach(el => { el.pause(); el.src = ''; });
         m.content.innerHTML = '';
@@ -420,6 +430,7 @@ const Detail = {
     async startSlideshow(params) {
         // Reset all slideshow state for a clean start
         this._slideshowParams = params;
+        this._slideshowMode = params.mode || 'slideshow';
         this._slideshowCache = {};
         this._slideshowOffset = 0;
         this._slideshowWindow = [];
@@ -432,13 +443,14 @@ const Detail = {
 
         // Fetch all IDs in one call — no per-window queries during navigation
         const p = params;
+        const mediaType = this._slideshowMode === 'playlist' ? 'video' : 'image';
         let url;
         if (p.type === 'folder') {
-            url = `/api/slideshow-ids?folder_id=${encodeURIComponent(p.folderId)}`;
+            url = `/api/slideshow-ids?folder_id=${encodeURIComponent(p.folderId)}&mediaType=${mediaType}`;
         } else if (p.searchId) {
-            url = `/api/slideshow-ids?searchId=${encodeURIComponent(p.searchId)}`;
+            url = `/api/slideshow-ids?searchId=${encodeURIComponent(p.searchId)}&mediaType=${mediaType}`;
         } else {
-            url = `/api/slideshow-ids?${new URLSearchParams(p.searchParams).toString()}`;
+            url = `/api/slideshow-ids?${new URLSearchParams(p.searchParams).toString()}&mediaType=${mediaType}`;
         }
         const res = await API.get(url);
         if (!res.ok) return;
@@ -448,8 +460,10 @@ const Detail = {
 
         if (this._slideshowTotal === 0) return;
         await this._slideshowShow(0);
-        this._slideshowBuffer(0);
-        this._startAutoplay();
+        if (this._slideshowMode === 'slideshow') {
+            this._slideshowBuffer(0);
+            this._startAutoplay();
+        }
     },
 
     async _slideshowNav(delta) {
@@ -486,64 +500,79 @@ const Detail = {
         m._fileId = fileId;
         m._fileName = detail.name;
 
-        // Build new image starting invisible
-        const bufferedImg = this._slideshowCache[`_img_${fileId}`];
-        let newImg;
-        if (bufferedImg && bufferedImg.complete) {
-            newImg = bufferedImg;
-        } else {
-            newImg = new Image();
-            newImg.src = url;
-            newImg.alt = detail.name;
-        }
-        newImg.className = 'slideshow-clickable slideshow-stacked slideshow-fade-out';
-        newImg.style.visibility = '';
-        newImg.addEventListener('click', () => {
-            this._closePreviewModal();
-            if (this.onNavigateToFile) this.onNavigateToFile(fileId);
-        });
-
-        // The current visible image crossfades out while new fades in
-        const oldImg = m.content.querySelector('img:not(.slideshow-fade-out)') || m.content.querySelector('img');
-        if (oldImg) {
-            oldImg.classList.add('slideshow-stacked');
-            oldImg.style.visibility = '';
-            oldImg.classList.remove('slideshow-fade-out');
-        }
-
-        // Remove any images beyond prev/current/next window (cap at 3)
-        const imgs = m.content.querySelectorAll('img');
-        if (imgs.length > 2) {
-            for (let i = 0; i < imgs.length - 2; i++) {
-                if (imgs[i] !== oldImg) imgs[i].remove();
-            }
-        }
-
-        m.content.appendChild(newImg);
-
-        // Simultaneous crossfade: old out, new in
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                if (oldImg) oldImg.classList.add('slideshow-fade-out');
-                newImg.classList.remove('slideshow-fade-out');
+        if (this._slideshowMode === 'playlist') {
+            // Playlist: hard swap — kill old video (remove from DOM before clearing src to avoid error events)
+            m.content.innerHTML = '';
+            const myGen = this._slideshowNavGen;
+            const video = document.createElement('video');
+            video.src = url;
+            video.controls = true;
+            video.autoplay = true;
+            video.style.maxWidth = '100%';
+            video.style.maxHeight = '100%';
+            video.addEventListener('ended', () => {
+                if (this._slideshowNavGen === myGen) this._slideshowNav(1);
             });
-        });
+            video.addEventListener('error', () => {
+                if (this._slideshowNavGen === myGen) this._slideshowNav(1);
+            });
+            m.content.appendChild(video);
+        } else {
+            // Slideshow: crossfade images
+            const bufferedImg = this._slideshowCache[`_img_${fileId}`];
+            let newImg;
+            if (bufferedImg && bufferedImg.complete) {
+                newImg = bufferedImg;
+            } else {
+                newImg = new Image();
+                newImg.src = url;
+                newImg.alt = detail.name;
+            }
+            newImg.className = 'slideshow-clickable slideshow-stacked slideshow-fade-out';
+            newImg.style.visibility = '';
+            newImg.addEventListener('click', () => {
+                this._closePreviewModal();
+                if (this.onNavigateToFile) this.onNavigateToFile(fileId);
+            });
 
-        // When new image finishes fading in, hide all others —
-        // but only if this image is still the current navigation
-        const myGen = this._slideshowNavGen;
-        newImg.addEventListener('transitionend', () => {
-            if (this._slideshowNavGen !== myGen) return;
-            for (const child of [...m.content.querySelectorAll('img')]) {
-                if (child !== newImg) {
-                    child.classList.add('slideshow-fade-out');
-                    child.style.visibility = 'hidden';
+            const oldImg = m.content.querySelector('img:not(.slideshow-fade-out)') || m.content.querySelector('img');
+            if (oldImg) {
+                oldImg.classList.add('slideshow-stacked');
+                oldImg.style.visibility = '';
+                oldImg.classList.remove('slideshow-fade-out');
+            }
+
+            const imgs = m.content.querySelectorAll('img');
+            if (imgs.length > 2) {
+                for (let i = 0; i < imgs.length - 2; i++) {
+                    if (imgs[i] !== oldImg) imgs[i].remove();
                 }
             }
-        }, { once: true });
+
+            m.content.appendChild(newImg);
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    if (oldImg) oldImg.classList.add('slideshow-fade-out');
+                    newImg.classList.remove('slideshow-fade-out');
+                });
+            });
+
+            const myGen = this._slideshowNavGen;
+            newImg.addEventListener('transitionend', () => {
+                if (this._slideshowNavGen !== myGen) return;
+                for (const child of [...m.content.querySelectorAll('img')]) {
+                    if (child !== newImg) {
+                        child.classList.add('slideshow-fade-out');
+                        child.style.visibility = 'hidden';
+                    }
+                }
+            }, { once: true });
+
+            this._slideshowBuffer(globalOffset);
+        }
 
         m.counter.textContent = `${globalOffset + 1} / ${this._slideshowTotal}`;
-        this._slideshowBuffer(globalOffset);
         this._slideshowUpdateMark();
     },
 
@@ -570,23 +599,40 @@ const Detail = {
         m._fileId = fileId;
         m._fileName = detail.name;
 
-        const bufferedImg = this._slideshowCache[`_img_${fileId}`];
-        let img;
-        if (bufferedImg && bufferedImg.complete) {
-            img = bufferedImg;
-        } else {
-            img = new Image();
-            img.src = url;
-            img.alt = detail.name;
-        }
-        img.className = 'slideshow-clickable';
         m.content.innerHTML = '';
-        m.content.appendChild(img);
 
-        img.addEventListener('click', () => {
-            this._closePreviewModal();
-            if (this.onNavigateToFile) this.onNavigateToFile(fileId);
-        });
+        if (this._slideshowMode === 'playlist') {
+            const myGen = this._slideshowNavGen;
+            const video = document.createElement('video');
+            video.src = url;
+            video.controls = true;
+            video.autoplay = true;
+            video.style.maxWidth = '100%';
+            video.style.maxHeight = '100%';
+            video.addEventListener('ended', () => {
+                if (this._slideshowNavGen === myGen) this._slideshowNav(1);
+            });
+            video.addEventListener('error', () => {
+                if (this._slideshowNavGen === myGen) this._slideshowNav(1);
+            });
+            m.content.appendChild(video);
+        } else {
+            const bufferedImg = this._slideshowCache[`_img_${fileId}`];
+            let img;
+            if (bufferedImg && bufferedImg.complete) {
+                img = bufferedImg;
+            } else {
+                img = new Image();
+                img.src = url;
+                img.alt = detail.name;
+            }
+            img.className = 'slideshow-clickable';
+            m.content.appendChild(img);
+            img.addEventListener('click', () => {
+                this._closePreviewModal();
+                if (this.onNavigateToFile) this.onNavigateToFile(fileId);
+            });
+        }
 
         m.downloadBtn.classList.remove('hidden');
         m.fullscreenBtn.classList.remove('hidden');
@@ -594,7 +640,10 @@ const Detail = {
         m.prevBtn.classList.remove('hidden');
         m.nextBtn.classList.remove('hidden');
         m.counter.classList.remove('hidden');
-        m.autoplayWrap.classList.remove('hidden');
+        // Autoplay controls only for slideshow, not playlist
+        if (this._slideshowMode === 'slideshow') {
+            m.autoplayWrap.classList.remove('hidden');
+        }
         m.counter.textContent = `${globalOffset + 1} / ${this._slideshowTotal}`;
         this._slideshowUpdateMark();
     },
@@ -1837,11 +1886,15 @@ const Detail = {
                     <span class="label">Folders</span>
                     <span class="value">${folderCount.toLocaleString()}</span>
                 </div>` : '';
-        // Check current page for any images to decide whether to show button
         const hasImages = (data.items || []).some(f => (f.typeHigh || '').toLowerCase() === 'image');
-        const slideshowBtn = hasImages
-            ? `<div class="detail-section"><div class="detail-btn-group"><button class="btn" id="detail-slideshow">Slideshow</button></div></div>`
-            : '';
+        const hasVideo = (data.items || []).some(f => (f.typeHigh || '').toLowerCase() === 'video');
+        let mediaBtns = '';
+        if (hasImages || hasVideo) {
+            let btns = '';
+            if (hasImages) btns += '<button class="btn" id="detail-slideshow">Slideshow</button>';
+            if (hasVideo) btns += '<button class="btn" id="detail-playlist">Playlist</button>';
+            mediaBtns = `<div class="detail-section"><div class="detail-btn-group">${btns}</div></div>`;
+        }
         this.el.innerHTML = `
             <div class="detail-section">
                 <div class="detail-filename">Search Results</div>
@@ -1853,17 +1906,29 @@ const Detail = {
                     <span class="value">${data.total.toLocaleString()}</span>
                 </div>${folderField}
             </div>
-            ${slideshowBtn}
+            ${mediaBtns}
         `;
         if (hasImages) {
             document.getElementById('detail-slideshow').addEventListener('click', async () => {
                 const btn = document.getElementById('detail-slideshow');
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
-                await this.startSlideshow({ type: 'search', searchId: data.searchId });
+                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'slideshow' });
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No images available';
                     setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
+                }
+            });
+        }
+        if (hasVideo) {
+            document.getElementById('detail-playlist').addEventListener('click', async () => {
+                const btn = document.getElementById('detail-playlist');
+                btn.disabled = true;
+                btn.textContent = 'Loading\u2026';
+                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'playlist' });
+                if (this._slideshowTotal === 0) {
+                    btn.textContent = 'No videos available';
+                    setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);
                 }
             });
         }

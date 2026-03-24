@@ -16,8 +16,8 @@ import sqlite3
 from file_hunter.services.locations import check_location_online
 
 
-async def get_slideshow_ids_from_search(search_id: str) -> list[int]:
-    """Pull image IDs from the cached search results DB.
+async def get_slideshow_ids_from_search(search_id: str, *, media_type: str = "image") -> list[int]:
+    """Pull media IDs from the cached search results DB.
 
     Uses the existing search cache — no re-query, correct scope, fast.
     Returns empty list if the cache is missing or expired.
@@ -30,22 +30,23 @@ async def get_slideshow_ids_from_search(search_id: str) -> list[int]:
     if not os.path.exists(path):
         return []
 
-    def _read(p):
+    def _read(p, mt):
         sdb = sqlite3.connect(p)
         sdb.row_factory = sqlite3.Row
         rows = sdb.execute(
-            "SELECT file_id FROM results WHERE file_type_high = 'image' ORDER BY filename"
+            "SELECT file_id FROM results WHERE file_type_high = ? ORDER BY filename",
+            (mt,),
         ).fetchall()
         sdb.close()
         return [r["file_id"] for r in rows]
 
-    return await asyncio.to_thread(_read, path)
+    return await asyncio.to_thread(_read, path, media_type)
 
 
-async def get_slideshow_ids(db, *, folder_id=None, search_params=None):
-    """Return list of IDs for slideshow-eligible images.
+async def get_slideshow_ids(db, *, folder_id=None, media_type: str = "image"):
+    """Return list of IDs for media files (image or video).
 
-    Either folder_id or search_params must be provided, not both.
+    folder_id must be provided.
     Returns all matching IDs in one call — the client navigates locally.
     """
     from file_hunter.services.settings import get_setting
@@ -54,9 +55,7 @@ async def get_slideshow_ids(db, *, folder_id=None, search_params=None):
     hidden_filter = "" if show_hidden else " AND f.hidden = 0"
 
     if folder_id:
-        return await _ids_for_folder(db, folder_id, hidden_filter)
-    elif search_params is not None:
-        return await _ids_for_search(db, search_params, hidden_filter)
+        return await _ids_for_folder(db, folder_id, hidden_filter, media_type)
     return []
 
 
@@ -91,8 +90,8 @@ async def _get_online_loc_filter(db, base_where, base_params):
     return f"f.location_id IN ({placeholders})", list(online_ids)
 
 
-async def _ids_for_folder(db, folder_id, hidden_filter):
-    """All image IDs in a folder/location root on online locations."""
+async def _ids_for_folder(db, folder_id, hidden_filter, media_type="image"):
+    """All media IDs in a folder/location root on online locations."""
     if folder_id.startswith("loc-"):
         loc_id = int(folder_id[4:])
         where = "f.location_id = ? AND f.folder_id IS NULL"
@@ -105,8 +104,9 @@ async def _ids_for_folder(db, folder_id, hidden_filter):
         return []
 
     base_where = (
-        f"{where} AND f.file_type_high = 'image' AND f.stale = 0{hidden_filter}"
+        f"{where} AND f.file_type_high = ? AND f.stale = 0{hidden_filter}"
     )
+    params.append(media_type)
 
     loc_filter, loc_params = await _get_online_loc_filter(db, base_where, params)
     if loc_filter is None:
