@@ -27,13 +27,18 @@ def schedule_size_recalc(*location_ids: int):
 
 async def _bg_recalc_sizes(location_ids: list[int]):
     from file_hunter.ws.scan import broadcast
+    from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
 
+    activity_name = f"size-recalc-{id(location_ids)}"
+    _act_reg(activity_name, "Size recalc")
     try:
         for lid in location_ids:
             await recalculate_location_sizes(lid)
         await broadcast({"type": "size_recalc_completed", "locationIds": location_ids})
     except Exception:
         log.error("Background size recalc failed", exc_info=True)
+    finally:
+        _act_unreg(activity_name)
 
 
 def _merge_type_counts(a: dict, b: dict) -> dict:

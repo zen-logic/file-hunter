@@ -11,6 +11,8 @@ from file_hunter.services.search import (
 
 
 async def search(request: Request):
+    from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
+
     page = int(request.query_params.get("page", 0))
     sort = request.query_params.get("sort", "name")
     sort_dir = request.query_params.get("sortDir", "asc")
@@ -22,6 +24,24 @@ async def search(request: Request):
     location_id = int(scope_id) if scope_type == "location" and scope_id else None
     folder_id = int(scope_id) if scope_type == "folder" and scope_id else None
 
+    # Only track new searches, not cached page fetches
+    is_new_search = not request.query_params.get("searchId")
+    act_name = f"search-{id(request)}"
+    if is_new_search:
+        _act_reg(act_name, "Search")
+
+    try:
+        return await _do_search(request, page, sort, sort_dir, location_id, folder_id)
+    except Exception as e:
+        if "interrupted" in str(e):
+            return json_ok({"items": [], "folders": [], "total": 0, "page": 0, "pageSize": 120, "cancelled": True})
+        raise
+    finally:
+        if is_new_search:
+            _act_unreg(act_name)
+
+
+async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
     async with read_db() as db:
         if request.query_params.get("mode") == "advanced":
             conditions = parse_conditions_from_params(request.query_params)

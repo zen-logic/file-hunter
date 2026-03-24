@@ -191,6 +191,9 @@ async def _run():
             await broadcast({"type": "activity", "message": "Housekeeping..."})
             logger.info("Housekeeping: starting %s (id=%d)", task_type, task_id)
 
+            from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
+            _act_reg(f"housekeeping-{task_id}", f"Housekeeping: {task_type}")
+
             try:
                 await _execute(task_type, task_id, task["agent_id"], params)
 
@@ -210,6 +213,8 @@ async def _run():
                         "completed_at = ?, error = ? WHERE id = ?",
                         (_now(), str(e), task_id),
                     )
+            finally:
+                _act_unreg(f"housekeeping-{task_id}")
 
             # Check if queue is now empty
             async with read_db() as db:

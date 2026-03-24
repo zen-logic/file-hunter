@@ -38,16 +38,23 @@ const consolidateBtn = document.getElementById('btn-consolidate');
 const uploadBtn = document.getElementById('btn-upload');
 
 async function reloadTreeAndFileList(focusFileId) {
+    // Only numeric IDs are focusable files — ignore folder IDs (fld-xxx)
+    if (focusFileId && String(focusFileId).startsWith('fld-')) focusFileId = null;
     const folderId = selectedNode ? selectedNode.id : null;
     await Tree.reload();
     if (folderId) {
         selectedNode = Tree._findNode(folderId);
-        if (focusFileId) FileList.pendingFocusFile = focusFileId;
-        await FileList.showFolder(folderId);
+        // Don't blow away search results or in-flight select-all
+        if (!FileList._searchMode) {
+            if (focusFileId) FileList.pendingFocusFile = focusFileId;
+            await FileList.showFolder(folderId);
+        }
     }
 }
 
 async function refreshDetailPanel() {
+    // Don't overwrite search results detail panel with folder/location view
+    if (FileList._searchMode && !selectedFile) return;
     if (selectedFile) {
         const result = await Detail.renderFile(selectedFile);
         selectedFileDups = Detail.getFileDups();
@@ -839,6 +846,7 @@ FileList.init(async (file) => {
         selectedNode = node;
         scanBtn.disabled = false;
         Upload.updateState(node);
+        Search.setScopeContext(node);
     }
     const [, result] = await Promise.all([
         FileList.showFolder(folder.id),
@@ -1333,6 +1341,10 @@ WS.on('recalc_progress', msg => {
     }
     ActivityLog.add(`Recalculating: ${msg.location} (${msg.done}/${msg.total})`);
 });
+WS.on('server_activity', (msg) => {
+    StatusBar.updateServerActivity(msg);
+});
+
 WS.on('size_recalc_completed', msg => {
     ActivityLog.add('Location sizes recalculated');
     StatusBar.loadStats();

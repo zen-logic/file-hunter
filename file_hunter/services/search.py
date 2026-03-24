@@ -19,6 +19,18 @@ PAGE_SIZE = 120
 # Active search cache state
 _search_id: str | None = None
 _search_db_path: Path | None = None
+_active_search_conn = None  # aiosqlite connection running the current search
+
+
+def _cancel_active_search():
+    """Interrupt any running search query. Safe to call from any context."""
+    global _active_search_conn
+    conn = _active_search_conn
+    if conn is not None:
+        try:
+            conn._conn.interrupt()
+        except Exception:
+            pass
 
 _SEARCH_SCHEMA = """
 CREATE TABLE results (
@@ -60,6 +72,19 @@ def _search_db_dir() -> Path:
 
 async def _populate_search_db(db, where, params, search_path):
     """Run the search query and populate a temp SQLite DB with results."""
+    global _active_search_conn
+    from file_hunter.hashes_db import get_file_hashes
+    from file_hunter.services.dup_counts import batch_dup_counts
+
+    _active_search_conn = db
+    try:
+        return await _do_populate_search_db(db, where, params, search_path)
+    finally:
+        _active_search_conn = None
+
+
+async def _do_populate_search_db(db, where, params, search_path):
+    """Inner search population — separated so _active_search_conn is always cleared."""
     from file_hunter.hashes_db import get_file_hashes
     from file_hunter.services.dup_counts import batch_dup_counts
 
@@ -386,7 +411,10 @@ async def search_files(
             # Cache hit — page from existing search DB
             items, total = await asyncio.to_thread(_read_search_page, _search_db_path, sort, sort_dir, page)
         else:
-            # New search — populate search DB
+            # New search — kill any running search first
+            _cancel_active_search()
+
+            # Populate search DB
             search_dir = _search_db_dir()
             search_dir.mkdir(parents=True, exist_ok=True)
             new_id = secrets.token_hex(8)
@@ -666,6 +694,9 @@ async def search_files_advanced(
         if search_id and _search_id == search_id and _search_db_path and os.path.exists(_search_db_path):
             items, total = await asyncio.to_thread(_read_search_page, _search_db_path, sort, sort_dir, page)
         else:
+            # Kill any running search first
+            _cancel_active_search()
+
             search_dir = _search_db_dir()
             search_dir.mkdir(parents=True, exist_ok=True)
             new_id = secrets.token_hex(8)

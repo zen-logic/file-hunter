@@ -56,6 +56,7 @@ const FileList = {
     currentPage: 0,
     selectedItems: new Map(),   // key → item object
     _anchorIdx: null,           // for Shift+click range select
+    _selectAllGen: 0,           // generation counter — incremented by _clearSelection to abort in-flight _selectAll
     onSelect: null,
     onFolderOpen: null,
     onDeselect: null,
@@ -120,6 +121,7 @@ const FileList = {
     _clearSelection() {
         this.selectedItems.clear();
         this._anchorIdx = null;
+        this._selectAllGen++;
     },
 
     _selectOnly(item, idx) {
@@ -189,6 +191,8 @@ const FileList = {
     },
 
     async _selectAll() {
+        const gen = ++this._selectAllGen;
+
         // Select current page items immediately
         const items = this._getDisplayItems();
         items.forEach(item => {
@@ -202,6 +206,7 @@ const FileList = {
         if (totalPages <= 1) return;
 
         for (let page = 0; page < totalPages; page++) {
+            if (gen !== this._selectAllGen) return;  // selection was cleared — abort
             if (page === this.currentPage) continue;
             let res;
             if (this._searchMode) {
@@ -209,6 +214,7 @@ const FileList = {
                 params.set('page', page);
                 params.set('sort', this.sortKey);
                 params.set('sortDir', this._sortDirStr());
+                if (this._searchId) params.set('searchId', this._searchId);
                 res = await API.get(`/api/search?${params.toString()}`);
             } else {
                 const params = new URLSearchParams({
@@ -220,12 +226,14 @@ const FileList = {
                 if (this.filterText) params.set('filter', this.filterText);
                 res = await API.get(`/api/files?${params.toString()}`);
             }
+            if (gen !== this._selectAllGen) return;  // check again after await
             if (res.ok && res.data.items) {
                 res.data.items.forEach(item => {
                     this.selectedItems.set(itemKey(item), item);
                 });
             }
         }
+        if (gen !== this._selectAllGen) return;
         // Also select all folders on current page
         if (this.currentFolders) {
             this.currentFolders.forEach(f => {

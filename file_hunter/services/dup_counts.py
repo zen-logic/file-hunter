@@ -851,6 +851,10 @@ async def recalculate_dup_counts(
         source or "inline",
     )
 
+    from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg, update as _act_upd
+    activity_name = f"dup-recalc-{id(strong)}"
+    _act_reg(activity_name, "Dup recalc", f"0/{total}")
+
     progress_offset = 0
 
     async def _on_progress(processed, _batch_total):
@@ -862,15 +866,19 @@ async def recalculate_dup_counts(
                 total,
                 source or "inline",
             )
+            _act_upd(activity_name, progress=f"{actual}/{total}")
 
-    if strong:
-        await _batched_recalc(
-            strong, hash_column="hash_strong", on_progress=_on_progress
-        )
-        progress_offset = len(strong)
+    try:
+        if strong:
+            await _batched_recalc(
+                strong, hash_column="hash_strong", on_progress=_on_progress
+            )
+            progress_offset = len(strong)
 
-    if fast:
-        await _batched_recalc(fast, hash_column="hash_fast", on_progress=_on_progress)
+        if fast:
+            await _batched_recalc(fast, hash_column="hash_fast", on_progress=_on_progress)
+    finally:
+        _act_unreg(activity_name)
 
 
 async def backfill_dup_counts():

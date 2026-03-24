@@ -219,6 +219,13 @@ async def stop():
         except (asyncio.CancelledError, Exception):
             pass
     _task = None
+
+    # Clean up activity registrations for any ops that were still running
+    from file_hunter.services.activity import unregister as _act_unregister
+    for op_id in list(_running_ops):
+        _act_unregister(f"op-{op_id}")
+    _running_ops.clear()
+
     logger.info("Queue manager stopped")
 
 
@@ -347,9 +354,13 @@ async def _run():
                 params = json.loads(op["params"])
 
                 loc_id = params.get("location_id")
+                loc_name = params.get("location_name", "")
                 await _set_running(op_id)
                 _track_location(op_id, loc_id)
                 logger.info("Queue manager: starting %s (id=%d)", op_type, op_id)
+
+                from file_hunter.services.activity import register as _act_register, op_label
+                _act_register(f"op-{op_id}", op_label(op_type, loc_name))
 
                 task = asyncio.create_task(_execute(op_type, op_id, agent_id, params))
                 _running_ops[op_id] = (agent_id, task)
@@ -376,6 +387,9 @@ async def _reap_finished():
 
         reaped = True
         del _running_ops[op_id]
+
+        from file_hunter.services.activity import unregister as _act_unregister
+        _act_unregister(f"op-{op_id}")
 
         # Untrack location
         async with read_db() as db:

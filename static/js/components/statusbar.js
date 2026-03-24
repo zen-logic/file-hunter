@@ -14,6 +14,11 @@ const StatusBar = {
     statsEl: null,
     activityEl: null,
     connectionEl: null,
+    _loadEl: null,
+    _loadBarEl: null,
+    _loadDropdown: null,
+    _dropdownOpen: false,
+    _activities: [],
     _scanningLocationId: null,
     _pendingQueue: [],
     _stats: null,
@@ -22,6 +27,21 @@ const StatusBar = {
         this.statsEl = document.getElementById('status-stats');
         this.activityEl = document.getElementById('status-activity');
         this.connectionEl = document.getElementById('status-connection');
+        this._loadEl = document.getElementById('status-load');
+        this._loadBarEl = document.getElementById('status-load-bar');
+        this._loadDropdown = document.getElementById('status-load-dropdown');
+
+        if (this._loadEl) {
+            this._loadEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleDropdown();
+            });
+        }
+        if (this._loadDropdown) {
+            this._loadDropdown.addEventListener('click', (e) => e.stopPropagation());
+        }
+        document.addEventListener('click', () => this._closeDropdown());
+
         this.loadStats();
         this.renderActivity('idle');
         this.renderConnection(false);
@@ -166,6 +186,58 @@ const StatusBar = {
             <span class="${dotClass}"></span>
             <span>${label}</span>
         `;
+    },
+
+    updateServerActivity(msg) {
+        this._activities = msg.activities || [];
+        const count = msg.count || 0;
+        const maxOps = 5;
+        const pct = Math.min(count / maxOps, 1) * 100;
+
+        if (this._loadBarEl) {
+            this._loadBarEl.style.width = pct + '%';
+        }
+        if (this._loadEl) {
+            if (count === 0) {
+                this._loadEl.title = 'Server idle';
+            } else {
+                const labels = this._activities.map(a => {
+                    const p = a.progress ? ` (${a.progress})` : '';
+                    return a.label + p;
+                });
+                this._loadEl.title = labels.join('\n');
+            }
+        }
+        if (this._dropdownOpen) {
+            this._renderDropdown();
+        }
+    },
+
+    _toggleDropdown() {
+        if (this._dropdownOpen) {
+            this._closeDropdown();
+        } else {
+            this._dropdownOpen = true;
+            this._renderDropdown();
+            if (this._loadDropdown) this._loadDropdown.classList.remove('hidden');
+        }
+    },
+
+    _closeDropdown() {
+        this._dropdownOpen = false;
+        if (this._loadDropdown) this._loadDropdown.classList.add('hidden');
+    },
+
+    _renderDropdown() {
+        if (!this._loadDropdown) return;
+        if (this._activities.length === 0) {
+            this._loadDropdown.innerHTML = '<div class="load-dropdown-empty">Server idle</div>';
+            return;
+        }
+        this._loadDropdown.innerHTML = this._activities.map(a => {
+            const progress = a.progress ? `<span class="load-progress">${a.progress}</span>` : '';
+            return `<div class="load-dropdown-item"><span class="load-label">${a.label}</span>${progress}</div>`;
+        }).join('');
     },
 };
 

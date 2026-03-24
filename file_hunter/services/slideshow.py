@@ -1,8 +1,8 @@
 """Slideshow ID queries.
 
 Supports two modes:
+- search cache: reads image IDs from the cached search results DB
 - folder_id: all images in a folder/location root
-- search params: re-runs search query with image type filter
 
 Returns all matching IDs in one call. Only includes non-stale files
 on online locations. Pre-computes online location set and filters
@@ -10,8 +10,36 @@ in SQL WHERE.
 """
 
 import asyncio
+import os
+import sqlite3
 
 from file_hunter.services.locations import check_location_online
+
+
+async def get_slideshow_ids_from_search(search_id: str) -> list[int]:
+    """Pull image IDs from the cached search results DB.
+
+    Uses the existing search cache — no re-query, correct scope, fast.
+    Returns empty list if the cache is missing or expired.
+    """
+    from file_hunter.services.search import _search_id, _search_db_path
+
+    if not search_id or search_id != _search_id or not _search_db_path:
+        return []
+    path = str(_search_db_path)
+    if not os.path.exists(path):
+        return []
+
+    def _read(p):
+        sdb = sqlite3.connect(p)
+        sdb.row_factory = sqlite3.Row
+        rows = sdb.execute(
+            "SELECT file_id FROM results WHERE file_type_high = 'image' ORDER BY filename"
+        ).fetchall()
+        sdb.close()
+        return [r["file_id"] for r in rows]
+
+    return await asyncio.to_thread(_read, path)
 
 
 async def get_slideshow_ids(db, *, folder_id=None, search_params=None):
@@ -27,7 +55,7 @@ async def get_slideshow_ids(db, *, folder_id=None, search_params=None):
 
     if folder_id:
         return await _ids_for_folder(db, folder_id, hidden_filter)
-    elif search_params:
+    elif search_params is not None:
         return await _ids_for_search(db, search_params, hidden_filter)
     return []
 

@@ -154,6 +154,10 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         if is_rescan:
             # === RESCAN PATH ===
             logger.info("Rescan starting for %s", location_name)
+            from file_hunter.services.activity import update as _act_upd
+            _act_name = f"op-{op_id}"
+
+            _act_upd(_act_name, label=f"Scanning {location_name}", progress="tree walk")
 
             # --- Phase 1: stream metadata only into temp DB ---
             files_found, dirs_found = await _stream_to_temp_db(
@@ -172,6 +176,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 dirs_found,
                 location_name,
             )
+            _act_upd(_act_name, progress=f"{files_found:,} files, diffing")
 
             # --- Phase 2: diff temp DB against catalog, apply changes ---
             new_count, changed_count, stale_count, recovered_count = await _diff_and_update(
@@ -195,6 +200,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 recovered_count,
                 location_name,
             )
+            _act_upd(_act_name, progress=f"+{new_count:,} new, {changed_count:,} changed")
 
             # --- Phase 3: find dup candidates ---
             # Also check for pre-existing unprocessed candidates (hash_partial
@@ -231,6 +237,9 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
         else:
             # === FIRST SCAN PATH ===
+            from file_hunter.services.activity import update as _act_upd
+            _act_name = f"op-{op_id}"
+            _act_upd(_act_name, label=f"Scanning {location_name}", progress="tree walk")
 
             # --- Phase 1: stream metadata + hashes into temp DB ---
             files_found, dirs_found = await _stream_to_temp_db(
@@ -248,6 +257,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 dirs_found,
                 location_name,
             )
+            _act_upd(_act_name, progress=f"{files_found:,} files, ingesting")
 
             # --- Phase 2: bulk ingest from temp DB into catalog ---
             files_new = await _bulk_ingest(

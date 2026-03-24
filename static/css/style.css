@@ -1265,6 +1265,7 @@ body::after {
 /* ── Status bar (footer) ── */
 
 #status-bar {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 1.5rem;
@@ -1304,6 +1305,70 @@ body::after {
 
 .status-activity-text.scanning {
     color: var(--color-scan-text);
+}
+
+#status-load {
+    position: relative;
+    width: 60px;
+    height: 6px;
+    background: var(--color-border);
+    border-radius: 3px;
+    overflow: hidden;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+#status-load-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: linear-gradient(to right, #4caf50, #ff9800, #f44336);
+    background-size: 60px 100%;
+    transition: width 0.5s ease;
+}
+
+#status-load-dropdown {
+    position: absolute;
+    bottom: 100%;
+    right: 1rem;
+    background: var(--color-statusbar-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.5rem 0;
+    min-width: 220px;
+    max-width: 320px;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.4);
+    font-size: var(--font-size-sm);
+    z-index: 100;
+}
+
+#status-load-dropdown.hidden {
+    display: none;
+}
+
+.load-dropdown-item {
+    padding: 0.3rem 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    color: var(--color-text);
+}
+
+.load-dropdown-item .load-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.load-dropdown-item .load-progress {
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.load-dropdown-empty {
+    padding: 0.3rem 0.75rem;
+    color: var(--color-text-muted);
 }
 
 #status-connection {

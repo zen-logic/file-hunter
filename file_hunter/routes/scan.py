@@ -74,6 +74,7 @@ async def start_scan(request: Request):
         agent_id,
         {
             "location_id": loc_id,
+            "location_name": location_name,
             "path": scan_path,
             "root_path": root_path,
         },

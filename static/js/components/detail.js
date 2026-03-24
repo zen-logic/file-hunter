@@ -2,6 +2,17 @@ import API from '../api.js';
 import ConfirmModal from './confirm.js';
 import Tree from './tree.js';
 
+function _isScanning(locId) {
+    return Tree._scanningLocations.has('loc-' + locId);
+}
+
+function _disabledIf(offline, scanning, missing) {
+    if (offline) return ' disabled title="Location is offline"';
+    if (scanning) return ' disabled title="Location is being scanned"';
+    if (missing) return ' disabled title="Folder is missing from disk"';
+    return '';
+}
+
 function _authUrl(url) {
     const token = localStorage.getItem('fh-token');
     return token ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : url;
@@ -424,6 +435,8 @@ const Detail = {
         let url;
         if (p.type === 'folder') {
             url = `/api/slideshow-ids?folder_id=${encodeURIComponent(p.folderId)}`;
+        } else if (p.searchId) {
+            url = `/api/slideshow-ids?searchId=${encodeURIComponent(p.searchId)}`;
         } else {
             url = `/api/slideshow-ids?${new URLSearchParams(p.searchParams).toString()}`;
         }
@@ -854,9 +867,11 @@ const Detail = {
         const fileMissing = detail.locationOnline && !detail.online;
         const fileDisabled = detail.stale || fileMissing;
         const disabledReason = detail.stale ? 'File is stale' : 'File is missing from disk';
-        const renameFileBtn = detail.id && detail.locationOnline && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-rename-file" style="margin-top:0.4rem"${fileMissing ? ` disabled title="${disabledReason}"` : ''}>Rename</button>` : '';
-        const moveFileBtn = detail.id && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-move-file" style="margin-top:0.4rem"${fileMissing ? ` disabled title="${disabledReason}"` : ''}>Move</button>` : '';
-        const deleteFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-danger btn-sm" id="detail-delete-file" style="margin-top:0.4rem">Delete</button>` : '';
+        const fileLocScanning = _isScanning(String(detail.locationId || '').replace('loc-', ''));
+        const fileScanDisable = fileLocScanning ? ' disabled title="Location is being scanned"' : '';
+        const renameFileBtn = detail.id && detail.locationOnline && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-rename-file" style="margin-top:0.4rem"${fileScanDisable || (fileMissing ? ` disabled title="${disabledReason}"` : '')}>Rename</button>` : '';
+        const moveFileBtn = detail.id && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-move-file" style="margin-top:0.4rem"${fileScanDisable || (fileMissing ? ` disabled title="${disabledReason}"` : '')}>Move</button>` : '';
+        const deleteFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-danger btn-sm" id="detail-delete-file" style="margin-top:0.4rem"${fileScanDisable}>Delete</button>` : '';
         const ignoreFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-sm" id="detail-ignore-file" style="margin-top:0.4rem">Ignore files like this\u2026</button>` : '';
         const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${ignoreFileBtn}${deleteFileBtn}</div>` : '';
 
@@ -1636,12 +1651,12 @@ const Detail = {
             <div class="detail-section">
                 <div class="detail-btn-group">
                     <span id="detail-slideshow-slot"></span>
-                    <button class="btn" id="detail-new-folder"${s.online ? '' : ' disabled title="Location is offline"'}>New Folder</button>
+                    <button class="btn" id="detail-new-folder"${_disabledIf(!s.online, _isScanning(locId))}>New Folder</button>
                     <button class="btn" id="detail-download-zip"${s.online ? '' : ' disabled title="Location is offline"'}>Download ZIP</button>
                     <button class="btn" id="detail-merge-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Merge</button>
                     <button class="btn" id="detail-treemap-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Storage Map</button>
                     <button class="btn" id="detail-rename-location">Rename</button>
-                    <button class="btn btn-danger" id="detail-delete-location">Delete Location</button>
+                    <button class="btn btn-danger" id="detail-delete-location"${_disabledIf(false, _isScanning(locId))}>Delete Location</button>
                 </div>
             </div>
         `;
@@ -1714,13 +1729,15 @@ const Detail = {
             </div>
             <div class="detail-section">
                 <div class="detail-btn-group">
+                    ${(() => { const loc = String(s.locationId).replace('loc-',''); const sc = _isScanning(loc); const off = s.locationOnline === false; const miss = s.online === false; return `
                     <span id="detail-slideshow-slot"></span>
-                    <button class="btn" id="detail-new-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>New Folder</button>
-                    <button class="btn" id="detail-download-zip"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Download ZIP</button>
-                    <button class="btn" id="detail-merge-btn"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Merge</button>
-                    <button class="btn" id="detail-rename-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Rename</button>
-                    <button class="btn" id="detail-move-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : s.online === false ? ' disabled title="Folder is missing from disk"' : ''}>Move</button>
-                    <button class="btn btn-danger" id="detail-delete-folder"${s.locationOnline === false ? ' disabled title="Location is offline"' : ''}>Delete Folder</button>
+                    <button class="btn" id="detail-new-folder"${_disabledIf(off, sc, miss)}>New Folder</button>
+                    <button class="btn" id="detail-download-zip"${_disabledIf(off, false, miss)}>Download ZIP</button>
+                    <button class="btn" id="detail-merge-btn"${_disabledIf(off, false, miss)}>Merge</button>
+                    <button class="btn" id="detail-rename-folder"${_disabledIf(off, sc, miss)}>Rename</button>
+                    <button class="btn" id="detail-move-folder"${_disabledIf(off, sc, miss)}>Move</button>
+                    <button class="btn btn-danger" id="detail-delete-folder"${_disabledIf(off, sc)}>Delete Folder</button>
+                    `; })()}
                 </div>
             </div>
         `;
@@ -1822,7 +1839,7 @@ const Detail = {
                 </div>` : '';
         // Check current page for any images to decide whether to show button
         const hasImages = (data.items || []).some(f => (f.typeHigh || '').toLowerCase() === 'image');
-        const slideshowBtn = hasImages && searchParams
+        const slideshowBtn = hasImages
             ? `<div class="detail-section"><div class="detail-btn-group"><button class="btn" id="detail-slideshow">Slideshow</button></div></div>`
             : '';
         this.el.innerHTML = `
@@ -1838,12 +1855,12 @@ const Detail = {
             </div>
             ${slideshowBtn}
         `;
-        if (hasImages && searchParams) {
+        if (hasImages) {
             document.getElementById('detail-slideshow').addEventListener('click', async () => {
                 const btn = document.getElementById('detail-slideshow');
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
-                await this.startSlideshow({ type: 'search', searchParams: Object.fromEntries(new URLSearchParams(searchParams)) });
+                await this.startSlideshow({ type: 'search', searchId: data.searchId });
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No images available';
                     setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
@@ -1923,13 +1940,14 @@ const Detail = {
                 <div class="detail-path">${parts.join(' \u00B7 ')}</div>
                 <div class="detail-path">Total size: ${formatSize(totalSize)}</div>
             </div>
+            ${(() => { const bsc = this._currentLocationId ? _isScanning(this._currentLocationId) : false; const bsd = bsc ? ' disabled title="Location is being scanned"' : ''; return `
             <div class="detail-section">
                 <div class="detail-btn-group">
-                    <button class="btn btn-danger btn-sm" id="batch-delete-btn">Delete</button>
-                    <button class="btn btn-sm" id="batch-move-btn">Move</button>
+                    <button class="btn btn-danger btn-sm" id="batch-delete-btn"${bsd}>Delete</button>
+                    <button class="btn btn-sm" id="batch-move-btn"${bsd}>Move</button>
                     <button class="btn btn-sm" id="batch-download-btn">Download ZIP</button>
                     <button class="btn btn-sm" id="batch-rehash-btn">Re-hash</button>
-                </div>
+                </div>`; })()}
             </div>
             <div class="detail-section">
                 <h3>Tags</h3>
