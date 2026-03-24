@@ -1363,8 +1363,10 @@ WS.on('server_activity', (msg) => {
     StatusBar.updateServerActivity(msg);
 });
 
-WS.on('size_recalc_completed', msg => {
+WS.on('size_recalc_completed', async msg => {
     ActivityLog.add('Location sizes recalculated');
+    await Tree.reload();
+    if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
     StatusBar.loadStats();
     Detail.refreshStats();
     const recalcBtn = document.getElementById('detail-recalc-stats');
@@ -1573,7 +1575,15 @@ WS.on('batch_deleted', async (msg) => {
     await refreshDetailPanel();
 });
 
+WS.on('batch_move_progress', (msg) => {
+    const label = msg.name
+        ? `Moving: ${msg.name} (${msg.done}/${msg.total})`
+        : `Moving files: ${msg.done}/${msg.total}`;
+    StatusBar.renderActivity('scanning', label);
+});
+
 WS.on('batch_moved', async (msg) => {
+    StatusBar.renderActivity('idle');
     selectedFile = null;
     selectedFileDups = [];
     await reloadTreeAndFileList();
