@@ -201,12 +201,16 @@ const Tree = {
         }
     },
 
-    updateOnlineStatus(locationIds, online) {
+    updateOnlineStatus(locationIds, online, diskStats) {
         let changed = false;
         for (const id of locationIds) {
             const node = this._findNode(id);
             if (node && node.online !== online) {
                 node.online = online;
+                changed = true;
+            }
+            if (node && diskStats && diskStats[id]) {
+                node.diskStats = diskStats[id];
                 changed = true;
             }
         }

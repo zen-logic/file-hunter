@@ -1820,7 +1820,7 @@ WS.on('agent_status', (msg) => {
     ActivityLog.add(`${label} ${msg.status}`);
     const online = msg.status === 'online';
     if (msg.locationIds) {
-        Tree.updateOnlineStatus(msg.locationIds, online);
+        Tree.updateOnlineStatus(msg.locationIds, online, msg.diskStats);
     }
 });
 

@@ -365,14 +365,33 @@ async def agent_ws_endpoint(websocket: WebSocket):
     # Send registration confirmation
     await websocket.send_text(json.dumps({"type": "registered", "agentId": agent_id}))
 
-    # Broadcast status to UI browsers
-    loc_ids = [f"loc-{lid}" for lid in _agent_location_ids.get(agent_id, set())]
+    # Broadcast status to UI browsers (include disk stats so bars render
+    # even if the page loaded before agents connected)
+    raw_loc_ids = list(_agent_location_ids.get(agent_id, set()))
+    loc_ids = [f"loc-{lid}" for lid in raw_loc_ids]
+
+    disk_stats_map = {}
+    if raw_loc_ids:
+        from file_hunter.services.locations import get_disk_stats
+
+        async with read_db() as _db:
+            loc_rows = await _db.execute_fetchall(
+                f"SELECT id, root_path FROM locations WHERE id IN ({','.join('?' for _ in raw_loc_ids)})",
+                raw_loc_ids,
+            )
+        ds_tasks = [get_disk_stats(r["id"], r["root_path"]) for r in loc_rows]
+        ds_results = await asyncio.gather(*ds_tasks, return_exceptions=True)
+        for r, ds in zip(loc_rows, ds_results):
+            if isinstance(ds, dict):
+                disk_stats_map[f"loc-{r['id']}"] = ds
+
     await broadcast(
         {
             "type": "agent_status",
             "agentId": agent_id,
             "status": "online",
             "locationIds": loc_ids,
+            "diskStats": disk_stats_map if disk_stats_map else None,
         }
     )
     await broadcast(
