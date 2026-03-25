@@ -73,7 +73,7 @@ async def get_shallow_tree(db):
 
     # Root-level folders (parent_id IS NULL) with has_children flag
     root_folders = await db.execute_fetchall(
-        f"""SELECT f.id, f.location_id, f.name, f.hidden, f.dup_exclude,
+        f"""SELECT f.id, f.location_id, f.name, f.hidden, f.dup_exclude, f.stale,
                   EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
            FROM folders f
            WHERE f.parent_id IS NULL{hidden_filter}
@@ -146,6 +146,8 @@ async def get_shallow_tree(db):
                 child_node["hidden"] = True
             if f["dup_exclude"]:
                 child_node["dupExcluded"] = True
+            if f["stale"]:
+                child_node["stale"] = True
             children.append(child_node)
         label = loc["name"]
         agent_name = agent_prefixes.get(loc["id"])
@@ -184,7 +186,7 @@ async def get_children(db, folder_ids: list[int]):
 
     placeholders = ",".join("?" * len(folder_ids))
     rows = await db.execute_fetchall(
-        f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude,
+        f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude, f.stale,
                    EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
             FROM folders f
             WHERE f.parent_id IN ({placeholders}){hidden_filter}
@@ -283,7 +285,7 @@ async def get_expand_path(db, target_id: int):
     if parent_ids_to_fetch:
         placeholders = ",".join("?" * len(parent_ids_to_fetch))
         rows = await db.execute_fetchall(
-            f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude,
+            f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude, f.stale,
                        EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
                 FROM folders f
                 WHERE f.parent_id IN ({placeholders}){hidden_filter}
@@ -326,7 +328,7 @@ async def get_expand_path(db, target_id: int):
 
     # Also fetch root-level siblings (children of the location)
     root_rows = await db.execute_fetchall(
-        f"""SELECT f.id, f.name, f.hidden, f.dup_exclude,
+        f"""SELECT f.id, f.name, f.hidden, f.dup_exclude, f.stale,
                   EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
            FROM folders f
            WHERE f.location_id = ? AND f.parent_id IS NULL{hidden_filter}

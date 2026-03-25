@@ -235,6 +235,11 @@ async def dispatch(operation: str, location_id: int, **kwargs):
             host, port, token, "/disk-stats", {"path": kwargs["path"]}, timeout=10.0
         )
 
+    elif operation == "list_dir":
+        return await _post(
+            host, port, token, "/list-dir", {"path": kwargs["path"]}, timeout=30.0
+        )
+
     elif operation == "_upload_file":
         await _upload_multipart(
             host,

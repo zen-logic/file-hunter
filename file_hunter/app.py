@@ -47,6 +47,8 @@ from file_hunter.routes.search import (
 from file_hunter.routes.slideshow import slideshow_ids
 from file_hunter.routes.scan import (
     start_scan,
+    start_quick_scan,
+    scan_capabilities,
     cancel_scan,
     get_scan_queue,
 )
@@ -325,6 +327,8 @@ app = Starlette(
         Route("/api/searches/{id:int}", delete_saved_search, methods=["DELETE"]),
         Route("/api/slideshow-ids", slideshow_ids, methods=["GET"]),
         Route("/api/scan", start_scan, methods=["POST"]),
+        Route("/api/scan/quick", start_quick_scan, methods=["POST"]),
+        Route("/api/scan/capabilities", scan_capabilities, methods=["GET"]),
         Route("/api/scan/cancel", cancel_scan, methods=["POST"]),
         Route("/api/scan/queue", get_scan_queue, methods=["GET"]),
         Route("/api/consolidate", consolidate, methods=["POST"]),

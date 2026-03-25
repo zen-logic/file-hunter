@@ -151,6 +151,7 @@ async def _recover_interrupted():
 async def _run():
     """Main loop — poll for housekeeping tasks, run when idle."""
     await _recover_interrupted()
+    await _enqueue_dup_candidates()
 
     while _running:
         try:
@@ -236,6 +237,8 @@ async def _execute(task_type: str, task_id: int, agent_id: int | None, params: d
     """Dispatch a housekeeping task to its handler."""
     if task_type == "purge_location":
         await _run_purge_location(task_id, agent_id, params)
+    elif task_type == "process_dup_candidates":
+        await _run_dup_candidates(task_id, agent_id, params)
     else:
         raise ValueError(f"Unknown housekeeping task type: {task_type}")
 
@@ -338,5 +341,75 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
             "message": f"{location_name} deletion completed",
         }
     )
+
+
+async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
+    """Process unprocessed dup candidates for a location."""
+    location_id = params["location_id"]
+    location_name = params.get("location_name", f"location {location_id}")
+
+    if agent_id is None:
+        logger.warning(
+            "Housekeeping dup candidates: no agent_id for %s, skipping",
+            location_name,
+        )
+        return
+
+    from file_hunter.services.dup_counts import post_ingest_dup_processing
+
+    await post_ingest_dup_processing(
+        location_id, agent_id, location_name, broadcast_scan_progress=False
+    )
+
+
+async def _enqueue_dup_candidates():
+    """On startup, check for locations with unprocessed dup candidates and enqueue."""
+    from file_hunter.hashes_db import open_hashes_connection
+
+    hconn = await open_hashes_connection()
+    try:
+        rows = await hconn.execute_fetchall(
+            "SELECT DISTINCT location_id FROM active_hashes "
+            "WHERE hash_fast IS NULL AND hash_partial IS NOT NULL"
+        )
+    finally:
+        await hconn.close()
+
+    if not rows:
+        return
+
+    # Don't duplicate already-pending tasks
+    async with read_db() as db:
+        pending = await db.execute_fetchall(
+            "SELECT params FROM housekeeping_queue "
+            "WHERE type = 'process_dup_candidates' AND status IN ('pending', 'running')"
+        )
+    pending_ids = set()
+    for p in pending:
+        prms = json.loads(p["params"] or "{}")
+        lid = prms.get("location_id")
+        if lid is not None:
+            pending_ids.add(lid)
+
+    location_ids = [r["location_id"] for r in rows if r["location_id"] not in pending_ids]
+    if not location_ids:
+        return
+
+    ph = ",".join("?" for _ in location_ids)
+    async with read_db() as db:
+        loc_rows = await db.execute_fetchall(
+            f"SELECT id, name, agent_id FROM locations WHERE id IN ({ph})",
+            location_ids,
+        )
+
+    for loc in loc_rows:
+        await enqueue(
+            "process_dup_candidates",
+            loc["agent_id"],
+            {"location_id": loc["id"], "location_name": loc["name"]},
+        )
+        logger.info(
+            "Housekeeping: queued dup candidate processing for %s", loc["name"]
+        )
 
 

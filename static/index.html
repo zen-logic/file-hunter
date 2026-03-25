@@ -180,13 +180,15 @@
         </div>
         <div id="scan-confirm-modal" class="modal-overlay hidden">
             <div class="modal-dialog">
-                <h2 class="modal-title">Scan Location</h2>
+                <h2 class="modal-title">Scan</h2>
                 <p id="scan-confirm-text" class="modal-text"></p>
-                <p id="scan-confirm-warning" class="modal-text" style="color:var(--color-status-error);display:none"></p>
+                <div id="scan-confirm-options" class="modal-field" style="display:none">
+                    <label class="radio-option"><input type="radio" name="scan-type" value="full" checked> <strong>Full Scan</strong> — recursive, all subfolders</label>
+                    <label class="radio-option"><input type="radio" name="scan-type" value="quick"> <strong>Quick Scan</strong> — this folder only, no recursion</label>
+                </div>
                 <div class="modal-actions">
                     <button class="btn" id="scan-confirm-cancel">Cancel</button>
                     <button class="btn btn-primary" id="scan-confirm-submit">Scan</button>
-                    <button class="btn btn-primary" id="scan-confirm-fast" style="display:none">Fast Scan</button>
                 </div>
             </div>
         </div>

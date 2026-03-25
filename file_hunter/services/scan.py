@@ -29,6 +29,7 @@ from file_hunter.hashes_db import hashes_writer
 from file_hunter.services.scanner import (
     ensure_folder_hierarchy,
     mark_stale_files,
+    mark_stale_folders,
 )
 from file_hunter.services.agent_ops import stream_tree
 from file_hunter.services.stats import invalidate_stats_cache
@@ -155,6 +156,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             # === RESCAN PATH ===
             logger.info("Rescan starting for %s", location_name)
             from file_hunter.services.activity import update as _act_upd
+
             _act_name = f"op-{op_id}"
 
             _act_upd(_act_name, label=f"Scanning {location_name}", progress="tree walk")
@@ -179,7 +181,12 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             _act_upd(_act_name, progress=f"{files_found:,} files, diffing")
 
             # --- Phase 2: diff temp DB against catalog, apply changes ---
-            new_count, changed_count, stale_count, recovered_count = await _diff_and_update(
+            (
+                new_count,
+                changed_count,
+                stale_count,
+                recovered_count,
+            ) = await _diff_and_update(
                 tmp_path,
                 location_id,
                 scan_id,
@@ -200,33 +207,13 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 recovered_count,
                 location_name,
             )
-            _act_upd(_act_name, progress=f"+{new_count:,} new, {changed_count:,} changed")
+            _act_upd(
+                _act_name, progress=f"+{new_count:,} new, {changed_count:,} changed"
+            )
 
-            # --- Phase 3: find dup candidates ---
-            # Also check for pre-existing unprocessed candidates (hash_partial
-            # but no hash_fast) from scans before the drain fix.
-            has_unprocessed = False
-            if new_count == 0 and changed_count == 0 and recovered_count == 0:
-                from file_hunter.hashes_db import open_hashes_connection
-
-                hconn = await open_hashes_connection()
-                try:
-                    uc = await hconn.execute_fetchall(
-                        "SELECT 1 FROM file_hashes "
-                        "WHERE location_id = ? AND hash_fast IS NULL "
-                        "AND hash_partial IS NOT NULL LIMIT 1",
-                        (location_id,),
-                    )
-                    has_unprocessed = bool(uc)
-                finally:
-                    await hconn.close()
-                if has_unprocessed:
-                    logger.info(
-                        "Rescan: location %d has unprocessed dup candidates, running detection",
-                        location_id,
-                    )
-
-            if new_count > 0 or changed_count > 0 or recovered_count > 0 or has_unprocessed:
+            # --- Phase 3: find dup candidates for new/changed/recovered files ---
+            # Pre-existing unprocessed candidates are handled by housekeeping
+            if new_count > 0 or changed_count > 0 or recovered_count > 0:
                 from file_hunter.services.dup_counts import post_ingest_dup_processing
 
                 candidates_total = await post_ingest_dup_processing(
@@ -238,6 +225,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         else:
             # === FIRST SCAN PATH ===
             from file_hunter.services.activity import update as _act_upd
+
             _act_name = f"op-{op_id}"
             _act_upd(_act_name, label=f"Scanning {location_name}", progress="tree walk")
 
@@ -338,20 +326,6 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 drainer_err,
             )
         logger.info("Hash drainer finished for %s", location_name)
-
-        # --- Correction pass: rebuild stored counters ---
-        from file_hunter.services.sizes import recalculate_location_sizes
-
-        logger.info("Running size recalc for %s", location_name)
-        await broadcast(
-            {
-                "type": "scan_progress",
-                "locationId": location_id,
-                "location": location_name,
-                "phase": "rebuilding",
-            }
-        )
-        await recalculate_location_sizes(location_id)
 
         invalidate_stats_cache()
 
@@ -929,6 +903,11 @@ async def _diff_and_update(
 
     logger.info("Rescan folders ensured for %s: %d", location_name, len(folder_cache))
 
+    # Mark folders not seen on disk as stale
+    seen_folder_paths = {row["rel_dir"] for row in dir_rows if row["rel_dir"]}
+    async with db_writer() as db:
+        await mark_stale_folders(db, location_id, seen_folder_paths, scan_prefix)
+
     # Build folder_parents for stats cascade
     async with read_db() as rdb:
         fp_rows = await rdb.execute_fetchall(
@@ -1011,10 +990,15 @@ async def _diff_and_update(
             }
         )
         stale_scope = ""
-        stale_params = [location_id]
+        stale_params: list = [location_id]
         if scan_prefix:
-            stale_scope = " AND c.rel_path LIKE ?"
-            stale_params.append(scan_prefix + "/%")
+            stale_scope = (
+                " AND c.folder_id IN ("
+                "SELECT id FROM main.folders "
+                "WHERE location_id = ? AND (rel_path = ? OR rel_path LIKE ?)"
+                ")"
+            )
+            stale_params.extend([location_id, scan_prefix, scan_prefix + "/%"])
         stale_ids = await conn.execute_fetchall(
             "SELECT c.id, c.folder_id, c.file_size, c.file_type_high, c.hidden "
             "FROM main.files c "
@@ -1028,10 +1012,15 @@ async def _diff_and_update(
         # Recovered files: stale in catalog but exist on disk (in temp DB)
         # Un-stale them and update scan_id
         recovered_scope = ""
-        recovered_params = [location_id]
+        recovered_params: list = [location_id]
         if scan_prefix:
-            recovered_scope = " AND c.rel_path LIKE ?"
-            recovered_params.append(scan_prefix + "/%")
+            recovered_scope = (
+                " AND c.folder_id IN ("
+                "SELECT id FROM main.folders "
+                "WHERE location_id = ? AND (rel_path = ? OR rel_path LIKE ?)"
+                ")"
+            )
+            recovered_params.extend([location_id, scan_prefix, scan_prefix + "/%"])
         recovered_rows = await conn.execute_fetchall(
             "SELECT c.id "
             "FROM main.files c "
@@ -1041,7 +1030,11 @@ async def _diff_and_update(
         )
         recovered_count = len(recovered_rows)
         if recovered_count > 0:
-            logger.info("Rescan diff: %d recovered (un-staled) files for %s", recovered_count, location_name)
+            logger.info(
+                "Rescan diff: %d recovered (un-staled) files for %s",
+                recovered_count,
+                location_name,
+            )
 
         await conn.execute("DETACH DATABASE temp_scan")
     finally:
@@ -1093,10 +1086,21 @@ async def _diff_and_update(
         await clear_hashes_stale(recovered_id_list)
 
     # Mark all seen files with current scan_id — batched to avoid holding writer
+    # Scoped to scan_prefix for subfolder scans (don't touch files we didn't scan)
+    seen_scope = ""
+    seen_params: list = [location_id]
+    if scan_prefix:
+        seen_scope = (
+            " AND folder_id IN ("
+            "SELECT id FROM folders "
+            "WHERE location_id = ? AND (rel_path = ? OR rel_path LIKE ?)"
+            ")"
+        )
+        seen_params.extend([location_id, scan_prefix, scan_prefix + "/%"])
     async with read_db() as rdb:
         seen_ids = await rdb.execute_fetchall(
-            "SELECT id FROM files WHERE location_id = ? AND stale = 0",
-            (location_id,),
+            f"SELECT id FROM files WHERE location_id = ? AND stale = 0{seen_scope}",
+            seen_params,
         )
     if seen_ids:
         seen_id_list = [r["id"] for r in seen_ids]

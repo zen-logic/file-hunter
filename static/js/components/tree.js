@@ -501,6 +501,7 @@ const Tree = {
         item.className = 'tree-item' + (node.online === false ? ' offline' : '');
         if (this.selected === node.id) item.classList.add('selected');
         if (node.hidden) item.classList.add('hidden-item');
+        if (node.stale) item.classList.add('stale');
 
         // indentation
         for (let i = 0; i < depth; i++) {

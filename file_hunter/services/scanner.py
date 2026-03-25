@@ -193,7 +193,38 @@ async def _upsert_file(
         return cursor.lastrowid
 
 
+async def _mark_stale_folders(
+    db, location_id: int, seen_rel_paths: set[str], scan_prefix: str | None = None
+) -> int:
+    """Mark folders not seen on disk as stale. Clear stale on folders that are back.
+
+    seen_rel_paths: set of rel_path strings for folders found on disk.
+    Returns count of newly stale folders.
+    """
+    if scan_prefix:
+        cat_rows = await db.execute_fetchall(
+            "SELECT id, rel_path, stale FROM folders WHERE location_id = ? AND rel_path LIKE ?",
+            (location_id, scan_prefix + "/%"),
+        )
+    else:
+        cat_rows = await db.execute_fetchall(
+            "SELECT id, rel_path, stale FROM folders WHERE location_id = ?",
+            (location_id,),
+        )
+
+    stale_count = 0
+    for row in cat_rows:
+        on_disk = row["rel_path"] in seen_rel_paths
+        if on_disk and row["stale"]:
+            await db.execute("UPDATE folders SET stale = 0 WHERE id = ?", (row["id"],))
+        elif not on_disk and not row["stale"]:
+            await db.execute("UPDATE folders SET stale = 1 WHERE id = ?", (row["id"],))
+            stale_count += 1
+    return stale_count
+
+
 # Public aliases for pro/extension reuse (keep _-prefixed originals intact)
 ensure_folder_hierarchy = _ensure_folder_hierarchy
 upsert_file = _upsert_file
 mark_stale_files = _mark_stale_files
+mark_stale_folders = _mark_stale_folders

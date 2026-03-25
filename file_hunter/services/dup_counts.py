@@ -1162,6 +1162,7 @@ async def post_ingest_dup_processing(
     agent_id: int,
     location_name: str,
     on_progress=None,
+    broadcast_scan_progress: bool = True,
 ):
     """Shared post-ingest dup processing for scan, rescan, and import.
 
@@ -1171,19 +1172,21 @@ async def post_ingest_dup_processing(
     4. Recount dup_count for affected hashes
 
     Called after files + hashes are in the catalog and hashes.db.
+    broadcast_scan_progress: False when called from housekeeping (not a scan).
     """
-    from file_hunter.ws.scan import broadcast
-
     log.info("Post-ingest dup processing for %s", location_name)
 
-    await broadcast(
-        {
-            "type": "scan_progress",
-            "locationId": location_id,
-            "location": location_name,
-            "phase": "checking_duplicates",
-        }
-    )
+    if broadcast_scan_progress:
+        from file_hunter.ws.scan import broadcast
+
+        await broadcast(
+            {
+                "type": "scan_progress",
+                "locationId": location_id,
+                "location": location_name,
+                "phase": "checking_duplicates",
+            }
+        )
 
     candidates_total, small_handled, large_queued = await hash_candidates_for_location(
         location_id=location_id,

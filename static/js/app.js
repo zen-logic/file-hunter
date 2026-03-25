@@ -26,6 +26,7 @@ import Upload from './components/upload.js';
 import SlideshowTriage from './components/slideshow-triage.js';
 import ImportCatalog from './components/importcatalog.js';
 import RepairCatalog from './components/repaircatalog.js';
+import ScanConfirm from './components/scanconfirm.js';
 import Keyboard from './keyboard.js';
 import WS from './ws.js';
 
@@ -455,15 +456,24 @@ function startApp(user) {
 
 ConfirmModal.init();
 
+ScanConfirm.init(async (loc, folder, scanType) => {
+    const payload = { location_id: loc.id };
+    if (folder) payload.folder_id = folder.id;
+    const endpoint = scanType === 'quick' ? '/api/scan/quick' : '/api/scan';
+    const res = await API.post(endpoint, payload);
+    if (!res.ok) Toast.error(res.error || 'Failed to start scan.');
+});
+
 scanBtn.addEventListener('click', async () => {
     if (!selectedNode) return;
     const loc = Tree.getLocation(selectedNode.id);
     if (!loc) return;
     const isFolder = String(selectedNode.id).startsWith('fld-');
-    const payload = { location_id: loc.id };
-    if (isFolder) payload.folder_id = selectedNode.id;
-    const res = await API.post('/api/scan', payload);
-    if (!res.ok) Toast.error(res.error || 'Failed to start scan.');
+    const folderNode = isFolder ? selectedNode : null;
+
+    const res = await API.get(`/api/scan/capabilities?location_id=${loc.id}`);
+    const hasQuickScan = res.ok && res.data.quick_scan;
+    ScanConfirm.open(loc, folderNode, hasQuickScan);
 });
 
 Consolidate.init(async (params) => {
@@ -1144,12 +1154,25 @@ WS.on('scan_completed', async (msg) => {
     } else {
         StatusBar.renderActivity('idle');
     }
-    const skippedPart = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
-    const stalePart = msg.staleFiles ? `, ${msg.staleFiles.toLocaleString()} stale` : '';
-    ActivityLog.add(`Scan completed: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} hashed${skippedPart}, ${msg.duplicatesFound.toLocaleString()} duplicates${stalePart}`);
-    Toast.success(`Scan completed: ${msg.location}`);
+    if (msg.quickScan) {
+        const parts = [];
+        if (msg.newFiles) parts.push(`${msg.newFiles} new`);
+        if (msg.staleFiles) parts.push(`${msg.staleFiles} stale`);
+        if (msg.newFolders) parts.push(`${msg.newFolders} new folders`);
+        if (msg.recoveredFiles) parts.push(`${msg.recoveredFiles} recovered`);
+        const detail = parts.length ? parts.join(', ') : 'no changes';
+        ActivityLog.add(`Quick scan completed: <b>${msg.location}</b> — ${detail}`);
+        Toast.success(`Quick scan completed: ${msg.location}`);
+    } else {
+        const skippedPart = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
+        const stalePart = msg.staleFiles ? `, ${msg.staleFiles.toLocaleString()} stale` : '';
+        ActivityLog.add(`Scan completed: <b>${msg.location}</b> — ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedPart}, ${(msg.duplicatesFound || 0).toLocaleString()} duplicates${stalePart}`);
+        Toast.success(`Scan completed: ${msg.location}`);
+    }
     Tree.clearScanningLocation(msg.locationId);
     if (msg.totalSize !== undefined) Tree.updateLocationSize(msg.locationId, msg.totalSize);
+    // Refresh current view without full tree reload (avoids disk-stats flood)
+    if (selectedNode) await FileList.showFolder(selectedNode.id);
     await StatusBar.loadStats();
     await Detail.refreshStats();
 });

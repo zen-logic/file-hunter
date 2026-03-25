@@ -794,7 +794,8 @@ body::after {
     margin-left: 0.35rem;
 }
 
-.file-table tr.stale {
+.file-table tr.stale,
+.tree-item.stale {
     opacity: var(--opacity-stale);
 }
 
@@ -1435,6 +1436,20 @@ body::after {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+}
+
+.radio-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+}
+
+.radio-option strong {
+    color: var(--color-text-bright);
 }
 
 .modal-label {

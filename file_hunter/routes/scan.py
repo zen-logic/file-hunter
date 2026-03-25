@@ -99,6 +99,63 @@ async def start_scan(request: Request):
     return json_ok({"message": f"Scan queued for '{label}'", "queue_id": op_id})
 
 
+async def scan_capabilities(request: Request):
+    """GET /api/scan/capabilities?location_id=N — check what scan types the agent supports."""
+    raw_id = request.query_params.get("location_id", "")
+    loc_id = int(str(raw_id).replace("loc-", ""))
+
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT agent_id FROM locations WHERE id = ?", (loc_id,)
+        )
+    if not rows or not rows[0]["agent_id"]:
+        return json_ok({"quick_scan": False})
+
+    from file_hunter.ws.agent import get_agent_capabilities
+
+    caps = get_agent_capabilities(rows[0]["agent_id"])
+    return json_ok({"quick_scan": "quick_scan" in caps})
+
+
+async def start_quick_scan(request: Request):
+    """POST /api/scan/quick — shallow scan of a single folder or location root."""
+    import asyncio
+    from file_hunter.services.quick_scan import run_quick_scan
+
+    body = await request.json()
+    raw_id = body.get("location_id", "")
+    loc_id = int(str(raw_id).replace("loc-", ""))
+
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT id, name, agent_id FROM locations WHERE id = ?", (loc_id,)
+        )
+        if not rows:
+            return json_error("Location not found.", 404)
+
+        agent_id = rows[0]["agent_id"]
+        if not agent_id:
+            return json_error("Location has no agent assigned.", 400)
+
+    # Check agent supports quick_scan
+    from file_hunter.ws.agent import get_agent_capabilities
+
+    caps = get_agent_capabilities(agent_id)
+    if "quick_scan" not in caps:
+        return json_error(
+            "This agent does not support quick scan. Update the agent to enable this feature.",
+            400,
+        )
+
+    folder_id = None
+    raw_folder_id = body.get("folder_id")
+    if raw_folder_id:
+        folder_id = int(str(raw_folder_id).replace("fld-", ""))
+
+    asyncio.create_task(run_quick_scan(loc_id, folder_id))
+    return json_ok({"message": "Quick scan started"})
+
+
 async def cancel_scan(request: Request):
     body = await request.json()
 

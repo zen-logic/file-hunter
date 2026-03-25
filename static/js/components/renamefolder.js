@@ -56,15 +56,18 @@ const RenameFolderModal = {
             this.errorEl.classList.add('hidden');
         }
 
-        const result = await this.onConfirm(this.folder, newName);
+        const folder = this.folder;
+        this.close();
+        const result = await this.onConfirm(folder, newName);
         if (result && result.error) {
+            // Re-open with error if the rename failed
+            this.open(folder);
+            this.nameInput.value = newName;
             if (this.errorEl) {
                 this.errorEl.textContent = result.error;
                 this.errorEl.classList.remove('hidden');
             }
-            return;
         }
-        this.close();
     },
 };
 
