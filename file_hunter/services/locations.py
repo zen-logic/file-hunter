@@ -4,6 +4,8 @@ import asyncio
 import os
 from datetime import datetime
 
+from file_hunter.helpers import parse_location_id, parse_folder_id
+
 
 async def get_tree(db):
     """Build the full navigation tree: locations with nested folders.
@@ -37,7 +39,21 @@ async def get_tree(db):
 
 
 def _build_tree_sync(locations, folders_by_loc, online_flags):
-    """Build the full tree structure (runs in thread to avoid blocking)."""
+    """Build the full navigation tree from pre-fetched data (runs in a worker thread).
+
+    Args:
+        locations: List of location row dicts with id, name, root_path, etc.
+        folders_by_loc: Dict mapping location_id -> list of folder dicts.
+        online_flags: List of bools parallel to locations, True if online.
+
+    Returns:
+        list[dict]: Tree nodes with id (prefixed "loc-N"), type, label, online,
+        and nested children.
+
+    Notes:
+        Runs in asyncio.to_thread to avoid blocking the event loop on large
+        folder counts. Called only by get_tree().
+    """
     tree = []
     for loc, online in zip(locations, online_flags):
         node = {
@@ -374,16 +390,39 @@ async def get_expand_path(db, target_id: int):
 
 
 def check_location_online(location_id: int, root_path: str) -> bool:
-    """Check if a location is online via agent status (runs in thread)."""
+    """Check if a location is reachable via its agent.
+
+    Args:
+        location_id: Numeric location ID.
+        root_path: Absolute path to the location root on the agent.
+
+    Returns:
+        bool: True if the agent reports the location as accessible.
+
+    Notes:
+        Delegates to agent_online_check(). Must be called from a worker thread
+        (via asyncio.to_thread) since it performs synchronous I/O. Called by
+        get_shallow_tree, get_location_stats, get_folder_stats, and others.
+    """
     from file_hunter.services.online_check import agent_online_check
 
     return agent_online_check({"id": location_id, "root_path": root_path})
 
 
 async def get_disk_stats(location_id: int, root_path: str) -> dict | None:
-    """Return disk stats for a location via its agent.
+    """Fetch disk usage statistics for a location from its agent.
 
-    Returns {mount, total, free, readonly} or {mount: false}, or None on error.
+    Args:
+        location_id: Numeric location ID (used to route to the correct agent).
+        root_path: Absolute path to the location root on the agent.
+
+    Returns:
+        dict | None: Dict with keys {mount, total, free, readonly} on success,
+        {mount: false} if no mount found, or None on any error.
+
+    Notes:
+        Async — calls agent_disk_stats which makes an HTTP request to the agent.
+        Called by get_shallow_tree, get_location_stats, and get_folder_stats.
     """
     from file_hunter.services.online_check import agent_disk_stats
 
@@ -394,10 +433,18 @@ async def get_disk_stats(location_id: int, root_path: str) -> dict | None:
 
 
 def _check_paths_exist(locations: list) -> list[bool]:
-    """Check online status for a list of location dicts (runs in thread).
+    """Batch-check online status for multiple locations in a single thread call.
 
-    Each location must have at least 'id' and 'root_path'.
-    All locations are agent-backed — delegates to agent_online_check.
+    Args:
+        locations: List of location row dicts, each with at least 'id' and
+            'root_path' keys.
+
+    Returns:
+        list[bool]: Parallel list of online flags, one per input location.
+
+    Notes:
+        Runs in asyncio.to_thread. Delegates each check to agent_online_check().
+        Called by get_tree() and get_shallow_tree().
     """
     from file_hunter.services.online_check import agent_online_check
 
@@ -405,7 +452,20 @@ def _check_paths_exist(locations: list) -> list[bool]:
 
 
 def _build_folder_tree(folders, parent_id):
-    """Build nested tree from flat folder list — O(n) via parent_id index."""
+    """Build a nested tree structure from a flat list of folder dicts in O(n).
+
+    Args:
+        folders: List of folder dicts with id, parent_id, name keys.
+        parent_id: The parent_id to use as the tree root (None for root-level).
+
+    Returns:
+        list[dict]: Nested tree nodes with id (prefixed "fld-N"), type, label,
+        and children lists.
+
+    Notes:
+        Pre-groups folders by parent_id for O(1) lookup per node. Called by
+        _build_tree_sync() for the full tree view.
+    """
     # Pre-group folders by parent_id so each lookup is O(1)
     by_parent = {}
     for f in folders:
@@ -432,13 +492,32 @@ def _build_folder_tree(folders, parent_id):
 async def create_folder(db, parent_id: str, name: str) -> dict:
     """Create a new folder on disk and in the catalog.
 
-    parent_id is 'loc-N' or 'fld-N'.
+    Args:
+        db: Write-capable DB connection (inside db_writer context).
+        parent_id: Prefixed parent identifier — "loc-N" for location root
+            or "fld-N" for a subfolder.
+        name: Folder name (must not contain / or \\).
+
+    Returns:
+        dict: New tree node with id ("fld-N"), type, label, hasChildren,
+        totalSize, parentId, and locationId.
+
+    Raises:
+        ValueError: If parent not found, location offline, invalid name,
+            or name collision on disk or in the catalog.
+
+    Side effects:
+        Creates the directory on disk via fs.dir_create. Inserts a row into
+        the folders table. Commits the transaction.
+
+    Notes:
+        Called from the create-folder HTTP endpoint.
     """
     from file_hunter.services import fs
 
     # Resolve parent to get location info and path
-    if parent_id.startswith("loc-"):
-        loc_id = int(parent_id[4:])
+    if str(parent_id).startswith("loc-"):
+        loc_id = parse_location_id(parent_id)
         row = await db.execute_fetchall(
             "SELECT id, root_path FROM locations WHERE id = ?", (loc_id,)
         )
@@ -447,8 +526,8 @@ async def create_folder(db, parent_id: str, name: str) -> dict:
         root_path = row[0]["root_path"]
         parent_fld_id = None
         parent_rel = ""
-    elif parent_id.startswith("fld-"):
-        fld_id = int(parent_id[4:])
+    elif str(parent_id).startswith("fld-"):
+        fld_id = parse_folder_id(parent_id)
         row = await db.execute_fetchall(
             """SELECT f.id, f.location_id, f.rel_path, l.root_path
                FROM folders f JOIN locations l ON l.id = f.location_id
@@ -512,6 +591,25 @@ async def create_folder(db, parent_id: str, name: str) -> dict:
 
 
 async def create_location(db, name: str, root_path: str, agent_id: int = None) -> dict:
+    """Insert a new location into the catalog and return its tree node.
+
+    Args:
+        db: Write-capable DB connection (inside db_writer context).
+        name: Display name for the location.
+        root_path: Absolute path on the agent filesystem.
+        agent_id: Optional agent ID to associate with this location.
+
+    Returns:
+        dict: Tree node with id ("loc-N"), type, label, online flag, and
+        empty children list.
+
+    Side effects:
+        Writes to locations table. Registers the agent-location mapping in
+        online_check state. Commits the transaction.
+
+    Notes:
+        Called from the add-location HTTP endpoint and agent sync.
+    """
     now = datetime.now().isoformat(timespec="seconds")
     cursor = await db.execute(
         "INSERT INTO locations (name, root_path, agent_id, date_added) VALUES (?, ?, ?, ?)",
@@ -537,6 +635,23 @@ async def create_location(db, name: str, root_path: str, agent_id: int = None) -
 
 
 async def rename_location(db, loc_id: int, new_name: str) -> dict | None:
+    """Rename an existing location in the catalog.
+
+    Args:
+        db: Write-capable DB connection (inside db_writer context).
+        loc_id: Numeric location ID.
+        new_name: New display name.
+
+    Returns:
+        dict | None: Updated node dict with id, label, online flag. None if
+        the location does not exist.
+
+    Side effects:
+        Writes to locations table. Commits the transaction.
+
+    Notes:
+        Called from the rename-location HTTP endpoint.
+    """
     row = await db.execute_fetchall(
         "SELECT id, root_path FROM locations WHERE id = ?", (loc_id,)
     )
@@ -553,7 +668,22 @@ async def rename_location(db, loc_id: int, new_name: str) -> dict | None:
 
 
 async def update_schedule(db, loc_id: int, enabled: bool, days: list[int], time: str):
-    """Update the scan schedule columns for a location."""
+    """Update the scan schedule columns for a location.
+
+    Args:
+        db: Write-capable DB connection (inside db_writer context).
+        loc_id: Numeric location ID.
+        enabled: Whether the schedule is active.
+        days: List of weekday ints (0=Monday .. 6=Sunday).
+        time: Time string in "HH:MM" format.
+
+    Side effects:
+        Writes scan_schedule_enabled, scan_schedule_days, scan_schedule_time
+        on the locations row. Commits the transaction.
+
+    Notes:
+        Called from the schedule HTTP endpoint.
+    """
     enabled_int = 1 if enabled else 0
     days_str = ",".join(str(d) for d in sorted(days))
     await db.execute(
@@ -724,10 +854,33 @@ async def _cross_location_dir_move(
 ):
     """Copy a folder tree between agents, then delete the source.
 
-    Creates the destination folder structure via fs.dir_create, copies every
-    file via fs.copy_file (streaming, 1MB chunks, constant memory), then
-    deletes the source tree via fs.dir_delete after ALL copies succeed.
-    On failure the partial destination is cleaned up and the source is untouched.
+    Args:
+        db: Read-capable DB connection for querying file rows.
+        fld: Dict of the source folder row (id, name, rel_path, etc.).
+        src_abs: Absolute path of the source folder on the source agent.
+        dest_abs: Absolute path of the destination folder on the dest agent.
+        src_loc_id: Source location ID.
+        dest_loc_id: Destination location ID.
+        old_prefix: Source rel_path prefix for path rewriting.
+        new_prefix: Destination rel_path prefix for path rewriting.
+        dest_root: Destination location root_path.
+        desc_folder_rows: Pre-fetched descendant folder rows (id, rel_path).
+
+    Raises:
+        Exception: Re-raised from fs operations after cleaning up the partial
+            destination. Source is left untouched on failure.
+
+    Side effects:
+        Creates folders and copies files on the destination agent via fs.
+        Deletes the source tree on the source agent after all copies succeed.
+        Registers/unregisters activity and broadcasts batch_move_progress
+        events to the UI.
+
+    Notes:
+        Creates the destination folder structure via fs.dir_create, copies every
+        file via fs.copy_file (streaming, 1MB chunks, constant memory), then
+        deletes the source tree via fs.dir_delete after ALL copies succeed.
+        Called only by move_folder() for cross-location moves.
     """
     import logging
 
@@ -821,7 +974,33 @@ async def _cross_location_dir_move(
 async def move_folder(
     db, folder_id: int, destination_parent_id: str = None, *, new_name: str = None
 ):
-    """Move and/or rename a folder (and its entire subtree) on disk and in the catalog."""
+    """Move and/or rename a folder (and its entire subtree) on disk and in the catalog.
+
+    Args:
+        db: Write-capable DB connection (inside db_writer context).
+        folder_id: Numeric ID of the folder to move/rename.
+        destination_parent_id: Target parent as prefixed string ("loc-N" or
+            "fld-N"), or None for rename-only.
+        new_name: New folder name, or None to keep the current name.
+
+    Returns:
+        dict: Result with id, name, old_name, renamed (bool), moved (bool).
+
+    Raises:
+        ValueError: On invalid inputs, offline locations, collisions, or
+            cycle detection (moving a folder into its own descendant).
+
+    Side effects:
+        Moves/copies files on disk via fs operations. Updates folders and files
+        tables (rel_path, full_path, location_id, parent_id). Commits the
+        transaction. Triggers post_op_stats for size recalculation and stats
+        cache invalidation.
+
+    Notes:
+        Cross-location moves are handled by _cross_location_dir_move (copy
+        then delete, with rollback on failure). Called from the move-folder
+        HTTP endpoint.
+    """
     from file_hunter.services import fs
 
     if not destination_parent_id and not new_name:
@@ -860,8 +1039,8 @@ async def move_folder(
             dest_parent_rel = parent_row[0]["rel_path"] if parent_row else ""
         else:
             dest_parent_rel = ""
-    elif destination_parent_id.startswith("loc-"):
-        dest_loc_id = int(destination_parent_id[4:])
+    elif str(destination_parent_id).startswith("loc-"):
+        dest_loc_id = parse_location_id(destination_parent_id)
         dest_row = await db.execute_fetchall(
             "SELECT id, root_path FROM locations WHERE id = ?", (dest_loc_id,)
         )
@@ -870,8 +1049,8 @@ async def move_folder(
         dest_root = dest_row[0]["root_path"]
         dest_parent_fld_id = None
         dest_parent_rel = ""
-    elif destination_parent_id.startswith("fld-"):
-        dest_fld_id = int(destination_parent_id[4:])
+    elif str(destination_parent_id).startswith("fld-"):
+        dest_fld_id = parse_folder_id(destination_parent_id)
 
         # Cycle check: destination must not be the folder itself or any descendant
         if dest_fld_id == folder_id:
@@ -1018,12 +1197,12 @@ async def move_folder(
 
     await db.commit()
 
-    from file_hunter.services.sizes import schedule_size_recalc
+    from file_hunter.helpers import post_op_stats
 
     if cross_location:
-        schedule_size_recalc(src_loc_id, dest_loc_id)
+        await post_op_stats(location_ids={src_loc_id, dest_loc_id}, source="move_folder")
     else:
-        schedule_size_recalc(src_loc_id)
+        await post_op_stats(location_ids={src_loc_id}, source="move_folder")
 
     renamed = effective_name != fld["name"]
     moved = destination_parent_id is not None

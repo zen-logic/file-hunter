@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db, open_connection, execute_write
-from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -279,7 +279,7 @@ async def run_backfill(
             await _flush_writes(pending_writes)
             pending_writes.clear()
 
-        invalidate_stats_cache()
+        await post_op_stats()
 
         cancelled = _active_backfills.get(agent_id, False)
 

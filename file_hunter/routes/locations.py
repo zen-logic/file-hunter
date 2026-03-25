@@ -12,7 +12,7 @@ from file_hunter.services.locations import (
     move_folder,
     get_treemap_children,
 )
-from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
 
 
@@ -86,7 +86,7 @@ async def add_location(request: Request):
 
     # Notify all connected browsers so they reload the tree
     await broadcast({"type": "location_changed", "action": "added", "location": loc})
-    invalidate_stats_cache()
+    await post_op_stats()
     return json_ok(loc, 201)
 
 
@@ -126,7 +126,7 @@ async def remove_location(request: Request):
             "name": location_name,
         }
     )
-    invalidate_stats_cache()
+    await post_op_stats()
 
     # Queue the purge as housekeeping — runs when system is idle
     from file_hunter.services.housekeeping import enqueue as hk_enqueue
@@ -174,7 +174,7 @@ async def update_location(request: Request):
                     "locationId": f"loc-{loc_id}",
                 }
             )
-            invalidate_stats_cache()
+            await post_op_stats()
             return json_ok({"updated": True})
 
     new_name = body.get("name", "").strip()
@@ -186,7 +186,7 @@ async def update_location(request: Request):
     await broadcast(
         {"type": "location_changed", "action": "renamed", "location": result}
     )
-    invalidate_stats_cache()
+    await post_op_stats()
     # Notify agent (if agent-backed) so its config.json stays in sync
     from file_hunter.extensions import get_location_changed
 
@@ -218,7 +218,7 @@ async def create_new_folder(request: Request):
     except ValueError as e:
         return json_error(str(e), 400)
     await broadcast({"type": "folder_created", "folder": result})
-    invalidate_stats_cache()
+    await post_op_stats()
     return json_ok(result, 201)
 
 
@@ -290,7 +290,7 @@ async def folder_move(request: Request):
     except ValueError as e:
         return json_error(str(e), 400)
 
-    invalidate_stats_cache()
+    await post_op_stats()
 
     await broadcast(
         {

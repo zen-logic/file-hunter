@@ -31,8 +31,8 @@ from file_hunter.services.scanner import (
     mark_stale_files,
     mark_stale_folders,
 )
+from file_hunter.helpers import post_op_stats
 from file_hunter.services.agent_ops import stream_tree
-from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
 
@@ -45,14 +45,45 @@ _TEMP_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "temp"
 
 
 async def run_scan(op_id: int, agent_id: int, params: dict):
-    """Execute a scan operation by consuming the agent's /tree stream.
+    """Execute a full scan or rescan for a location by consuming the agent's /tree stream.
 
-    Called by queue_manager as the "scan_dir" handler.
+    Orchestrates the entire scan lifecycle: stream capture, catalog update (ingest or
+    diff), dup candidate detection, stale marking, stats reconciliation, and cleanup.
+    Branches into two paths depending on whether the location has been scanned before:
 
-    params:
-        location_id: int
-        path: str -- root_path or scan subfolder
-        root_path: str -- location root for rel_path computation
+    - **First scan**: streams metadata+hashes into temp DB, bulk-inserts into catalog,
+      then marks stale files and runs dup processing.
+    - **Rescan**: streams metadata only into temp DB, diffs against existing catalog
+      (new/changed/stale/recovered), hashes new+changed files via agent, then runs
+      dup processing.
+
+    A concurrent ``drain_pending_hashes`` task runs alongside to process dup candidates
+    as they arrive.
+
+    Args:
+        op_id: Row ID in operation_queue for this operation. Used for crash recovery
+            (params are persisted back to the queue row).
+        agent_id: ID of the agent to stream from.
+        params: Dict containing:
+            - location_id (int): Target location.
+            - path (str, optional): Subfolder to scan. Falls back to root_path.
+            - root_path (str): Location root for rel_path computation.
+            - scan_id (int, optional): If present, resumes a previously interrupted scan.
+
+    Returns:
+        None.
+
+    Side effects:
+        - DB writes: creates/updates scans row, inserts/updates files and folders in
+          catalog, writes hashes to hashes.db, updates stats.db incrementally, persists
+          scan_id and tmp_path to operation_queue params for crash recovery.
+        - WebSocket broadcasts: scan_started, scan_progress (multiple phases),
+          scan_finalizing, scan_completed, location_children. On failure: scan_cancelled,
+          scan_interrupted, or scan_error.
+        - File I/O: creates and removes a temp SQLite DB in data/temp/.
+        - Spawns drain_pending_hashes as a concurrent asyncio task.
+
+    Called by queue_manager as the ``scan_dir`` operation handler.
     """
     location_id = params["location_id"]
     scan_path = params.get("path") or params["root_path"]
@@ -327,7 +358,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             )
         logger.info("Hash drainer finished for %s", location_name)
 
-        invalidate_stats_cache()
+        await post_op_stats()
 
         from file_hunter.stats_db import read_stats as read_stats_db
 
@@ -371,7 +402,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 "DELETE FROM pending_hashes WHERE location_id = ?",
                 (location_id,),
             )
-        invalidate_stats_cache()
+        await post_op_stats()
         await broadcast(
             {
                 "type": "scan_cancelled",
@@ -423,7 +454,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 )
         except Exception:
             pass
-        invalidate_stats_cache()
+        await post_op_stats()
         await broadcast(
             {
                 "type": "scan_error",
@@ -454,12 +485,37 @@ async def _stream_to_temp_db(
     location_name: str,
     metadata_only: bool = False,
 ) -> tuple[int, int]:
-    """Stream the agent's /tree response into a temporary SQLite DB.
+    """Stream the agent's /tree endpoint into a temporary SQLite DB for later ingest or diff.
 
-    Runs in a thread to avoid blocking the event loop with synchronous
-    SQLite writes. Returns (total_files, total_dirs).
+    Consumes the NDJSON stream from ``stream_tree()`` and writes records into a local
+    SQLite temp DB (synchronous writes — fast, no catalog lock contention). Handles
+    four record types from the agent: ``dir``, ``file``, ``phase`` (transition to hash
+    phase), and ``hash`` (partial hash results). Batches writes (5000 records) and
+    indexes the temp DB on completion for efficient ingest/diff queries.
 
-    metadata_only: if True, tells agent to skip hash phase.
+    Respects pause state via ``wait_if_paused()`` between records.
+
+    Args:
+        tmp_path: Filesystem path for the temporary SQLite DB. Any existing file at
+            this path is deleted first (stale from interrupted scans).
+        agent_id: ID of the agent to stream from.
+        root_path: Location root path, passed to the agent's /tree endpoint.
+        prefix: Subfolder prefix for subfolder scans (None for full scans).
+        location_id: Target location ID (used for WebSocket broadcasts).
+        location_name: Human-readable location name (used for broadcasts and logging).
+        metadata_only: If True, agent skips the hash phase and only streams D+F records.
+            Used by rescan path (hashing is done separately in _diff_and_update).
+
+    Returns:
+        tuple[int, int]: (total_files, total_dirs) captured in the temp DB.
+
+    Side effects:
+        - File I/O: creates a SQLite DB at tmp_path with ``files`` and ``dirs`` tables.
+        - WebSocket broadcasts: periodic scan_progress messages (every 2 seconds) with
+          scanning phase (files/dirs found) or hashing phase (hashes done/total).
+        - No catalog writes — all data stays in the temp DB.
+
+    Called by run_scan for both first-scan and rescan paths.
     """
     # Remove stale temp file from interrupted scans
     if os.path.exists(tmp_path):
@@ -628,10 +684,37 @@ async def _bulk_ingest(
     location_name: str,
     total_files: int,
 ) -> int:
-    """Bulk ingest files from temp DB into catalog.
+    """Bulk-ingest all files from the temp DB into the catalog (first-scan path).
 
-    Uses batched INSERT ... ON CONFLICT DO UPDATE, same pattern as import.
-    Returns count of new files.
+    Reads files from the temp DB in batches of INGEST_BATCH_SIZE, inserts them into
+    the catalog via INSERT ... ON CONFLICT DO UPDATE (upsert), and registers hash
+    entries in hashes.db. Builds the folder hierarchy first, then ingests files with
+    incremental stats updates via ``apply_file_deltas`` after each batch.
+
+    New file count is determined by comparing non-stale file counts before and after
+    ingest (not by tracking INSERT vs UPDATE, since upserts blur the distinction).
+
+    Args:
+        tmp_path: Path to the temp SQLite DB produced by _stream_to_temp_db.
+        location_id: Target location ID.
+        scan_id: Current scan row ID (stamped on every file as scan_id).
+        root_path: Location root path for constructing full_path values.
+        now_iso: ISO timestamp for date_cataloged and date_last_seen.
+        location_name: Human-readable name for logging and broadcasts.
+        total_files: Total file count from temp DB (used for progress denominator).
+
+    Returns:
+        int: Number of new (previously uncatalogued) files added.
+
+    Side effects:
+        - DB writes: upserts files into catalog via db_writer, creates folder hierarchy
+          via ensure_folder_hierarchy, inserts/updates file_hashes in hashes.db.
+        - Stats: calls apply_file_deltas on stats.db after each batch (incremental,
+          no full recalc).
+        - WebSocket broadcasts: periodic scan_progress (cataloging phase) with live
+          file counts and global totals every 2 seconds.
+
+    Called by run_scan on the first-scan path only (not rescan).
     """
     tmp_db = sqlite3.connect(tmp_path)
     tmp_db.row_factory = sqlite3.Row
@@ -872,15 +955,54 @@ async def _diff_and_update(
     total_files: int,
     scan_prefix: str | None = None,
 ) -> tuple[int, int, int]:
-    """Diff temp DB against catalog and apply only changes.
+    """Diff the temp DB against the existing catalog and apply only the delta (rescan path).
 
-    Uses ATTACH DATABASE to JOIN temp DB and catalog in a single query.
-    Only new/changed files are written. Missing files are marked stale.
+    Uses ATTACH DATABASE on a dedicated read connection to efficiently JOIN the temp DB
+    against the catalog in SQL, identifying four categories of files:
+    - **New**: present in temp DB but absent from catalog.
+    - **Changed**: present in both but size or mtime differs.
+    - **Stale**: present in catalog but absent from temp DB (scoped to scan_prefix).
+    - **Recovered**: marked stale in catalog but found again on disk.
 
-    When scan_prefix is set (subfolder scan), stale detection is scoped
-    to files within that prefix only.
+    After the diff, applies changes through db_writer in batches of 5000:
+    stale marking, recovery (un-stale), scan_id stamping on seen files, new file
+    insertion, changed file updates, and hash clearing for changed files. Then
+    requests hash_partial from the agent for new+changed files (batched by bytes)
+    and writes results to hashes.db.
 
-    Returns (new_count, changed_count, stale_count).
+    Stats are updated incrementally via apply_file_deltas for each category
+    (stale removed, new added, changed = remove old + add new).
+
+    Args:
+        tmp_path: Path to the temp SQLite DB from _stream_to_temp_db.
+        location_id: Target location ID.
+        scan_id: Current scan row ID.
+        root_path: Location root path for full_path construction and rel_path hashing.
+        now_iso: ISO timestamp for date_last_seen.
+        agent_id: Agent ID for hash_partial_batch requests.
+        location_name: Human-readable name for logging and broadcasts.
+        total_files: Total files captured in temp DB (for logging context).
+        scan_prefix: If set, scopes stale/recovery detection to this subfolder.
+            None for full-location rescans.
+
+    Returns:
+        tuple[int, int, int, int]: (new_count, changed_count, stale_count,
+        recovered_count). Note: the type annotation on the function signature says
+        tuple[int, int, int] but actually returns four values.
+
+    Side effects:
+        - DB writes: updates stale flags, scan_id, date_last_seen on catalog files;
+          inserts new files; updates changed files; creates folder hierarchy; marks
+          stale folders. Writes hash_partial values to hashes.db. Clears hashes for
+          changed files.
+        - Stats: incremental deltas via apply_file_deltas for stale removals, new
+          additions, and changed file size adjustments.
+        - WebSocket broadcasts: scan_progress (comparing, cataloging, hashing phases),
+          location_children at completion.
+        - Opens a dedicated read connection (open_connection) for ATTACH queries —
+          does not use the shared reader.
+
+    Called by run_scan on the rescan path only.
     """
     from file_hunter.db import open_connection
     from file_hunter.services.agent_ops import hash_partial_batch

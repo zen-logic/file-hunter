@@ -5,6 +5,13 @@ import os
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db
+from file_hunter.helpers import (
+    get_effective_hash,
+    parse_folder_id,
+    parse_prefixed_id,
+    post_op_stats,
+    resolve_target,
+)
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -15,6 +22,17 @@ _active_consolidations: set[str] = set()
 
 
 def is_consolidation_running(hash_value: str) -> bool:
+    """Check whether a consolidation is already in progress for a given file hash.
+
+    Args:
+        hash_value: The effective hash (hash_strong or hash_fast) to check.
+
+    Returns:
+        True if a consolidation task is currently running for this hash.
+
+    Called by:
+        routes/consolidate.py (pre-flight check before launching a task).
+    """
     return hash_value in _active_consolidations
 
 
@@ -26,14 +44,53 @@ async def run_consolidation(
     shared_csv_loc_id: int | None = None,
     skip_post_processing: bool = False,
 ):
-    """Main consolidation background task.
+    """Consolidate duplicate files by electing a canonical copy and stubbing the rest.
 
-    mode: 'keep_here' or 'copy_to'
-    dest_folder_id: required for copy_to (e.g. 'loc-4' or 'fld-7')
+    For 'keep_here' mode, the selected file stays in place as the canonical.
+    For 'copy_to' mode, the selected file is copied to a destination folder,
+    verified by hash, and a new DB record is created there. In both modes,
+    every other copy of the same hash is replaced on disk with a .moved stub
+    and its DB record is updated accordingly. Offline or missing copies are
+    queued in consolidation_jobs for later processing.
 
-    Reads via read_db(), writes via db_writer(). No owned connection.
+    Args:
+        file_id: The DB id of the file chosen as the canonical copy.
+        mode: 'keep_here' (leave canonical where it is) or 'copy_to' (copy
+            canonical to dest_folder_id first).
+        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') of the destination.
+            Required for 'copy_to', ignored for 'keep_here'.
+        shared_csv_path: If set, append to this shared result-log CSV instead
+            of creating a new one. Used by run_batch_consolidation.
+        shared_csv_loc_id: Location id for the shared CSV. Required when
+            shared_csv_path is set.
+        skip_post_processing: If True, skip dup-count recalculation and
+            stats refresh. Used by run_batch_consolidation which does a
+            single post-processing pass at the end.
+
+    Returns:
+        None.
+
+    Side effects:
+        - DB writes: updates file records to .moved stubs, inserts canonical
+          record (copy_to), inserts .sources record, inserts consolidation_jobs
+          for offline copies. Writes via db_writer().
+        - Hashes DB: removes hashes for stubbed files, inserts hashes for new
+          canonical (copy_to). Via hashes_writer().
+        - Stats DB: adjusts folder/location stats for every stubbed file.
+        - File I/O: copies file (copy_to), writes .moved stubs, writes
+          .sources metadata file, deletes original files via agent fs calls.
+        - Broadcasts: consolidate_started, consolidate_progress,
+          consolidate_completed, consolidate_error via WebSocket.
+        - Result log: creates or appends to a CSV operation log.
+        - Concurrency guard: adds/removes effective_hash in
+          _active_consolidations.
+        - Post-processing: recalculates dup counts and location stats unless
+          skip_post_processing is True.
+
+    Called by:
+        routes/consolidate.py (single file, via asyncio.create_task),
+        run_batch_consolidation (batch, with shared CSV and deferred post-processing).
     """
-    hash_strong = None
     effective_hash = None
     filename = None
     stubs_written = 0
@@ -63,13 +120,7 @@ async def run_consolidation(
         filename = selected["filename"]
         selected_loc_id = selected["location_id"]
 
-        from file_hunter.hashes_db import get_file_hashes as _gfh
-
-        _h = (await _gfh([file_id])).get(file_id, {})
-        hash_strong = _h.get("hash_strong")
-        hash_fast = _h.get("hash_fast")
-        effective_hash = hash_strong or hash_fast
-        hash_col = "hash_strong" if hash_strong else "hash_fast"
+        effective_hash, hash_col = await get_effective_hash(file_id)
 
         if not effective_hash:
             await broadcast(
@@ -306,8 +357,9 @@ async def run_consolidation(
             if mode == "keep_here":
                 csv_folder_id = selected.get("folder_id")
             elif mode == "copy_to":
-                if dest_folder_id.startswith("fld-"):
-                    csv_folder_id = int(dest_folder_id[4:])
+                kind, _ = parse_prefixed_id(dest_folder_id)
+                if kind == "fld":
+                    csv_folder_id = parse_folder_id(dest_folder_id)
         else:
             csv_path = shared_csv_path
             csv_loc_id = shared_csv_loc_id
@@ -535,25 +587,15 @@ async def run_consolidation(
             }
         )
         if not skip_post_processing:
-            from file_hunter.services.stats import invalidate_stats_cache
-
-            invalidate_stats_cache()
-
-            from file_hunter.services.sizes import recalculate_location_sizes
-
-            affected_loc_ids = {c["location_id"] for c in all_copies}
-            for lid in affected_loc_ids:
-                await recalculate_location_sizes(lid)
-
-            from file_hunter.services.dup_counts import recalculate_dup_counts
-
             recalc_strong = set()
             recalc_fast = set()
             if selected.get("hash_strong"):
                 recalc_strong.add(selected["hash_strong"])
             if hash_col == "hash_fast":
                 recalc_fast.add(effective_hash)
-            await recalculate_dup_counts(
+            affected_loc_ids = {c["location_id"] for c in all_copies}
+            await post_op_stats(
+                location_ids=affected_loc_ids,
                 strong_hashes=recalc_strong or None,
                 fast_hashes=recalc_fast or None,
                 source=f"consolidate {filename}",
@@ -579,7 +621,29 @@ async def run_consolidation(
 async def run_batch_consolidation(
     file_ids: list[int], mode: str, dest_folder_id: str | None
 ):
-    """Run consolidation for multiple files sequentially in the background."""
+    """Run consolidation for multiple files sequentially, sharing a single result log.
+
+    Creates a shared CSV result log, then calls run_consolidation for each file
+    with skip_post_processing=True. After all files are processed, performs a
+    single dup-count recalculation and stats refresh for the batch.
+
+    Args:
+        file_ids: List of DB file ids to consolidate (each becomes a canonical).
+        mode: 'keep_here' or 'copy_to' (passed through to run_consolidation).
+        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') for copy_to mode.
+
+    Returns:
+        None.
+
+    Side effects:
+        - All side effects of run_consolidation (per file).
+        - Creates a shared CSV result log and adds it to the file catalog.
+        - Recalculates dup counts once for the entire batch.
+        - Broadcasts batch_consolidate_completed with totals.
+
+    Called by:
+        routes/consolidate.py (via asyncio.create_task).
+    """
     from file_hunter.services.op_result_log import (
         create_log,
         add_to_catalog,
@@ -594,8 +658,9 @@ async def run_batch_consolidation(
             d, lid = await _resolve_folder_path_with_loc(db, dest_folder_id)
         dest_dir = d
         dest_loc_id = lid
-        if dest_folder_id.startswith("fld-"):
-            csv_folder_id = int(dest_folder_id[4:])
+        kind, _ = parse_prefixed_id(dest_folder_id)
+        if kind == "fld":
+            csv_folder_id = parse_folder_id(dest_folder_id)
 
     if not dest_dir and file_ids:
         # keep_here mode — resolve from first file
@@ -636,16 +701,12 @@ async def run_batch_consolidation(
     await add_to_catalog(csv_path, dest_loc_id, csv_folder_id)
 
     # Post-processing once for the entire batch
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
-
-    from file_hunter.services.sizes import recalculate_location_sizes
-
-    await recalculate_location_sizes(dest_loc_id)
-
     from file_hunter.services.dup_counts import recalculate_dup_counts
 
+    await post_op_stats(
+        location_ids={dest_loc_id},
+        source=f"batch consolidate ({len(file_ids)} files)",
+    )
     await recalculate_dup_counts(source=f"batch consolidate ({len(file_ids)} files)")
 
     await broadcast(
@@ -659,10 +720,31 @@ async def run_batch_consolidation(
 
 
 async def drain_pending_jobs(location_id: int, root_path: str):
-    """Drain queued consolidation jobs for a location that's now online.
+    """Process pending consolidation_jobs for a location that has come back online.
 
-    Called when an agent reconnects and its locations come online.
-    Reads via read_db(), writes via db_writer().
+    Iterates all 'pending' jobs for the given location. For each job, if the
+    source file still exists on disk, writes a .moved stub and updates the DB
+    record (or deletes it if no record found). If the source file is already
+    gone, marks the job as completed. Errors are silently swallowed per-job.
+
+    Args:
+        location_id: The DB id of the location whose jobs should be drained.
+        root_path: The filesystem root path of the location (used for
+            online-check context, not directly in queries).
+
+    Returns:
+        None.
+
+    Side effects:
+        - DB writes: updates file records to .moved stubs or deletes them,
+          marks consolidation_jobs as 'completed'. Via db_writer().
+        - Hashes DB: removes hashes for stubbed/deleted files.
+        - Stats DB: adjusts folder/location stats for affected files.
+        - File I/O: writes .moved stub files via agent fs calls.
+        - Broadcasts: consolidate_queue_drained with job count.
+
+    Called by:
+        ws/agent.py when an agent reconnects and its locations come online.
     """
     async with read_db() as db:
         rows = await db.execute_fetchall(
@@ -794,59 +876,43 @@ async def drain_pending_jobs(location_id: int, root_path: str):
 
 
 async def _resolve_folder_path(db, folder_id: str) -> str | None:
-    """Resolve a loc-N or fld-N identifier to an absolute filesystem path."""
-    if folder_id.startswith("loc-"):
-        loc_id = int(folder_id[4:])
-        rows = await db.execute_fetchall(
-            "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
-        )
-        return rows[0]["root_path"] if rows else None
+    """Resolve a prefixed folder identifier to an absolute filesystem path.
 
-    elif folder_id.startswith("fld-"):
-        fld_id = int(folder_id[4:])
-        rows = await db.execute_fetchall(
-            """SELECT f.rel_path, l.root_path
-               FROM folders f
-               JOIN locations l ON l.id = f.location_id
-               WHERE f.id = ?""",
-            (fld_id,),
-        )
-        if not rows:
-            return None
-        return os.path.join(rows[0]["root_path"], rows[0]["rel_path"])
+    Args:
+        db: An open aiosqlite read connection.
+        folder_id: Prefixed identifier ('loc-N' or 'fld-N').
 
-    return None
+    Returns:
+        The absolute path as a str, or None if the identifier cannot be resolved.
+
+    Called by:
+        Not currently referenced (superseded by _resolve_folder_path_with_loc).
+    """
+    target = await resolve_target(db, folder_id)
+    return target["abs_path"] if target else None
 
 
 async def _resolve_folder_path_with_loc(
     db, folder_id: str
 ) -> tuple[str | None, int | None]:
-    """Resolve a loc-N or fld-N to (abs_path, location_id)."""
-    if folder_id.startswith("loc-"):
-        loc_id = int(folder_id[4:])
-        rows = await db.execute_fetchall(
-            "SELECT id, root_path FROM locations WHERE id = ?", (loc_id,)
-        )
-        if not rows:
-            return None, None
-        return rows[0]["root_path"], rows[0]["id"]
+    """Resolve a prefixed folder identifier to its absolute path and location id.
 
-    elif folder_id.startswith("fld-"):
-        fld_id = int(folder_id[4:])
-        rows = await db.execute_fetchall(
-            """SELECT f.rel_path, f.location_id, l.root_path
-               FROM folders f
-               JOIN locations l ON l.id = f.location_id
-               WHERE f.id = ?""",
-            (fld_id,),
-        )
-        if not rows:
-            return None, None
-        return os.path.join(rows[0]["root_path"], rows[0]["rel_path"]), rows[0][
-            "location_id"
-        ]
+    Args:
+        db: An open aiosqlite read connection.
+        folder_id: Prefixed identifier ('loc-N' or 'fld-N').
 
-    return None, None
+    Returns:
+        Tuple of (abs_path, location_id), or (None, None) if not found.
+
+    Called by:
+        run_consolidation (to resolve copy_to destination),
+        run_batch_consolidation (to resolve shared CSV destination),
+        routes/consolidate.py (pre-flight destination validation).
+    """
+    target = await resolve_target(db, folder_id)
+    if not target:
+        return None, None
+    return target["abs_path"], target["location_id"]
 
 
 async def _ensure_canonical_record(
@@ -856,27 +922,44 @@ async def _ensure_canonical_record(
     source: dict,
     now_iso: str,
 ) -> int:
-    """Insert a file record for the canonical copy at its destination."""
+    """Insert a files-table record for the newly copied canonical file at its destination.
+
+    Resolves the destination folder hierarchy, classifies the file type,
+    stats the file on disk for size, inserts into the files table, and
+    registers hashes in hashes.db.
+
+    Args:
+        canonical_path: Absolute path where the canonical copy now lives.
+        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') of the destination.
+        dest_loc_id: Location id of the destination (for fs calls).
+        source: Dict of the original file's metadata (filename, hash_fast,
+            hash_strong, description, tags, dates, file_size, etc.).
+        now_iso: ISO-8601 UTC timestamp for date_cataloged / date_last_seen.
+
+    Returns:
+        The new file id (int), or -1 if the destination could not be resolved.
+
+    Side effects:
+        - DB write: INSERT into files table via db_writer().
+        - Hashes DB: INSERT/upsert into file_hashes via hashes_writer().
+        - File I/O: stats the canonical file via fs.file_stat.
+
+    Called by:
+        run_consolidation (copy_to mode only, after file copy and verification).
+    """
     from file_hunter.core import classify_file
 
     # Determine location_id and folder_id from dest_folder_id
-    if dest_folder_id.startswith("loc-"):
-        location_id = int(dest_folder_id[4:])
-        folder_id = None
-        rel_path = source["filename"]
-    elif dest_folder_id.startswith("fld-"):
-        fld_id = int(dest_folder_id[4:])
-        async with read_db() as db:
-            rows = await db.execute_fetchall(
-                "SELECT id, location_id, rel_path FROM folders WHERE id = ?", (fld_id,)
-            )
-        if not rows:
-            return -1
-        folder_id = fld_id
-        location_id = rows[0]["location_id"]
-        rel_path = os.path.join(rows[0]["rel_path"], source["filename"])
-    else:
+    async with read_db() as db:
+        target = await resolve_target(db, dest_folder_id)
+    if not target:
         return -1
+    location_id = target["location_id"]
+    folder_id = target["folder_id"]
+    if target["kind"] == "loc":
+        rel_path = source["filename"]
+    else:
+        rel_path = os.path.join(target["rel_path"], source["filename"])
 
     type_high, type_low = classify_file(source["filename"])
     st = await fs.file_stat(canonical_path, dest_loc_id)
@@ -931,7 +1014,29 @@ async def _ensure_canonical_record(
 async def _insert_stub_record(
     stub_path: str, sibling_file_id: int, location_id: int, now_iso: str
 ):
-    """Insert a DB record for a .moved or .sources stub file alongside its sibling."""
+    """Insert a DB record for a .sources metadata file alongside its sibling file.
+
+    Looks up the sibling file's location/folder/rel_path to derive the stub's
+    placement, stats the stub on disk, and inserts a new files record with
+    file_type 'text/sources'. Uses INSERT OR IGNORE to avoid duplicates.
+
+    Args:
+        stub_path: Absolute path to the .sources file on disk.
+        sibling_file_id: DB id of the file this stub sits beside (used to
+            derive location_id, folder_id, and relative path).
+        location_id: Location id for the fs.file_stat call.
+        now_iso: ISO-8601 UTC timestamp for all date columns.
+
+    Returns:
+        None. Silently returns if the sibling is not found or the stub file
+        does not exist on disk.
+
+    Side effects:
+        - DB write: INSERT OR IGNORE into files table via db_writer().
+
+    Called by:
+        run_consolidation (to catalog the .sources file next to the canonical).
+    """
     async with read_db() as db:
         # Get location/folder info from the sibling file record
         rows = await db.execute_fetchall(

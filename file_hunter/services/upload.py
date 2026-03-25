@@ -269,9 +269,9 @@ async def run_upload(
             "duplicates": duplicates,
         }
     )
-    from file_hunter.services.stats import invalidate_stats_cache
+    from file_hunter.helpers import post_op_stats
 
-    invalidate_stats_cache()
+    await post_op_stats()
 
     from file_hunter.services.sizes import recalculate_location_sizes
 

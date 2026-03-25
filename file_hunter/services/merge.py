@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from file_hunter_core.classify import classify_file
 from file_hunter.db import db_writer, read_db
+from file_hunter.helpers import parse_prefixed_id
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -17,24 +18,59 @@ _merge_cancel_requested: bool = False
 
 
 def is_merge_running() -> bool:
+    """Check whether a merge operation is currently in progress.
+
+    Returns:
+        True if a merge task is running.
+
+    Called by:
+        routes/merge.py (to reject concurrent merges and to validate cancel requests).
+    """
     return _merge_running
 
 
 def request_merge_cancel():
+    """Signal the running merge task to stop after the current file.
+
+    Sets a module-level flag that run_merge checks at the top of each
+    per-file iteration. The merge will finish the file it is currently
+    processing, then exit cleanly with a merge_cancelled broadcast.
+
+    Returns:
+        None.
+
+    Side effects:
+        Sets _merge_cancel_requested to True.
+
+    Called by:
+        routes/merge.py (cancel endpoint).
+    """
     global _merge_cancel_requested
     _merge_cancel_requested = True
 
 
 async def resolve_merge_target(db, target_id: str) -> dict | None:
-    """Resolve loc-N or fld-N to target info dict.
+    """Resolve a prefixed location/folder identifier to a target info dict.
 
-    Returns { label, abs_path, root_path, location_id, folder_id, rel_prefix }
-    or None if not found.
+    For 'loc-N', returns the location root. For 'fld-N', returns the folder
+    joined to its location root, with the folder's rel_path as rel_prefix.
+
+    Args:
+        db: An open aiosqlite read connection.
+        target_id: Prefixed identifier ('loc-N' or 'fld-N').
+
+    Returns:
+        Dict with keys { label, abs_path, root_path, location_id, folder_id,
+        rel_prefix }, or None if the identifier cannot be resolved.
+
+    Called by:
+        routes/merge.py (to resolve source and destination before launching merge).
     """
-    if target_id.startswith("loc-"):
-        loc_id = int(target_id[4:])
+    kind, num_id = parse_prefixed_id(target_id)
+
+    if kind == "loc":
         rows = await db.execute_fetchall(
-            "SELECT id, name, root_path FROM locations WHERE id = ?", (loc_id,)
+            "SELECT id, name, root_path FROM locations WHERE id = ?", (num_id,)
         )
         if not rows:
             return None
@@ -48,14 +84,13 @@ async def resolve_merge_target(db, target_id: str) -> dict | None:
             "rel_prefix": "",
         }
 
-    elif target_id.startswith("fld-"):
-        fld_id = int(target_id[4:])
+    elif kind == "fld":
         rows = await db.execute_fetchall(
             """SELECT f.id, f.name, f.rel_path, f.location_id, l.name as loc_name, l.root_path
                FROM folders f
                JOIN locations l ON l.id = f.location_id
                WHERE f.id = ?""",
-            (fld_id,),
+            (num_id,),
         )
         if not rows:
             return None
@@ -73,9 +108,51 @@ async def resolve_merge_target(db, target_id: str) -> dict | None:
 
 
 async def run_merge(source_id, source_info, destination_id, dest_info):
-    """Main merge background task.
+    """Merge source location/folder into destination, copying unique files and stubbing duplicates.
 
-    Reads via read_db(), writes via db_writer(). No owned connection.
+    Loads all non-stub files from the source, builds an O(1) hash index of the
+    destination, then iterates each source file:
+    - If already present at destination (by effective hash), the source is
+      replaced with a .moved stub and a .sources metadata entry is written
+      at the destination.
+    - If unique, the file is copied to the destination (preserving directory
+      structure), hash-verified, registered in the DB and hashes.db, then
+      the source is stubbed.
+    - Files that are missing on disk or fail hashing are skipped.
+
+    Supports cancellation via request_merge_cancel(). Progress is broadcast
+    at 500ms intervals to avoid flooding the WebSocket.
+
+    Args:
+        source_id: Prefixed identifier ('loc-N' or 'fld-N') of the source.
+        source_info: Dict from resolve_merge_target for the source.
+        destination_id: Prefixed identifier ('loc-N' or 'fld-N') of the
+            destination.
+        dest_info: Dict from resolve_merge_target for the destination.
+
+    Returns:
+        None.
+
+    Side effects:
+        - DB writes: inserts new file records at destination, updates source
+          records to .moved stubs, deletes conflicting stub records. Via
+          db_writer().
+        - Hashes DB: inserts hashes for copied files, removes hashes for
+          stubbed files, updates hash_fast for unhashed source files.
+        - Stats DB: adjusts folder/location stats for every copied/stubbed file.
+        - File I/O: copies files, writes .moved stubs and .sources metadata,
+          creates directories, hash-verifies copies — all via agent fs calls.
+        - Broadcasts: merge_started, merge_progress, merge_completed,
+          merge_cancelled, merge_error via WebSocket.
+        - Result log: creates a CSV operation log at destination and adds it
+          to the file catalog.
+        - Cache invalidation: invalidates stats cache, recalculates location
+          sizes for both source and destination, recalculates dup counts for
+          affected hashes.
+        - Module state: sets/clears _merge_running and _merge_cancel_requested.
+
+    Called by:
+        routes/merge.py (via asyncio.create_task).
     """
     global _merge_running, _merge_cancel_requested
     _merge_running = True
@@ -633,8 +710,9 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
 
 async def _load_source_files(db, source_id, source_info):
     """Load all files for the source (location or folder)."""
-    if source_id.startswith("loc-"):
-        loc_id = int(source_id[4:])
+    kind, num_id = parse_prefixed_id(source_id)
+
+    if kind == "loc":
         rows = await db.execute_fetchall(
             """SELECT fi.id, fi.filename, fi.full_path, fi.rel_path, fi.location_id,
                       fi.folder_id, fi.file_type_high, fi.file_type_low, fi.file_size,
@@ -643,10 +721,9 @@ async def _load_source_files(db, source_id, source_info):
                FROM files fi
                JOIN locations l ON l.id = fi.location_id
                WHERE fi.location_id = ? AND fi.file_type_low != 'moved' AND fi.file_type_low != 'sources'""",
-            (loc_id,),
+            (num_id,),
         )
-    elif source_id.startswith("fld-"):
-        fld_id = int(source_id[4:])
+    elif kind == "fld":
         rows = await db.execute_fetchall(
             """WITH RECURSIVE descendants(id) AS (
                    SELECT ? UNION ALL
@@ -660,7 +737,7 @@ async def _load_source_files(db, source_id, source_info):
                JOIN locations l ON l.id = fi.location_id
                WHERE fi.folder_id IN (SELECT id FROM descendants)
                  AND fi.file_type_low != 'moved' AND fi.file_type_low != 'sources'""",
-            (fld_id,),
+            (num_id,),
         )
     else:
         return []

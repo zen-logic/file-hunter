@@ -8,8 +8,8 @@ removes anything from the catalog.
 import asyncio
 import logging
 
+from file_hunter.helpers import post_op_stats
 from file_hunter.services.agent_ops import delete_agent_location, invalidate_loc_cache
-from file_hunter.services.stats import invalidate_stats_cache
 
 logger = logging.getLogger("file_hunter")
 
@@ -50,19 +50,15 @@ async def run_delete_location(op_id: int, agent_id: int | None, params: dict):
     # Step 3: Clean up catalog — batched to avoid holding writer lock
     await _purge_location_batched(location_id)
 
-    # Step 4: Submit affected hashes to coalesced writer for background recount
-    if affected_fast or affected_strong:
-        from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
-        submit_hashes_for_recalc(
-            strong_hashes=affected_strong or None,
-            fast_hashes=affected_fast or None,
-            source=f"delete location {location_name}",
-        )
+    # Step 4: Submit affected hashes + invalidate stats
+    await post_op_stats(
+        strong_hashes=affected_strong or None,
+        fast_hashes=affected_fast or None,
+        source=f"delete location {location_name}",
+    )
 
     # Step 5: Clean up in-memory state
     invalidate_loc_cache(location_id)
-    invalidate_stats_cache()
 
     logger.info(
         "Location deleted: #%d '%s'",

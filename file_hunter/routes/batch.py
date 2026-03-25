@@ -10,7 +10,7 @@ from file_hunter.services.batch import (
     batch_collect_files,
     build_streaming_zip,
 )
-from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
 
 
@@ -25,7 +25,7 @@ async def batch_delete_route(request: Request):
         return json_error("No items to delete.")
 
     result = await execute_write(batch_delete, file_ids, folder_ids, all_duplicates)
-    invalidate_stats_cache()
+    await post_op_stats()
 
     await broadcast(
         {
@@ -53,7 +53,7 @@ async def batch_move_route(request: Request):
     result = await execute_write(
         batch_move, file_ids, folder_ids, destination_folder_id
     )
-    invalidate_stats_cache()
+    await post_op_stats()
 
     await broadcast(
         {

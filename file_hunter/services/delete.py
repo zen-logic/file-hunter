@@ -2,11 +2,36 @@
 
 import os
 
+from file_hunter.helpers import get_effective_hash, post_op_stats
 from file_hunter.services import fs
 
 
 async def delete_file(db, file_id: int) -> dict:
-    """Delete a single file from disk and catalog."""
+    """Delete a single file from disk and remove it from the catalog.
+
+    If the file's location is offline, the delete is queued as a deferred op
+    and the file remains in the catalog with a pending_op indicator.
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        file_id: Numeric file ID.
+
+    Returns:
+        dict with keys: filename (str), deleted_from_disk (bool),
+        deferred (bool). Returns None if the file does not exist in the catalog.
+
+    Side effects:
+        Disk I/O — deletes the file via fs.file_delete() if location is online.
+        DB write + commit — DELETE FROM files.
+        Removes hashes from hashes.db via remove_file_hashes().
+        Updates stats_db folder/location counters via update_stats_for_files().
+        Broadcasts updated stats and dup counts via post_op_stats().
+        May queue a deferred_op if location is offline.
+
+    Called by:
+        Route handler file_delete (DELETE /api/files/{id}).
+        delete_file_and_duplicates() as fallback when no hash exists.
+    """
     row = await db.execute_fetchall(
         """SELECT f.id, f.filename, f.full_path, f.location_id,
                   f.folder_id, f.file_size, f.file_type_high, f.hidden,
@@ -43,9 +68,7 @@ async def delete_file(db, file_id: int) -> dict:
         await queue_deferred_op(db, file_id, location_id, "delete")
         await db.commit()
 
-        from file_hunter.services.stats import invalidate_stats_cache
-
-        invalidate_stats_cache()
+        await post_op_stats()
         return {"filename": filename, "deleted_from_disk": False, "deferred": True}
 
     # Online — delete from disk and catalog immediately
@@ -76,18 +99,11 @@ async def delete_file(db, file_id: int) -> dict:
         ],
     )
 
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
-
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
-    if hash_strong:
-        submit_hashes_for_recalc(
-            strong_hashes={hash_strong}, source=f"delete {filename}"
-        )
-    elif hash_fast:
-        submit_hashes_for_recalc(fast_hashes={hash_fast}, source=f"delete {filename}")
+    await post_op_stats(
+        strong_hashes={hash_strong} if hash_strong else None,
+        fast_hashes={hash_fast} if hash_fast else None,
+        source=f"delete {filename}",
+    )
 
     return {
         "filename": filename,
@@ -97,7 +113,34 @@ async def delete_file(db, file_id: int) -> dict:
 
 
 async def delete_file_and_duplicates(db, file_id: int) -> dict:
-    """Delete a file and all its duplicates (same hash_strong) from disk and catalog."""
+    """Delete a file and all its duplicates (by effective hash) from disk and catalog.
+
+    Uses hash_strong if available, otherwise hash_fast, to find all files sharing
+    the same hash across all locations. Each duplicate is deleted from disk if its
+    location is online; otherwise a deferred op is queued.
+
+    Falls back to single-file delete_file() if no hash exists for the file.
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        file_id: Numeric file ID of the primary file.
+
+    Returns:
+        dict with keys: filename (str), deleted_count (int),
+        deleted_from_disk_count (int), deferred_count (int).
+        Returns None if the primary file does not exist in the catalog.
+
+    Side effects:
+        Disk I/O — deletes each file via fs.file_delete() if location is online.
+        DB write + commit — DELETE FROM files for all online duplicates.
+        Removes hashes from hashes.db via remove_file_hashes().
+        Updates stats_db per affected location via update_stats_for_files().
+        Broadcasts updated stats and dup counts via post_op_stats().
+        May queue deferred_ops for files on offline locations.
+
+    Called by:
+        Route handler (DELETE /api/files/{id} with all_duplicates=true).
+    """
     # Look up filename from catalog, hash from hashes.db
     row = await db.execute_fetchall(
         "SELECT id, filename FROM files WHERE id = ?",
@@ -108,14 +151,7 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
 
     filename = row[0]["filename"]
 
-    from file_hunter.hashes_db import get_file_hashes
-
-    h_map = await get_file_hashes([file_id])
-    h = h_map.get(file_id, {})
-    hash_strong = h.get("hash_strong")
-    hash_fast = h.get("hash_fast")
-    effective_hash = hash_strong or hash_fast
-    hash_col = "hash_strong" if hash_strong else "hash_fast"
+    effective_hash, hash_col = await get_effective_hash(file_id)
 
     if not effective_hash:
         # No hash at all — fall back to single-file delete
@@ -195,23 +231,13 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
         for loc_id, removed_files in removed_by_loc.items():
             await update_stats_for_files(loc_id, removed=removed_files)
 
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
-
-    from file_hunter.services.sizes import schedule_size_recalc
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
     affected_loc_ids = {rec["location_id"] for rec in all_rows}
-    schedule_size_recalc(*affected_loc_ids)
-    if hash_strong:
-        submit_hashes_for_recalc(
-            strong_hashes={hash_strong}, source=f"delete {filename} + duplicates"
-        )
-    elif hash_fast:
-        submit_hashes_for_recalc(
-            fast_hashes={hash_fast}, source=f"delete {filename} + duplicates"
-        )
+    await post_op_stats(
+        location_ids=affected_loc_ids,
+        strong_hashes={effective_hash} if hash_col == "hash_strong" else None,
+        fast_hashes={effective_hash} if hash_col == "hash_fast" else None,
+        source=f"delete {filename} + duplicates",
+    )
 
     return {
         "filename": filename,
@@ -222,7 +248,32 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
 
 
 async def delete_folder(db, folder_id: int) -> dict:
-    """Delete a folder, its contents from disk, and all catalog records."""
+    """Delete a folder, all descendant files/subfolders from disk, and all catalog records.
+
+    Recursively collects all descendant folder IDs and their files. If the
+    location is online and the folder exists on disk, removes the directory tree.
+    Catalog records are deleted regardless of online status (files table first,
+    then folders via CASCADE).
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        folder_id: Numeric folder ID (unprefixed integer).
+
+    Returns:
+        dict with keys: name (str), file_count (int), deleted_from_disk (bool).
+        Returns None if the folder does not exist in the catalog.
+
+    Side effects:
+        Disk I/O — deletes the directory tree via fs.dir_delete() if online.
+        DB write + commit — DELETE FROM files, DELETE FROM folders (CASCADE).
+        Removes hashes from hashes.db via remove_file_hashes() (batched by 500).
+        Updates stats_db via update_stats_for_files() and remove_folder_stats().
+        Broadcasts updated stats and dup counts via post_op_stats().
+
+    Called by:
+        Route handler folder_delete (DELETE /api/folders/{id}).
+        batch_delete() in batch.py (per-folder).
+    """
     row = await db.execute_fetchall(
         """SELECT f.id, f.name, f.rel_path, f.location_id, l.root_path
            FROM folders f
@@ -351,17 +402,10 @@ async def delete_folder(db, folder_id: int) -> dict:
         await update_stats_for_files(location_id, removed=removed_deltas)
         await remove_folder_stats(deleted_folder_ids)
 
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
-
-    from file_hunter.services.sizes import schedule_size_recalc
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
-    schedule_size_recalc(location_id)
-    submit_hashes_for_recalc(
-        strong_hashes=affected_strong,
-        fast_hashes=affected_fast,
+    await post_op_stats(
+        location_ids={location_id},
+        strong_hashes=affected_strong or None,
+        fast_hashes=affected_fast or None,
         source=f"delete folder {name}",
     )
 

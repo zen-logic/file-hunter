@@ -42,9 +42,9 @@ async def cancel_pending_op(file_id: int):
             (file_id,),
         )
 
-    from file_hunter.services.stats import invalidate_stats_cache
+    from file_hunter.helpers import post_op_stats
 
-    invalidate_stats_cache()
+    await post_op_stats()
 
     await broadcast({"type": "deferred_op_cancelled", "fileId": file_id})
 
@@ -153,18 +153,14 @@ async def drain_pending_ops(location_id: int, root_path: str):
             failed += 1
 
     # Post-drain: recalc sizes and dup counts
-    from file_hunter.services.sizes import schedule_size_recalc
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
-    from file_hunter.services.stats import invalidate_stats_cache
+    from file_hunter.helpers import post_op_stats
 
-    schedule_size_recalc(*affected_location_ids)
-    if affected_strong or affected_fast:
-        submit_hashes_for_recalc(
-            strong_hashes=affected_strong or None,
-            fast_hashes=affected_fast or None,
-            source=f"drain_pending_ops loc#{location_id}",
-        )
-    invalidate_stats_cache()
+    await post_op_stats(
+        location_ids=affected_location_ids,
+        strong_hashes=affected_strong or None,
+        fast_hashes=affected_fast or None,
+        source=f"drain_pending_ops loc#{location_id}",
+    )
 
     logger.info(
         "Drained pending ops for location #%d: %d completed, %d failed",

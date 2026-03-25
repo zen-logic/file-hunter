@@ -12,7 +12,7 @@ import logging
 from file_hunter.core import ProgressTracker
 from file_hunter.db import db_writer, read_db
 from file_hunter.services.dup_counts import SQL_VAR_LIMIT
-from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
                 )
 
         log.info("dup_exclude %s: %d folders flagged", direction, len(folder_ids))
-        invalidate_stats_cache()
+        await post_op_stats()
 
         # --- Phase 2: Flag files ---
         # Fetch file IDs and hashes on a dedicated connection
@@ -272,7 +272,7 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
                     [flag] + batch,
                 )
 
-        invalidate_stats_cache()
+        await post_op_stats()
         await broadcast({"type": "stats_changed"})
 
         # --- Phase 3: Recount affected hashes ---
@@ -295,7 +295,7 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
                 _progress["hashes_done"] = processed
                 # Invalidate stats periodically for real-time UI
                 if processed % 1000 < SQL_VAR_LIMIT:
-                    invalidate_stats_cache()
+                    await post_op_stats()
 
             if all_strong:
                 await _batched_recalc(
@@ -314,7 +314,7 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
                     recalculated = strong_offset + processed
                     _progress["hashes_done"] = recalculated
                     if processed % 1000 < SQL_VAR_LIMIT:
-                        invalidate_stats_cache()
+                        await post_op_stats()
 
                 await _batched_recalc(
                     all_fast,
@@ -343,7 +343,7 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
         _progress["status"] = "rebuilding"
         log.info("dup_exclude: rebuilding location sizes for location %d", location_id)
         await recalculate_location_sizes(location_id)
-        invalidate_stats_cache()
+        await post_op_stats()
 
         # Clear the pending marker — operation completed successfully
         async with db_writer() as wdb:

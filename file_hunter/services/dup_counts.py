@@ -24,7 +24,7 @@ import httpx
 
 from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import hashes_writer, read_hashes, open_hashes_connection
-from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,17 @@ _active_recalc_locations: set[int] = set()
 
 
 def get_active_recalc_locations() -> set[int]:
-    """Return location IDs with active dup recalc (for late-join WS state)."""
+    """Return a copy of location IDs currently undergoing dup recalculation.
+
+    Returns:
+        set[int]: Location IDs with in-progress dup recalc. Always a copy,
+        safe to mutate.
+
+    Side effects: None (read-only).
+
+    Callers: ws/scan.py late-join handler — sends current recalc state to
+    newly connected WebSocket clients.
+    """
     return set(_active_recalc_locations)
 
 
@@ -47,16 +57,28 @@ async def _batched_recalc(
 ):
     """Recalculate dup_count for file_hashes rows sharing the given hashes.
 
-    hash_column: "hash_strong" or "hash_fast".
-    - hash_strong: UPDATE all matching rows.
-    - hash_fast: UPDATE only rows WHERE hash_strong IS NULL (verified files
-      get their dup_count from hash_strong grouping).
+    Args:
+        hashes: Iterable of hash values to recalculate counts for.
+        hash_column: "hash_strong" or "hash_fast". When "hash_fast", UPDATE
+            only targets rows WHERE hash_strong IS NULL (verified files get
+            their dup_count from hash_strong grouping, not hash_fast).
+        on_progress: Optional async callback(processed, total) invoked after
+            each write batch.
+        batch_size: Override RECALC_BATCH for write batching. 0 = use default.
 
-    Reads and writes entirely within hashes.db — no catalog contention.
-    Hashes DB only contains active, non-excluded files so no stale/dup_exclude
-    filtering needed.
+    Returns:
+        int: Number of hashes processed.
 
-    Returns the number of hashes processed.
+    Side effects:
+        - Writes dup_count to hashes.db via hashes_writer().
+        - Writes denormalized dup_count to catalog files table via db_writer().
+
+    Callers: recalculate_dup_counts(), backfill_dup_counts(),
+    dup_exclude.py toggle handler.
+
+    Implementation: reads all rows for the given hashes into a Counter on a
+    dedicated connection (temp table + JOIN), then groups hashes by target
+    dup_count value and writes in batches. Yields between batches.
     """
     from collections import Counter
 
@@ -160,21 +182,33 @@ FULL_RECOUNT_WRITE_BATCH = 5000
 async def full_dup_recount(
     *, location_id: int | None = None, on_progress=None, on_total=None
 ):
-    """Recount dup_count for all hashes. Used by catalog repair and import.
+    """Recount dup_count for every hash in hashes.db (full rebuild).
 
-    Reads and writes entirely within hashes.db — no catalog contention.
-    Hashes DB only contains active, non-excluded files so no filtering needed.
+    Args:
+        location_id: When set, only recount hashes that appear on this
+            location. The GROUP BY is scoped to find those hashes, but the
+            UPDATE targets all rows with those hashes (dups span locations).
+            None = recount all hashes globally.
+        on_progress: Optional async callback(total_processed) called after
+            each write batch.
+        on_total: Optional async callback(total) called once after both
+            GROUP BY queries complete, before writes begin.
 
-    1. One GROUP BY query per hash type on a dedicated hashes connection
-    2. Builds complete count map in memory
-    3. Writes in large batches (5,000 hashes per commit)
+    Returns:
+        int: Total number of hashes written.
 
-    location_id: when set, only recount hashes that appear on this location.
-    The GROUP BY is scoped to find those hashes, but the UPDATE targets all
-    rows with those hashes (dups span locations).
+    Side effects:
+        - Writes dup_count to hashes.db via hashes_writer().
+        - Writes denormalized dup_count to catalog files table via db_writer().
 
-    on_progress(total_processed): called after each write batch.
-    on_total(total): called once after both GROUP BY queries, before writes.
+    Callers: routes/stats.py catalog repair endpoint, routes/import_catalog.py
+    post-import recount.
+
+    Implementation: one GROUP BY per hash type (hash_strong, hash_fast) on a
+    dedicated connection. Builds a complete {hash: count} map in memory, then
+    groups hashes by dup_count value and writes in FULL_RECOUNT_WRITE_BATCH
+    (5,000) chunks. Location-scoped recounts use a temp table + JOIN to
+    identify the affected hashes, but still UPDATE globally.
     """
     scope_label = f"location #{location_id}" if location_id else "all"
 
@@ -313,13 +347,32 @@ async def full_dup_recount(
 async def optimized_dup_recount(
     *, location_id: int | None = None, on_progress=None, on_total=None
 ):
-    """Recount dup_count using two-pass: hash_strong then hash_fast.
+    """Recount dup_count using two-pass, only touching actual duplicate groups.
 
-    Reads and writes entirely within hashes.db — no catalog contention.
-    Only processes hashes with COUNT > 1 (actual duplicates).
+    Unlike full_dup_recount which processes every hash, this only writes
+    updates for hashes with COUNT > 1. Faster when most files are unique.
 
-    location_id: when set, only find hashes on this location. The UPDATE
-    still targets all rows with those hashes (dups span locations).
+    Args:
+        location_id: When set, only find hashes present on this location.
+            The UPDATE still targets all rows with those hashes (dups span
+            locations). None = all hashes globally.
+        on_progress: Optional async callback(total_processed) called after
+            each write batch.
+        on_total: Optional async callback(total) called once after discovery,
+            before writes.
+
+    Returns:
+        int: Number of duplicate hash groups written.
+
+    Side effects:
+        - Writes dup_count to hashes.db via hashes_writer().
+        - Writes denormalized dup_count to catalog files table via db_writer().
+
+    Callers: routes/stats.py catalog repair (optimized variant).
+
+    Implementation: reads all rows per hash type into a Counter on a dedicated
+    connection, filters to groups with count > 1, then writes per-hash UPDATEs
+    in SQL_VAR_LIMIT (500) batches with catalog sync.
     """
     scope_label = f"location #{location_id}" if location_id else "all"
     log.info("optimized_dup_recount (%s): finding duplicate hashes", scope_label)
@@ -444,18 +497,33 @@ def submit_hashes_for_recalc(
     source: str = "",
     location_ids: set[int] | None = None,
 ):
-    """Submit hashes to the coalesced dup recalc writer.
+    """Submit hashes to the coalesced dup recalc writer (non-blocking).
 
-    Non-blocking. Hashes are merged with any pending work and processed
-    by a single background task on one DB connection. Safe to call from
-    any context — scan loops, route handlers, backfill tasks.
+    Enqueues hashes for the single background writer task. Multiple rapid
+    submissions are coalesced into larger batches. Safe to call from any
+    async context: scan loops, route handlers, backfill tasks.
 
-    strong_hashes: hash_strong values — files grouped by hash_strong.
-    fast_hashes: hash_fast values — files grouped by hash_fast (only
-    updates files without hash_strong).
+    Args:
+        strong_hashes: hash_strong values to recalculate. Files grouped by
+            hash_strong.
+        fast_hashes: hash_fast values to recalculate. Only updates files
+            without hash_strong.
+        source: Label for logging (e.g. "hash drainer Backups").
+        location_ids: Location IDs affected by these hashes. Used to
+            broadcast dup_recalc_started immediately and to scope the
+            post-recalc location stats update.
 
-    Also updates stored locations.duplicate_count for all affected
-    locations after recalculating files.dup_count.
+    Returns:
+        None. Work is enqueued, not awaited.
+
+    Side effects:
+        - Enqueues work to _recalc_queue.
+        - Adds location_ids to _active_recalc_locations.
+        - Broadcasts "dup_recalc_started" WebSocket message immediately.
+        - Starts _dup_recalc_writer task if not already running.
+
+    Callers: helpers.py (hash ingest), hash_candidates_for_location() (small
+    files), drain_pending_hashes() (after agent hashing), hash_backfill.py.
     """
     global _recalc_queue, _writer_task
     strong = {h for h in (strong_hashes or set()) if h}
@@ -1022,7 +1090,7 @@ async def backfill_dup_counts():
                 fast_hashes, hash_column="hash_fast", on_progress=_on_progress
             )
 
-        invalidate_stats_cache()
+        await post_op_stats()
 
         log.info(
             "dup_count backfill: complete, fixed %d hashes",

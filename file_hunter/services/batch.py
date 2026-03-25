@@ -3,6 +3,7 @@
 import os
 import zipfile
 
+from file_hunter.helpers import parse_prefixed_id, post_op_stats
 from file_hunter.services.delete import delete_folder
 from file_hunter.services.files import move_file, update_file
 
@@ -10,7 +11,38 @@ from file_hunter.services.files import move_file, update_file
 async def batch_delete(
     db, file_ids: list[int], folder_ids: list[int], all_duplicates: bool = False
 ) -> dict:
-    """Delete multiple files and folders from disk and catalog."""
+    """Delete multiple files and folders from disk and catalog in a single operation.
+
+    Folders are deleted first (they may contain listed files). Files on offline
+    locations are queued as deferred ops. When all_duplicates is True, the file
+    list is expanded to include all files sharing the same hash (strong or fast)
+    before deletion.
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        file_ids: List of numeric file IDs to delete.
+        folder_ids: List of numeric folder IDs to delete.
+        all_duplicates: If True, expand file_ids to include all duplicate files
+            (by hash) from hashes.db before deleting.
+
+    Returns:
+        dict with keys: deleted_files (int), deleted_folders (int),
+        deleted_from_disk (int).
+
+    Side effects:
+        Disk I/O — deletes files/folders via fs service for online locations.
+        DB write + commit — bulk DELETE FROM files (batched by 500), folder
+        deletes via delete_folder().
+        Removes hashes from hashes.db via remove_file_hashes().
+        Updates stats_db per affected location via update_stats_for_files().
+        Registers/unregisters an activity entry for status bar progress.
+        Broadcasts batch_delete_progress and status_bar_idle via WebSocket.
+        Broadcasts updated stats and dup counts via post_op_stats().
+        May queue deferred_ops for files on offline locations.
+
+    Called by:
+        Route handler batch_delete_route (POST /api/batch/delete) via execute_write.
+    """
     from file_hunter.services import fs
     from file_hunter.hashes_db import get_file_hashes, remove_file_hashes
     from file_hunter.services.deferred_ops import queue_deferred_op
@@ -176,13 +208,7 @@ async def batch_delete(
             for loc_id, removed in removed_by_loc.items():
                 await update_stats_for_files(loc_id, removed=removed)
 
-        from file_hunter.services.stats import invalidate_stats_cache
-
-        invalidate_stats_cache()
-
-        from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
-        submit_hashes_for_recalc(
+        await post_op_stats(
             strong_hashes=affected_strong or None,
             fast_hashes=affected_fast or None,
             source=f"batch delete ({len(file_ids)} files)",
@@ -201,7 +227,33 @@ async def batch_delete(
 async def batch_move(
     db, file_ids: list[int], folder_ids: list[int], destination_folder_id: str
 ) -> dict:
-    """Move multiple files and folders to a destination."""
+    """Move multiple files and folders to a single destination folder or location root.
+
+    Folders are moved first, then files. Each move is individual (not transactional)
+    so partial success is possible — errors are collected and returned. Per-file
+    post_op_stats is skipped; a single post_op_stats runs at the end covering all
+    affected locations.
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        file_ids: List of numeric file IDs to move.
+        folder_ids: List of numeric folder IDs to move.
+        destination_folder_id: Prefixed target ID ("loc-{id}" or "fld-{id}").
+
+    Returns:
+        dict with keys: moved_files (int), moved_folders (int),
+        errors (list[str] — per-item error messages for failed moves).
+
+    Side effects:
+        Disk I/O — moves files/folders via fs service and move_file()/move_folder().
+        DB write + commit — per-item catalog updates.
+        Registers/unregisters an activity entry for status bar progress.
+        Broadcasts batch_move_progress via WebSocket per item.
+        Broadcasts updated stats via post_op_stats() once at the end.
+
+    Called by:
+        Route handler batch_move_route (POST /api/batch/move) via execute_write.
+    """
     from file_hunter.services.locations import move_folder
     from file_hunter.services.activity import (
         register as _act_reg,
@@ -298,29 +350,22 @@ async def batch_move(
     finally:
         _act_unreg(act_name)
 
-    # Post-processing once
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
-
-    from file_hunter.services.sizes import schedule_size_recalc
-
-    # Recalc all affected locations
-    if destination_folder_id.startswith("loc-"):
-        dest_loc_id = int(destination_folder_id[4:])
-    elif destination_folder_id.startswith("fld-"):
-        dest_fld_id = int(destination_folder_id[4:])
+    # Post-processing once — recalc all affected locations
+    kind, num_id = parse_prefixed_id(destination_folder_id)
+    if kind == "loc":
+        dest_loc_id = num_id
+    else:
         row = await db.execute_fetchall(
-            "SELECT location_id FROM folders WHERE id = ?", (dest_fld_id,)
+            "SELECT location_id FROM folders WHERE id = ?", (num_id,)
         )
         dest_loc_id = row[0]["location_id"] if row else None
-    else:
-        dest_loc_id = None
 
     if dest_loc_id:
         affected_loc_ids.add(dest_loc_id)
-    if affected_loc_ids:
-        schedule_size_recalc(*affected_loc_ids)
+    await post_op_stats(
+        location_ids=affected_loc_ids or None,
+        source=f"batch move ({moved_files} files, {moved_folders} folders)",
+    )
 
     return {
         "moved_files": moved_files,
@@ -332,7 +377,27 @@ async def batch_move(
 async def batch_tag(
     db, file_ids: list[int], add_tags: list[str], remove_tags: list[str]
 ) -> dict:
-    """Add/remove tags on multiple files."""
+    """Add and/or remove tags on multiple files.
+
+    Iterates each file, reads its current tags, applies additions (deduped)
+    and removals, then writes back via update_file().
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        file_ids: List of numeric file IDs to update.
+        add_tags: List of tag strings to add (skipped if already present).
+        remove_tags: List of tag strings to remove.
+
+    Returns:
+        dict with key: updated (int — number of files successfully updated).
+
+    Side effects:
+        DB write + commit — per-file UPDATE via update_file(). Files that do
+        not exist in the catalog are silently skipped.
+
+    Called by:
+        Route handler batch_tag_route (POST /api/batch/tag) via execute_write.
+    """
     updated = 0
 
     for fid in file_ids:

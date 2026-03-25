@@ -13,6 +13,7 @@ import asyncio
 import os
 import sqlite3
 
+from file_hunter.helpers import parse_prefixed_id
 from file_hunter.services.locations import check_location_online
 
 
@@ -92,16 +93,17 @@ async def _get_online_loc_filter(db, base_where, base_params):
 
 async def _ids_for_folder(db, folder_id, hidden_filter, media_type="image"):
     """All media IDs in a folder/location root on online locations."""
-    if folder_id.startswith("loc-"):
-        loc_id = int(folder_id[4:])
-        where = "f.location_id = ? AND f.folder_id IS NULL"
-        params = [loc_id]
-    elif folder_id.startswith("fld-"):
-        fld_id = int(folder_id[4:])
-        where = "f.folder_id = ?"
-        params = [fld_id]
-    else:
+    try:
+        kind, num_id = parse_prefixed_id(folder_id)
+    except ValueError:
         return []
+
+    if kind == "loc":
+        where = "f.location_id = ? AND f.folder_id IS NULL"
+        params = [num_id]
+    else:
+        where = "f.folder_id = ?"
+        params = [num_id]
 
     base_where = (
         f"{where} AND f.file_type_high = ? AND f.stale = 0{hidden_filter}"

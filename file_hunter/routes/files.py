@@ -5,6 +5,7 @@ from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import read_db, db_writer, execute_write
+from file_hunter.helpers import post_op_stats
 from file_hunter.services.files import (
     list_files,
     get_file_detail,
@@ -326,17 +327,11 @@ async def _run_group_verify(trigger_file_id: int, trigger_filename: str, hash_fa
             }
         )
 
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
-    submit_hashes_for_recalc(
+    await post_op_stats(
         strong_hashes=strong_hashes or None,
         fast_hashes={hash_fast},
         source=f"verify group ({trigger_filename})",
     )
-
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
 
     await broadcast(
         {
@@ -423,21 +418,15 @@ async def file_rehash(request: Request):
             (file_id, f["location_id"], f["file_size"], hash_partial, hash_fast),
         )
 
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
     recalc_fast = {hash_fast}
     if old_fast and old_fast != hash_fast:
         recalc_fast.add(old_fast)
     recalc_strong = {old_strong} if old_strong else None
-    submit_hashes_for_recalc(
+    await post_op_stats(
         strong_hashes=recalc_strong,
         fast_hashes=recalc_fast,
         source=f"rehash {f['filename']}",
     )
-
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
 
     async with read_db() as db:
         detail = await get_file_detail(db, file_id)
@@ -459,7 +448,6 @@ async def _run_batch_rehash(file_ids: list[int]):
     """Background task: rehash each file (partial + fast)."""
     from file_hunter.services import fs
     from file_hunter.hashes_db import hashes_writer
-    from file_hunter.services.dup_counts import submit_hashes_for_recalc
 
     affected_fast: set[str] = set()
     affected_strong: set[str] = set()
@@ -540,16 +528,11 @@ async def _run_batch_rehash(file_ids: list[int]):
         except Exception as exc:
             logger.warning("Rehash failed for file %d: %s", file_id, exc)
 
-    if affected_fast or affected_strong:
-        submit_hashes_for_recalc(
-            strong_hashes=affected_strong or None,
-            fast_hashes=affected_fast or None,
-            source=f"batch rehash ({total} files)",
-        )
-
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
+    await post_op_stats(
+        strong_hashes=affected_strong or None,
+        fast_hashes=affected_fast or None,
+        source=f"batch rehash ({total} files)",
+    )
 
     await broadcast({"type": "rehash_completed", "total": total})
 
@@ -648,9 +631,7 @@ async def file_move(request: Request):
     except ValueError as e:
         return json_error(str(e), 400)
 
-    from file_hunter.services.stats import invalidate_stats_cache
-
-    invalidate_stats_cache()
+    await post_op_stats()
 
     if result.get("deferred"):
         await broadcast(

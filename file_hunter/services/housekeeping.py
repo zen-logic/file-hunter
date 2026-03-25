@@ -319,21 +319,18 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
         )
         await db.execute("DELETE FROM locations WHERE id = ?", (location_id,))
 
-    # Submit affected hashes for dup recount
-    if affected_fast or affected_strong:
-        from file_hunter.services.dup_counts import submit_hashes_for_recalc
+    # Submit affected hashes for dup recount + invalidate stats
+    from file_hunter.helpers import post_op_stats
 
-        submit_hashes_for_recalc(
-            strong_hashes=affected_strong or None,
-            fast_hashes=affected_fast or None,
-            source=f"delete location {location_name}",
-        )
+    await post_op_stats(
+        strong_hashes=affected_strong or None,
+        fast_hashes=affected_fast or None,
+        source=f"delete location {location_name}",
+    )
 
     from file_hunter.services.agent_ops import invalidate_loc_cache
-    from file_hunter.services.stats import invalidate_stats_cache
 
     invalidate_loc_cache(location_id)
-    invalidate_stats_cache()
 
     await broadcast(
         {

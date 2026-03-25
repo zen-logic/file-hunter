@@ -4,6 +4,12 @@ import asyncio
 import os
 
 from file_hunter.core import classify_file
+from file_hunter.helpers import (
+    parse_folder_id,
+    parse_location_id,
+    post_op_stats,
+    resolve_target,
+)
 
 PAGE_SIZE = 120
 
@@ -27,7 +33,31 @@ async def list_files(
     filter_text=None,
     focus_file_id=None,
 ):
-    """Return paged files and all subfolders for a given folder/location root."""
+    """Return paged file rows and immediate subfolders for a folder or location root.
+
+    Parameters:
+        db: Shared read-only database connection (from read_db()).
+        folder_id: Prefixed tree-node ID — "loc-{id}" for a location root or
+            "fld-{id}" for a subfolder.
+        page: Zero-based page index. Overridden when focus_file_id is set.
+        sort: Column key — one of "name", "type", "size", "date", "dups".
+        sort_dir: "asc" or "desc".
+        filter_text: Optional substring filter applied to filenames and folder names
+            (LIKE with SQL-escaped wildcards).
+        focus_file_id: If set, the page is recalculated so this file's row is visible.
+
+    Returns:
+        dict with keys: items (list[dict]), folders (list[dict]), total (int),
+        page (int), pageSize (int), breadcrumb (list[dict]).
+        When focus_file_id is found, also includes focusFileId.
+
+    Side effects:
+        None — read-only. Hash data is fetched from the separate hashes.db via
+        get_file_hashes() and batch_dup_counts().
+
+    Called by:
+        Route handler files_list (GET /api/files).
+    """
     from file_hunter.services.settings import get_setting
 
     col = SORT_COLUMNS.get(sort, "f.filename")
@@ -50,7 +80,7 @@ async def list_files(
 
     # Build WHERE clause for files
     if folder_id.startswith("loc-"):
-        loc_id = int(folder_id[4:])
+        loc_id = parse_location_id(folder_id)
         folder_where = "f.location_id = ? AND f.folder_id IS NULL"
         folder_params = [loc_id]
         # Subfolders at root level (include rel_path + root_path for missing check)
@@ -61,7 +91,7 @@ async def list_files(
             [loc_id] + folder_name_params,
         )
     elif folder_id.startswith("fld-"):
-        fld_id = int(folder_id[4:])
+        fld_id = parse_folder_id(folder_id)
         folder_where = "f.folder_id = ?"
         folder_params = [fld_id]
         # Subfolders (include rel_path + root_path for missing check)
@@ -205,7 +235,7 @@ async def list_files(
         if loc_name_row:
             breadcrumb = [{"nodeId": folder_id, "name": loc_name_row[0]["name"]}]
     elif folder_id.startswith("fld-"):
-        fld_id = int(folder_id[4:])
+        fld_id = parse_folder_id(folder_id)
         # Walk ancestor chain
         chain_rows = await db.execute_fetchall(
             """WITH RECURSIVE chain(id, name, parent_id, depth) AS (
@@ -243,7 +273,24 @@ async def list_files(
 
 
 async def get_file_detail(db, file_id: int):
-    """Return full file detail with duplicates."""
+    """Return full metadata, hash info, duplicate list, and breadcrumb for one file.
+
+    Parameters:
+        db: Shared read-only database connection (from read_db()).
+        file_id: Numeric file ID (unprefixed integer).
+
+    Returns:
+        dict with full file detail (id, name, path, hashes, duplicates, breadcrumb,
+        online status, tags, etc.) or None if the file does not exist.
+
+    Side effects:
+        DB write — if the file is marked stale but the location is online and the
+        file exists on disk, the stale flag is cleared via execute_write().
+        Hash and duplicate data are read from hashes.db.
+
+    Called by:
+        Route handler file_detail (GET /api/files/{id}).
+    """
     row = await db.execute_fetchall(
         """SELECT f.id, f.filename, f.full_path, f.rel_path, f.location_id,
                   f.folder_id, f.file_type_high, f.file_type_low, f.file_size,
@@ -382,7 +429,25 @@ async def get_file_detail(db, file_id: int):
 
 
 async def update_file(db, file_id: int, description: str = None, tags: list = None):
-    """Update file description and/or tags."""
+    """Update a file's description and/or tags in the catalog.
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        file_id: Numeric file ID.
+        description: New description string, or None to leave unchanged.
+        tags: New tag list (joined as comma-separated), or None to leave unchanged.
+
+    Returns:
+        None.
+
+    Side effects:
+        DB write + commit on the files table. No-op if both description and
+        tags are None.
+
+    Called by:
+        Route handler file_update (POST /api/files/{id}/update).
+        batch_tag() in batch.py (per-file tag update).
+    """
     parts = []
     params = []
     if description is not None:
@@ -409,7 +474,41 @@ async def move_file(
     destination_folder_id: str = None,
     skip_post_processing: bool = False,
 ):
-    """Move and/or rename a file on disk and in the catalog."""
+    """Move and/or rename a file on disk and update the catalog to match.
+
+    Handles same-location moves, cross-location moves (copy+delete via agent),
+    renames, and combinations. If the source or destination location is offline,
+    the operation is queued as a deferred op instead of executing immediately.
+
+    Parameters:
+        db: Writable database connection (called inside execute_write).
+        file_id: Numeric file ID.
+        new_name: New filename, or None to keep the current name.
+        destination_folder_id: Prefixed target ID ("loc-{id}" or "fld-{id}"),
+            or None if only renaming in place.
+        skip_post_processing: If True, skip post_op_stats broadcast. Used by
+            batch_move() which does a single post_op_stats at the end.
+
+    Returns:
+        dict with keys: id, old_name, new_name, renamed (bool), moved (bool),
+        deferred (bool).
+
+    Raises:
+        ValueError: File not found, destination not found, file missing on disk,
+            or name collision on rename.
+
+    Side effects:
+        Disk I/O — file move/rename or cross-location copy+delete via fs service.
+        DB write + commit — updates filename, full_path, rel_path, location_id,
+        folder_id, file_type_high, file_type_low.
+        Reclassifies file type if extension changed.
+        Broadcasts updated stats via post_op_stats (unless skip_post_processing).
+        May queue a deferred_op if location is offline.
+
+    Called by:
+        Route handler file_move (POST /api/files/{id}/move).
+        batch_move() in batch.py (per-file, with skip_post_processing=True).
+    """
     from file_hunter.services import fs
 
     row = await db.execute_fetchall(
@@ -440,33 +539,13 @@ async def move_file(
     if destination_folder_id:
         moved = True
         # Resolve destination
-        if destination_folder_id.startswith("loc-"):
-            dest_loc_id = int(destination_folder_id[4:])
-            dest_row = await db.execute_fetchall(
-                "SELECT id, root_path FROM locations WHERE id = ?", (dest_loc_id,)
-            )
-            if not dest_row:
-                raise ValueError("Destination location not found.")
-            final_root = dest_row[0]["root_path"]
-            final_location_id = dest_loc_id
-            final_folder_id = None
-            dest_dir = final_root
-        elif destination_folder_id.startswith("fld-"):
-            dest_fld_id = int(destination_folder_id[4:])
-            dest_row = await db.execute_fetchall(
-                """SELECT f.id, f.location_id, f.rel_path, l.root_path
-                   FROM folders f JOIN locations l ON l.id = f.location_id
-                   WHERE f.id = ?""",
-                (dest_fld_id,),
-            )
-            if not dest_row:
-                raise ValueError("Destination folder not found.")
-            final_root = dest_row[0]["root_path"]
-            final_location_id = dest_row[0]["location_id"]
-            final_folder_id = dest_fld_id
-            dest_dir = os.path.join(final_root, dest_row[0]["rel_path"])
-        else:
-            raise ValueError("Invalid destination_folder_id.")
+        dest = await resolve_target(db, destination_folder_id)
+        if not dest:
+            raise ValueError("Destination not found.")
+        final_root = dest["root_path"]
+        final_location_id = dest["location_id"]
+        final_folder_id = dest["folder_id"]
+        dest_dir = dest["abs_path"]
 
     new_full_path = os.path.join(dest_dir, final_name)
     new_rel_path = os.path.relpath(new_full_path, final_root)
@@ -492,9 +571,7 @@ async def move_file(
         await db.commit()
 
         if not skip_post_processing:
-            from file_hunter.services.stats import invalidate_stats_cache
-
-            invalidate_stats_cache()
+            await post_op_stats()
         return {
             "id": file_id,
             "old_name": old_name,
@@ -554,16 +631,8 @@ async def move_file(
     await db.commit()
 
     if not skip_post_processing:
-        from file_hunter.services.stats import invalidate_stats_cache
-
-        invalidate_stats_cache()
-
-        from file_hunter.services.sizes import schedule_size_recalc
-
-        if final_location_id != src_loc_id:
-            schedule_size_recalc(src_loc_id, final_location_id)
-        else:
-            schedule_size_recalc(src_loc_id)
+        loc_ids = {src_loc_id, final_location_id} if final_location_id != src_loc_id else {src_loc_id}
+        await post_op_stats(location_ids=loc_ids)
 
     return {
         "id": file_id,

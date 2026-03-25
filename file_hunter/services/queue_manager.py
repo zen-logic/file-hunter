@@ -30,7 +30,26 @@ _running_ops: dict[int, tuple[int | None, asyncio.Task]] = {}
 
 
 async def enqueue(op_type: str, agent_id: int | None, params: dict) -> int:
-    """Insert a new operation into the queue. Returns the operation ID."""
+    """Insert a new operation into the operation_queue table.
+
+    Args:
+        op_type: Operation type string (e.g. "scan_dir", "backfill_location",
+            "rehash_partial", "hash_file").
+        agent_id: Target agent ID, or None for agent-independent operations.
+        params: JSON-serializable dict of operation parameters (typically
+            includes location_id and location_name).
+
+    Returns:
+        int: The auto-generated operation ID (operation_queue.id).
+
+    Side effects:
+        Writes to operation_queue table via db_writer. Broadcasts
+        scan_queue_updated to all connected browsers.
+
+    Notes:
+        Called from HTTP endpoints (scan, backfill) and internal services.
+        The queue manager main loop picks up pending ops automatically.
+    """
     async with db_writer() as db:
         cursor = await db.execute(
             "INSERT INTO operation_queue (type, agent_id, params, created_at) "

@@ -262,14 +262,14 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         if stats_added or stats_removed:
             _act_upd(act_name, progress="updating stats")
             from file_hunter.stats_db import update_stats_for_files
-            from file_hunter.services.stats import invalidate_stats_cache
+            from file_hunter.helpers import post_op_stats
 
             await update_stats_for_files(
                 location_id,
                 added=stats_added or None,
                 removed=stats_removed or None,
             )
-            invalidate_stats_cache()
+            await post_op_stats()
 
         # Recalc dup counts if we added files
         if new_file_ids:
