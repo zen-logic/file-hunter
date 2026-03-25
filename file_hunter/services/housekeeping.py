@@ -378,20 +378,23 @@ async def _enqueue_dup_candidates():
     if not rows:
         return
 
-    # Don't duplicate already-pending tasks
+    # Don't re-enqueue if already pending/running/completed
+    # (completed tasks found the same candidates and either processed them
+    # or correctly filtered them out — re-running won't help)
     async with read_db() as db:
-        pending = await db.execute_fetchall(
+        existing = await db.execute_fetchall(
             "SELECT params FROM housekeeping_queue "
-            "WHERE type = 'process_dup_candidates' AND status IN ('pending', 'running')"
+            "WHERE type = 'process_dup_candidates' "
+            "AND status IN ('pending', 'running', 'completed')"
         )
-    pending_ids = set()
-    for p in pending:
+    existing_ids = set()
+    for p in existing:
         prms = json.loads(p["params"] or "{}")
         lid = prms.get("location_id")
         if lid is not None:
-            pending_ids.add(lid)
+            existing_ids.add(lid)
 
-    location_ids = [r["location_id"] for r in rows if r["location_id"] not in pending_ids]
+    location_ids = [r["location_id"] for r in rows if r["location_id"] not in existing_ids]
     if not location_ids:
         return
 
