@@ -67,6 +67,7 @@ const Detail = {
     _slideshowDeleteSet: new Set(),
     _slideshowConsolidateSet: new Set(),
     _slideshowTagSet: new Set(),
+    _slideshowMoveSet: new Set(),
     slideshowTriage: null,
     onNavigateToFile: null,
     onNavigateToFolder: null,
