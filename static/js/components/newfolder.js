@@ -50,20 +50,18 @@ const NewFolderModal = {
         if (!name) return;
         if (!this.parentNode || !this.onConfirm) return;
 
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        const parentNode = this.parentNode;
+        this.close();
 
-        const result = await this.onConfirm(this.parentNode, name);
+        const result = await this.onConfirm(parentNode, name);
         if (result && result.error) {
+            this.open(parentNode);
+            this.nameInput.value = name;
             if (this.errorEl) {
                 this.errorEl.textContent = result.error;
                 this.errorEl.classList.remove('hidden');
             }
-            return;
         }
-        this.close();
     },
 };
 
