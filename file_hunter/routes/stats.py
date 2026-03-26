@@ -48,49 +48,6 @@ async def stats(request: Request):
     return json_ok(data)
 
 
-async def recalculate_stats(request: Request):
-    """Force a full recalculation of all location sizes and stats cache.
-
-    Returns immediately — work runs in background, broadcasts when done.
-    """
-    asyncio.create_task(_bg_recalculate())
-    return json_ok({"status": "started"})
-
-
-async def _bg_recalculate():
-    from file_hunter.services.sizes import recalculate_location_sizes
-    from file_hunter.services.stats import invalidate_stats_cache
-    from file_hunter.ws.scan import broadcast
-
-    try:
-        async with read_db() as db:
-            loc_rows = await db.execute_fetchall(
-                "SELECT id, name FROM locations WHERE name NOT LIKE '__deleting_%'"
-            )
-        total = len(loc_rows)
-        for i, loc in enumerate(loc_rows, 1):
-            log.info("Recalculating stats: %s (%d/%d)", loc["name"], i, total)
-            await broadcast(
-                {
-                    "type": "recalc_progress",
-                    "location": loc["name"],
-                    "done": i,
-                    "total": total,
-                }
-            )
-            await recalculate_location_sizes(loc["id"])
-        invalidate_stats_cache()
-        log.info("Stats recalculated for %d locations", total)
-        await broadcast(
-            {
-                "type": "size_recalc_completed",
-                "locationIds": [r["id"] for r in loc_rows],
-            }
-        )
-    except Exception:
-        log.exception("Stats recalculation failed")
-
-
 async def repair_catalog(request: Request):
     """Repair catalog with selectable phases.
 

@@ -1394,11 +1394,6 @@ WS.on('size_recalc_completed', async msg => {
     if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
     StatusBar.loadStats();
     Detail.refreshStats();
-    const recalcBtn = document.getElementById('detail-recalc-stats');
-    if (recalcBtn) {
-        recalcBtn.textContent = 'Recalculate Stats';
-        recalcBtn.disabled = false;
-    }
 });
 WS.on('dup_recalc_started', (msg) => {
     if (msg.locationIds) {

@@ -864,18 +864,7 @@ const Detail = {
                 <h3>Recent Scans</h3>
                 ${scansHtml || '<div class="detail-field"><span class="value">No scans yet.</span></div>'}
             </div>
-            <div class="detail-section">
-                <div class="detail-btn-group"><button class="btn" id="detail-recalc-stats">Recalculate Stats</button></div>
-            </div>
         `;
-        const recalcBtn = this.el.querySelector('#detail-recalc-stats');
-        if (recalcBtn) {
-            recalcBtn.addEventListener('click', () => {
-                recalcBtn.textContent = 'Recalculating...';
-                recalcBtn.disabled = true;
-                API.post('/api/stats/recalculate');
-            });
-        }
     },
 
     async renderFile(file) {

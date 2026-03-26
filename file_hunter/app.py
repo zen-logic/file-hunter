@@ -57,7 +57,6 @@ from file_hunter.routes.merge import merge, cancel_merge
 from file_hunter.routes.upload import upload_files
 from file_hunter.routes.stats import (
     stats,
-    recalculate_stats,
     repair_catalog,
     repair_catalog_progress,
     rehash_partial,
@@ -351,7 +350,6 @@ app = Starlette(
         Route("/api/import-catalog/run", import_catalog_run, methods=["POST"]),
         Route("/api/import-catalog/progress", import_catalog_progress, methods=["GET"]),
         Route("/api/stats", stats, methods=["GET"]),
-        Route("/api/stats/recalculate", recalculate_stats, methods=["POST"]),
         Route("/api/stats/repair", repair_catalog, methods=["POST"]),
         Route("/api/stats/repair-progress", repair_catalog_progress, methods=["GET"]),
         Route("/api/admin/rehash-partial", rehash_partial, methods=["POST"]),
