@@ -353,6 +353,7 @@ async def get_file_detail(db, file_id: int):
                 dups.append(
                     {
                         "fileId": d["id"],
+                        "name": d["filename"],
                         "location": d["location_name"],
                         "path": f"/{d['rel_path']}",
                     }

@@ -52,7 +52,7 @@ from file_hunter.routes.scan import (
     cancel_scan,
     get_scan_queue,
 )
-from file_hunter.routes.consolidate import consolidate, batch_consolidate
+from file_hunter.routes.consolidate import consolidate, batch_consolidate, consolidate_preview
 from file_hunter.routes.merge import merge, cancel_merge
 from file_hunter.routes.upload import upload_files
 from file_hunter.routes.stats import (
@@ -332,6 +332,7 @@ app = Starlette(
         Route("/api/scan/cancel", cancel_scan, methods=["POST"]),
         Route("/api/scan/queue", get_scan_queue, methods=["GET"]),
         Route("/api/consolidate", consolidate, methods=["POST"]),
+        Route("/api/consolidate/preview", consolidate_preview, methods=["POST"]),
         Route("/api/batch/consolidate", batch_consolidate, methods=["POST"]),
         Route("/api/merge", merge, methods=["POST"]),
         Route("/api/merge/cancel", cancel_merge, methods=["POST"]),

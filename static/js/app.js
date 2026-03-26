@@ -480,10 +480,12 @@ Consolidate.init(async (params) => {
     if (params.batch) {
         const payload = { file_ids: params.file_ids, mode: params.mode };
         if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
+        if (params.filename_match_only) payload.filename_match_only = true;
         await API.post('/api/batch/consolidate', payload);
     } else {
         const payload = { file_id: params.file_id, mode: params.mode };
         if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
+        if (params.filename_match_only) payload.filename_match_only = true;
         await API.post('/api/consolidate', payload);
     }
 });

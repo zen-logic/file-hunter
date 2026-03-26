@@ -44,6 +44,7 @@ async def run_consolidation(
     shared_csv_path: str | None = None,
     shared_csv_loc_id: int | None = None,
     skip_post_processing: bool = False,
+    filename_match_only: bool = False,
 ):
     """Consolidate duplicate files by electing a canonical copy and stubbing the rest.
 
@@ -180,6 +181,10 @@ async def run_consolidation(
                 copy_ids,
             )
         all_copies = [dict(r) for r in all_copies]
+
+        # Filter to matching filenames only if requested
+        if filename_match_only:
+            all_copies = [c for c in all_copies if c["filename"] == filename]
 
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -621,7 +626,8 @@ async def run_consolidation(
 
 
 async def run_batch_consolidation(
-    file_ids: list[int], mode: str, dest_folder_id: str | None
+    file_ids: list[int], mode: str, dest_folder_id: str | None,
+    filename_match_only: bool = False,
 ):
     """Run consolidation for multiple files sequentially, sharing a single result log.
 
@@ -695,6 +701,7 @@ async def run_batch_consolidation(
                 shared_csv_path=csv_path,
                 shared_csv_loc_id=dest_loc_id,
                 skip_post_processing=True,
+                filename_match_only=filename_match_only,
             )
             completed += 1
         except Exception:

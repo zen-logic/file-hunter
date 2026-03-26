@@ -70,6 +70,7 @@ const SlideshowTriage = {
         this._conCancel = document.getElementById('slideshow-consolidate-cancel');
         this._conSubmit = document.getElementById('slideshow-consolidate-submit');
 
+        this._conFilenameMatch = document.getElementById('slideshow-consolidate-filename-match');
         this._conCancel.addEventListener('click', () => this._closeConsolidate());
         this._conOverlay.addEventListener('click', (e) => {
             if (e.target === this._conOverlay) this._closeConsolidate();
@@ -206,6 +207,7 @@ const SlideshowTriage = {
         this._activeDest = this._conDest;
         this._activeTree = this._conTree;
         this._conDest.textContent = 'No folder selected';
+        this._conFilenameMatch.checked = false;
         this._conSubmit.textContent = 'Consolidate';
         this._conSubmit.disabled = false;
 
@@ -227,12 +229,15 @@ const SlideshowTriage = {
         const fileIds = this._consolidateItems.map(item => item.id);
         const n = fileIds.length;
 
-        // Fire-and-forget — WS consolidate_completed/batch_consolidate_completed handle UI
-        API.post('/api/batch/consolidate', {
+        const payload = {
             file_ids: fileIds,
             mode: 'copy_to',
             destination_folder_id: this._selectedDest,
-        });
+        };
+        if (this._conFilenameMatch.checked) payload.filename_match_only = true;
+
+        // Fire-and-forget — WS consolidate_completed/batch_consolidate_completed handle UI
+        API.post('/api/batch/consolidate', payload);
         Toast.info(`Consolidating ${n} image${n !== 1 ? 's' : ''}...`);
 
         this._conOverlay.classList.add('hidden');

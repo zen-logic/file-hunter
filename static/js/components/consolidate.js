@@ -33,6 +33,7 @@ const Consolidate = {
         this.destDisplay = document.getElementById('consolidate-dest-display');
         this.cancelBtn = document.getElementById('consolidate-cancel');
         this.submitBtn = document.getElementById('consolidate-submit');
+        this.filenameMatchCheck = document.getElementById('consolidate-filename-match');
 
         this.cancelBtn.addEventListener('click', () => this.close());
         this.overlay.addEventListener('click', (e) => {
@@ -44,6 +45,7 @@ const Consolidate = {
             }
         });
         this.submitBtn.addEventListener('click', () => this._doSubmit());
+        this.filenameMatchCheck.addEventListener('change', () => this._updateLocations());
 
         // Mode radio change
         this.modeGroup.addEventListener('change', (e) => {
@@ -70,13 +72,24 @@ const Consolidate = {
         this._isSearchMode = searchMode;
         this._selectedDest = null;
         this._expandedNodes = new Set();
+        this.filenameMatchCheck.checked = false;
 
         // Locations list — only for single file
         const locsField = this.locationsEl.closest('.modal-field');
+        this._totalDups = 0;
+        this._filenameMatchedDups = 0;
         if (this._isMulti) {
-            this.filenameEl.textContent = `${files.length} files selected`;
             this.locationsEl.innerHTML = '';
             if (locsField) locsField.style.display = 'none';
+            // Fetch dup preview counts
+            const preview = await API.post('/api/consolidate/preview', {
+                file_ids: files.map(f => f.id),
+            });
+            if (preview.ok) {
+                this._totalDups = preview.data.total_dups;
+                this._filenameMatchedDups = preview.data.filename_matched_dups;
+            }
+            this._updateMultiText();
         } else {
             this.filenameEl.textContent = file.name;
             this.locationsEl.innerHTML = dups
@@ -122,6 +135,25 @@ const Consolidate = {
 
     close() {
         this.overlay.classList.add('hidden');
+    },
+
+    _updateMultiText() {
+        if (!this._isMulti) return;
+        const n = this._files.length;
+        const dups = this.filenameMatchCheck.checked
+            ? this._filenameMatchedDups
+            : this._totalDups;
+        this.filenameEl.textContent = `${n} files selected (${dups.toLocaleString()} duplicate${dups !== 1 ? 's' : ''})`;
+    },
+
+    _updateLocations() {
+        if (this._isMulti) { this._updateMultiText(); return; }
+        const filtered = this.filenameMatchCheck.checked
+            ? this._dups.filter(d => d.name === this._file.name)
+            : this._dups;
+        this.locationsEl.innerHTML = filtered
+            .map(d => `<li>${d.location} &mdash; ${d.path}</li>`)
+            .join('');
     },
 
     _updateModeUI() {
@@ -230,11 +262,13 @@ const Consolidate = {
     _doSubmit() {
         if (this._selectedMode === 'copy_to' && !this._selectedDest) return;
 
+        const fnMatch = this.filenameMatchCheck.checked;
         if (this._isMulti) {
             this.onConsolidate({
                 file_ids: this._files.map(f => f.id),
                 mode: this._selectedMode,
                 destination_folder_id: this._selectedMode === 'copy_to' ? this._selectedDest : undefined,
+                filename_match_only: fnMatch,
                 batch: true,
             });
         } else {
@@ -242,6 +276,7 @@ const Consolidate = {
                 file_id: this._file.id,
                 mode: this._selectedMode,
                 destination_folder_id: this._selectedMode === 'copy_to' ? this._selectedDest : undefined,
+                filename_match_only: fnMatch,
             });
         }
         this.close();
