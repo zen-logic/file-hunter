@@ -288,6 +288,7 @@ async def stream_copy(
     dst_path: str,
     dst_loc_id: int,
     on_progress=None,
+    mtime: float | None = None,
 ):
     """Stream a file from one agent to another without buffering in RAM.
 
@@ -344,9 +345,12 @@ async def stream_copy(
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(None, connect=10.0)
         ) as dst_client:
+            dst_params = {"path": dst_path}
+            if mtime is not None:
+                dst_params["mtime"] = str(mtime)
             resp = await dst_client.post(
                 dst_url,
-                params={"path": dst_path},
+                params=dst_params,
                 content=_pipe_chunks(),
                 headers={
                     "Authorization": f"Bearer {d_token}",

@@ -4,7 +4,7 @@ import asyncio
 import os
 from datetime import datetime
 
-from file_hunter.helpers import parse_location_id, parse_folder_id
+from file_hunter.helpers import parse_location_id, parse_folder_id, parse_mtime
 
 
 async def get_tree(db):
@@ -922,7 +922,7 @@ async def _cross_location_dir_move(
         skipped = 0
         for fid in all_folder_ids:
             file_rows = await db.execute_fetchall(
-                "SELECT id, full_path, rel_path FROM files WHERE folder_id = ?",
+                "SELECT id, full_path, rel_path, modified_date FROM files WHERE folder_id = ?",
                 (fid,),
             )
             for fr in file_rows:
@@ -930,7 +930,8 @@ async def _cross_location_dir_move(
                 dest_file_abs = os.path.join(dest_root, dest_file_rel)
                 try:
                     await fs.copy_file(
-                        fr["full_path"], src_loc_id, dest_file_abs, dest_loc_id
+                        fr["full_path"], src_loc_id, dest_file_abs, dest_loc_id,
+                        mtime=parse_mtime(fr["modified_date"]),
                     )
                     copied += 1
                 except RuntimeError as e:

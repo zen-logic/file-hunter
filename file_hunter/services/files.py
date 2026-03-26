@@ -7,6 +7,7 @@ from file_hunter.core import classify_file
 from file_hunter.helpers import (
     parse_folder_id,
     parse_location_id,
+    parse_mtime,
     post_op_stats,
     resolve_target,
 )
@@ -603,7 +604,8 @@ async def move_file(
         if cross_location:
             # Cross-location (possibly agent↔local): copy + delete
             await fs.copy_file(
-                f["full_path"], src_loc_id, new_full_path, final_location_id
+                f["full_path"], src_loc_id, new_full_path, final_location_id,
+                mtime=parse_mtime(f["modified_date"]),
             )
             await fs.file_delete(f["full_path"], src_loc_id)
         else:

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from file_hunter_core.classify import classify_file
 from file_hunter.db import db_writer, read_db
-from file_hunter.helpers import parse_prefixed_id
+from file_hunter.helpers import parse_mtime, parse_prefixed_id
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -409,7 +409,10 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                 try:
                     await fs.dir_create(dest_dir, dest_loc_id, exist_ok=True)
                     actual_dest = await fs.unique_dest_path(dest_rel_path, dest_loc_id)
-                    await fs.copy_file(src_path, src_loc_id, actual_dest, dest_loc_id)
+                    await fs.copy_file(
+                        src_path, src_loc_id, actual_dest, dest_loc_id,
+                        mtime=parse_mtime(src_file["modified_date"]),
+                    )
 
                     (copy_fast,) = await fs.file_hash(actual_dest, dest_loc_id)
                     copy_strong = None

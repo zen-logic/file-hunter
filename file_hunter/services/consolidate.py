@@ -8,6 +8,7 @@ from file_hunter.db import db_writer, read_db
 from file_hunter.helpers import (
     get_effective_hash,
     parse_folder_id,
+    parse_mtime,
     parse_prefixed_id,
     post_op_stats,
     resolve_target,
@@ -277,6 +278,7 @@ async def run_consolidation(
                     canonical_path,
                     dest_loc_id,
                     on_progress=_copy_progress,
+                    mtime=parse_mtime(selected["modified_date"]),
                 )
             except Exception as copy_exc:
                 # Clean up partial file at destination

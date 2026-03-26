@@ -2730,6 +2730,10 @@ select.modal-input {
     background: var(--color-status-warning);
 }
 
+.preview-modal-mark.mark-move {
+    background: var(--color-status-info, #3b82f6);
+}
+
 .preview-modal-triage {
     font-size: var(--font-size-sm);
     color: var(--color-text-muted);

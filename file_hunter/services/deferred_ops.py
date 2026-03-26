@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db
+from file_hunter.helpers import parse_mtime
 from file_hunter.services import fs
 from file_hunter.ws.scan import broadcast
 
@@ -86,7 +87,7 @@ async def drain_pending_ops(location_id: int, root_path: str):
                 file_row = await db.execute_fetchall(
                     "SELECT id, full_path, filename, "
                     "location_id, folder_id, file_size, file_type_high, hidden, "
-                    "pending_op FROM files WHERE id = ?",
+                    "modified_date, pending_op FROM files WHERE id = ?",
                     (file_id,),
                 )
             if not file_row:
@@ -241,7 +242,10 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
     # Execute the move
     cross_location = dst_location_id != location_id
     if cross_location:
-        await fs.copy_file(full_path, location_id, dst_full_path, dst_location_id)
+        await fs.copy_file(
+            full_path, location_id, dst_full_path, dst_location_id,
+            mtime=parse_mtime(f["modified_date"]),
+        )
         await fs.file_delete(full_path, location_id)
     else:
         await fs.file_move(full_path, dst_full_path, location_id)

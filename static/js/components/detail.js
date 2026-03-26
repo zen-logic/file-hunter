@@ -293,6 +293,7 @@ const Detail = {
                 else if (e.key === 'd') { this._slideshowToggleMark('delete'); }
                 else if (e.key === 'c') { this._slideshowToggleMark('consolidate'); }
                 else if (e.key === 't') { this._slideshowToggleMark('tag'); }
+                else if (e.key === 'm') { this._slideshowToggleMark('move'); }
             }
         });
     },
@@ -392,6 +393,10 @@ const Detail = {
             id,
             name: (cache[id] && cache[id].name) || `File ${id}`,
         }));
+        const moveItems = [...this._slideshowMoveSet].map(id => ({
+            id,
+            name: (cache[id] && cache[id].name) || `File ${id}`,
+        }));
 
         m.overlay.classList.add('hidden');
         m.downloadBtn.classList.add('hidden');
@@ -412,6 +417,7 @@ const Detail = {
         this._slideshowDeleteSet = new Set();
         this._slideshowConsolidateSet = new Set();
         this._slideshowTagSet = new Set();
+        this._slideshowMoveSet = new Set();
         // Reset slideshow/playlist buttons in detail panel
         const ssBtn = document.getElementById('detail-slideshow');
         if (ssBtn) { ssBtn.textContent = 'Slideshow'; ssBtn.disabled = false; }
@@ -422,8 +428,8 @@ const Detail = {
         m.content.innerHTML = '';
 
         // Show triage dialogs if any images were marked
-        if ((deleteItems.length > 0 || consolidateItems.length > 0 || tagItems.length > 0) && this.slideshowTriage) {
-            this.slideshowTriage.show(deleteItems, consolidateItems, tagItems);
+        if ((deleteItems.length > 0 || consolidateItems.length > 0 || tagItems.length > 0 || moveItems.length > 0) && this.slideshowTriage) {
+            this.slideshowTriage.show(deleteItems, consolidateItems, tagItems, moveItems);
         }
     },
 
@@ -440,6 +446,7 @@ const Detail = {
         this._slideshowDeleteSet = new Set();
         this._slideshowConsolidateSet = new Set();
         this._slideshowTagSet = new Set();
+        this._slideshowMoveSet = new Set();
 
         // Fetch all IDs in one call — no per-window queries during navigation
         const p = params;
@@ -715,6 +722,7 @@ const Detail = {
             delete: this._slideshowDeleteSet,
             consolidate: this._slideshowConsolidateSet,
             tag: this._slideshowTagSet,
+            move: this._slideshowMoveSet,
         };
         const s = setMap[kind];
         if (!s) return;
@@ -733,16 +741,18 @@ const Detail = {
         const triageEl = m.triageCounter;
 
         // Badge on current image — show all active marks
-        badge.classList.remove('mark-delete', 'mark-consolidate', 'mark-tag');
+        badge.classList.remove('mark-delete', 'mark-consolidate', 'mark-tag', 'mark-move');
         const marks = [];
         if (fileId && this._slideshowDeleteSet.has(fileId)) marks.push('D');
         if (fileId && this._slideshowConsolidateSet.has(fileId)) marks.push('C');
         if (fileId && this._slideshowTagSet.has(fileId)) marks.push('T');
+        if (fileId && this._slideshowMoveSet.has(fileId)) marks.push('M');
 
         if (marks.length > 0) {
             badge.textContent = marks.join(' ');
             // Colour by highest priority mark
             if (marks.includes('D')) badge.classList.add('mark-delete');
+            else if (marks.includes('M')) badge.classList.add('mark-move');
             else if (marks.includes('C')) badge.classList.add('mark-consolidate');
             else badge.classList.add('mark-tag');
             badge.classList.remove('hidden');
@@ -754,11 +764,13 @@ const Detail = {
         const dc = this._slideshowDeleteSet.size;
         const cc = this._slideshowConsolidateSet.size;
         const tc = this._slideshowTagSet.size;
-        if (dc === 0 && cc === 0 && tc === 0) {
+        const mc = this._slideshowMoveSet.size;
+        if (dc === 0 && cc === 0 && tc === 0 && mc === 0) {
             triageEl.classList.add('hidden');
         } else {
             const parts = [];
             if (dc > 0) parts.push(`${dc} to delete`);
+            if (mc > 0) parts.push(`${mc} to move`);
             if (cc > 0) parts.push(`${cc} to consolidate`);
             if (tc > 0) parts.push(`${tc} to tag`);
             triageEl.textContent = parts.join(', ');

@@ -176,12 +176,18 @@ async def dir_move(src: str, dest: str, location_id: int):
 
 
 async def copy_file(
-    src: str, src_loc_id: int, dst: str, dst_loc_id: int, on_progress=None
+    src: str, src_loc_id: int, dst: str, dst_loc_id: int,
+    on_progress=None, mtime: float | None = None,
 ):
-    """Copy a file between agent locations via streaming (constant memory)."""
+    """Copy a file between agent locations via streaming (constant memory).
+
+    mtime: if provided, destination agent restores this as the file's modified time.
+    """
     from file_hunter.services.agent_ops import stream_copy
 
-    await stream_copy(src, src_loc_id, dst, dst_loc_id, on_progress=on_progress)
+    await stream_copy(
+        src, src_loc_id, dst, dst_loc_id, on_progress=on_progress, mtime=mtime,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -28,10 +28,20 @@ const SlideshowTriage = {
     _tagCancel: null,
     _tagSubmit: null,
 
+    // Move dialog elements
+    _movOverlay: null,
+    _movText: null,
+    _movList: null,
+    _movTree: null,
+    _movDest: null,
+    _movCancel: null,
+    _movSubmit: null,
+
     // State
     _deleteItems: [],
     _consolidateItems: [],
     _tagItems: [],
+    _moveItems: [],
     _treeData: null,
     _expandedNodes: new Set(),
     _selectedDest: null,
@@ -80,6 +90,21 @@ const SlideshowTriage = {
         });
         this._tagSubmit.addEventListener('click', () => this._doTag());
 
+        // Move dialog
+        this._movOverlay = document.getElementById('slideshow-move-modal');
+        this._movText = document.getElementById('slideshow-move-text');
+        this._movList = document.getElementById('slideshow-move-list');
+        this._movTree = document.getElementById('slideshow-move-tree');
+        this._movDest = document.getElementById('slideshow-move-dest');
+        this._movCancel = document.getElementById('slideshow-move-cancel');
+        this._movSubmit = document.getElementById('slideshow-move-submit');
+
+        this._movCancel.addEventListener('click', () => this._closeMove());
+        this._movOverlay.addEventListener('click', (e) => {
+            if (e.target === this._movOverlay) this._closeMove();
+        });
+        this._movSubmit.addEventListener('click', () => this._doMove());
+
         // Escape key for all dialogs
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
@@ -89,14 +114,17 @@ const SlideshowTriage = {
                 this._closeConsolidate();
             } else if (!this._tagOverlay.classList.contains('hidden')) {
                 this._closeTag();
+            } else if (!this._movOverlay.classList.contains('hidden')) {
+                this._closeMove();
             }
         });
     },
 
-    show(deleteItems, consolidateItems, tagItems) {
+    show(deleteItems, consolidateItems, tagItems, moveItems) {
         this._deleteItems = deleteItems || [];
         this._consolidateItems = consolidateItems || [];
         this._tagItems = tagItems || [];
+        this._moveItems = moveItems || [];
 
         this._showNext();
     },
@@ -104,6 +132,8 @@ const SlideshowTriage = {
     _showNext() {
         if (this._deleteItems.length > 0) {
             this._showDeleteDialog();
+        } else if (this._moveItems.length > 0) {
+            this._showMoveDialog();
         } else if (this._consolidateItems.length > 0) {
             this._showConsolidateDialog();
         } else if (this._tagItems.length > 0) {
@@ -173,6 +203,8 @@ const SlideshowTriage = {
 
         this._selectedDest = null;
         this._expandedNodes = new Set();
+        this._activeDest = this._conDest;
+        this._activeTree = this._conTree;
         this._conDest.textContent = 'No folder selected';
         this._conSubmit.textContent = 'Consolidate';
         this._conSubmit.disabled = false;
@@ -245,19 +277,66 @@ const SlideshowTriage = {
         this._deleteItems = [];
         this._consolidateItems = [];
         this._tagItems = [];
+        this._moveItems = [];
     },
 
-    // ── Tree picker (same pattern as consolidate.js) ──
+    // ── Move dialog ──
+
+    async _showMoveDialog() {
+        const n = this._moveItems.length;
+        this._movText.textContent = `Move ${n} file${n !== 1 ? 's' : ''} to a new location.`;
+        this._renderCappedList(this._movList, this._moveItems);
+
+        this._selectedDest = null;
+        this._expandedNodes = new Set();
+        this._activeDest = this._movDest;
+        this._activeTree = this._movTree;
+        this._movDest.textContent = 'No folder selected';
+        this._movSubmit.textContent = 'Move';
+        this._movSubmit.disabled = false;
+
+        const res = await API.get('/api/locations');
+        this._treeData = res.ok ? res.data : [];
+        this._renderTree();
+
+        this._movOverlay.classList.remove('hidden');
+    },
+
+    _closeMove() {
+        this._movOverlay.classList.add('hidden');
+        this._moveItems = [];
+        this._showNext();
+    },
+
+    _doMove() {
+        if (!this._selectedDest) return;
+        const fileIds = this._moveItems.map(item => item.id);
+        const n = fileIds.length;
+
+        API.post('/api/batch/move', {
+            file_ids: fileIds,
+            destination_folder_id: this._selectedDest,
+        });
+        Toast.info(`Moving ${n} file${n !== 1 ? 's' : ''}...`);
+
+        this._movOverlay.classList.add('hidden');
+        this._moveItems = [];
+        this._showNext();
+    },
+
+    // ── Tree picker (shared by consolidate and move) ──
 
     _renderTree() {
-        this._conTree.innerHTML = '';
+        const treeEl = this._activeTree || this._conTree;
+        treeEl.innerHTML = '';
         if (!this._treeData) return;
         this._treeData.forEach(loc => {
-            this._renderTreeNode(this._conTree, loc, 0);
+            this._renderTreeNode(treeEl, loc, 0);
         });
     },
 
     _renderTreeNode(container, node, depth) {
+        const destEl = this._activeDest || this._conDest;
         const div = document.createElement('div');
         div.className = 'ct-node';
         if (node.online === false) div.classList.add('ct-offline');
@@ -308,7 +387,7 @@ const SlideshowTriage = {
                 }
             }
             this._selectedDest = node.id;
-            this._conDest.textContent = node.label;
+            destEl.textContent = node.label;
             this._renderTree();
         });
 

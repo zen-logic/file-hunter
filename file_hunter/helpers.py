@@ -1,6 +1,26 @@
 """Shared helper functions — eliminates repeated patterns across services."""
 
 import asyncio
+from datetime import datetime, timezone
+
+
+def parse_mtime(value) -> float | None:
+    """Convert a modified_date value to a unix timestamp float.
+
+    Handles both unix timestamp floats/strings and ISO 8601 date strings.
+    Returns None if the value is missing or unparseable.
+    """
+    if not value:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        pass
+    try:
+        dt = datetime.fromisoformat(str(value))
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
