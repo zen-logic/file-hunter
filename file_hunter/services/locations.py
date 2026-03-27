@@ -930,7 +930,10 @@ async def _cross_location_dir_move(
                 dest_file_abs = os.path.join(dest_root, dest_file_rel)
                 try:
                     await fs.copy_file(
-                        fr["full_path"], src_loc_id, dest_file_abs, dest_loc_id,
+                        fr["full_path"],
+                        src_loc_id,
+                        dest_file_abs,
+                        dest_loc_id,
                         mtime=parse_mtime(fr["modified_date"]),
                     )
                     copied += 1
@@ -1201,7 +1204,9 @@ async def move_folder(
     from file_hunter.helpers import post_op_stats
 
     if cross_location:
-        await post_op_stats(location_ids={src_loc_id, dest_loc_id}, source="move_folder")
+        await post_op_stats(
+            location_ids={src_loc_id, dest_loc_id}, source="move_folder"
+        )
     else:
         await post_op_stats(location_ids={src_loc_id}, source="move_folder")
 

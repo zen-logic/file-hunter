@@ -17,7 +17,9 @@ from file_hunter.helpers import parse_prefixed_id
 from file_hunter.services.locations import check_location_online
 
 
-async def get_slideshow_ids_from_search(search_id: str, *, media_type: str = "image") -> list[int]:
+async def get_slideshow_ids_from_search(
+    search_id: str, *, media_type: str = "image"
+) -> list[int]:
     """Pull media IDs from the cached search results DB.
 
     Uses the existing search cache — no re-query, correct scope, fast.
@@ -105,9 +107,7 @@ async def _ids_for_folder(db, folder_id, hidden_filter, media_type="image"):
         where = "f.folder_id = ?"
         params = [num_id]
 
-    base_where = (
-        f"{where} AND f.file_type_high = ? AND f.stale = 0{hidden_filter}"
-    )
+    base_where = f"{where} AND f.file_type_high = ? AND f.stale = 0{hidden_filter}"
     params.append(media_type)
 
     loc_filter, loc_params = await _get_online_loc_filter(db, base_where, params)

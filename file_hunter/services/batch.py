@@ -336,7 +336,7 @@ async def batch_move(
                 }
             )
             try:
-                result = await move_file(
+                await move_file(
                     db,
                     fid,
                     destination_folder_id=destination_folder_id,

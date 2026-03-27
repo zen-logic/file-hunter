@@ -243,7 +243,10 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
     cross_location = dst_location_id != location_id
     if cross_location:
         await fs.copy_file(
-            full_path, location_id, dst_full_path, dst_location_id,
+            full_path,
+            location_id,
+            dst_full_path,
+            dst_location_id,
             mtime=parse_mtime(f["modified_date"]),
         )
         await fs.file_delete(full_path, location_id)

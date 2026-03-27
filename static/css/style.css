@@ -2761,3 +2761,119 @@ select.modal-input {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* ── Theme controls in settings ────────────────────────────── */
+
+.settings-theme-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.settings-theme-controls .search-select {
+    min-width: 160px;
+}
+
+/* ── Theme editor ──────────────────────────────────────────── */
+
+.theme-editor-dialog {
+    width: 520px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.theme-editor-header {
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 0.5rem;
+}
+
+.theme-editor-body {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+}
+
+.theme-editor-group {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 4px;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.theme-editor-group legend {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-bright);
+    cursor: pointer;
+    padding: 0 0.25rem;
+}
+
+.theme-editor-group.collapsed > :not(legend) {
+    display: none;
+}
+
+.theme-editor-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0;
+}
+
+.theme-editor-row-inputs {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.theme-editor-label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.theme-editor-color {
+    width: 28px;
+    height: 22px;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 0;
+    cursor: pointer;
+    background: none;
+    flex-shrink: 0;
+}
+
+.theme-editor-text {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--font-size-sm);
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 0.2rem 0.3rem;
+}
+
+.theme-editor-slider {
+    flex: 1;
+    min-width: 0;
+}
+
+.theme-editor-slider-val {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    min-width: 2.5em;
+    text-align: right;
+}
+
+.theme-editor-select {
+    flex: 1;
+    font-size: var(--font-size-sm);
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 0.2rem 0.3rem;
+}

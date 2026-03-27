@@ -605,7 +605,10 @@ async def move_file(
         if cross_location:
             # Cross-location (possibly agent↔local): copy + delete
             await fs.copy_file(
-                f["full_path"], src_loc_id, new_full_path, final_location_id,
+                f["full_path"],
+                src_loc_id,
+                new_full_path,
+                final_location_id,
                 mtime=parse_mtime(f["modified_date"]),
             )
             await fs.file_delete(f["full_path"], src_loc_id)
@@ -634,7 +637,11 @@ async def move_file(
     await db.commit()
 
     if not skip_post_processing:
-        loc_ids = {src_loc_id, final_location_id} if final_location_id != src_loc_id else {src_loc_id}
+        loc_ids = (
+            {src_loc_id, final_location_id}
+            if final_location_id != src_loc_id
+            else {src_loc_id}
+        )
         await post_op_stats(location_ids=loc_ids)
 
     return {

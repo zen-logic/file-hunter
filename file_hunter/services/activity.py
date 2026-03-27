@@ -81,16 +81,20 @@ async def _broadcaster():
     from file_hunter.ws.scan import broadcast
 
     while _activities:
-        await broadcast({
-            "type": "server_activity",
-            "activities": get_all(),
-            "count": len(_activities),
-        })
+        await broadcast(
+            {
+                "type": "server_activity",
+                "activities": get_all(),
+                "count": len(_activities),
+            }
+        )
         await asyncio.sleep(2)
 
     # One final broadcast to clear the UI
-    await broadcast({
-        "type": "server_activity",
-        "activities": [],
-        "count": 0,
-    })
+    await broadcast(
+        {
+            "type": "server_activity",
+            "activities": [],
+            "count": 0,
+        }
+    )

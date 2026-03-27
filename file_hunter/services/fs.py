@@ -53,7 +53,9 @@ async def file_write_text(path: str, text: str, location_id: int, append: bool =
     proxy = get_agent_proxy()
     if not proxy:
         raise ConnectionError("Agent proxy not available.")
-    return await proxy("file_write", location_id, path=path, content=text, append=append)
+    return await proxy(
+        "file_write", location_id, path=path, content=text, append=append
+    )
 
 
 async def file_write_bytes(path: str, data: bytes, location_id: int):
@@ -176,8 +178,12 @@ async def dir_move(src: str, dest: str, location_id: int):
 
 
 async def copy_file(
-    src: str, src_loc_id: int, dst: str, dst_loc_id: int,
-    on_progress=None, mtime: float | None = None,
+    src: str,
+    src_loc_id: int,
+    dst: str,
+    dst_loc_id: int,
+    on_progress=None,
+    mtime: float | None = None,
 ):
     """Copy a file between agent locations via streaming (constant memory).
 
@@ -186,7 +192,12 @@ async def copy_file(
     from file_hunter.services.agent_ops import stream_copy
 
     await stream_copy(
-        src, src_loc_id, dst, dst_loc_id, on_progress=on_progress, mtime=mtime,
+        src,
+        src_loc_id,
+        dst,
+        dst_loc_id,
+        on_progress=on_progress,
+        mtime=mtime,
     )
 
 
@@ -196,7 +207,11 @@ async def copy_file(
 
 
 async def write_moved_stub(
-    original_path: str, filename: str, dest_path: str, now_iso: str, location_id: int,
+    original_path: str,
+    filename: str,
+    dest_path: str,
+    now_iso: str,
+    location_id: int,
     dest_location_name: str = "",
 ):
     """Generate .moved stub text, write it, and delete the original."""

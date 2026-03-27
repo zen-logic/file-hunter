@@ -1,5 +1,8 @@
 import API from '../api.js';
-import { loadThemeNames, applyTheme } from '../themes.js';
+import { loadThemes, applyTheme, isBuiltIn, clearThemeCache } from '../themes.js';
+import ConfirmModal from './confirm.js';
+import ThemeEditor from './theme-editor.js';
+import Toast from './toast.js';
 import Update from './update.js';
 import RepairCatalog from './repaircatalog.js';
 
@@ -21,12 +24,13 @@ const Settings = {
         const content = document.getElementById('settings-content');
         content.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div>Loading…</div>';
 
-        const [settingsRes, usersRes, proRes, themeNames] = await Promise.all([
+        const [settingsRes, usersRes, proRes, themes] = await Promise.all([
             API.get('/api/settings'),
             API.get('/api/auth/users'),
             API.get('/api/pro/status'),
-            loadThemeNames(),
+            loadThemes(),
         ]);
+        const themeNames = themes.map(t => t.name);
 
         const settings = settingsRes.ok ? settingsRes.data : {};
         const users = usersRes.ok ? usersRes.data : [];
@@ -50,7 +54,12 @@ const Settings = {
                 <h3 class="settings-section-title">Appearance</h3>
                 <div class="settings-row">
                     <label class="modal-label" for="settings-theme">Theme</label>
-                    <select class="search-select" id="settings-theme"></select>
+                    <div class="settings-theme-controls">
+                        <select class="search-select" id="settings-theme"></select>
+                        <button class="btn btn-sm" id="settings-edit-theme">Edit</button>
+                        <button class="btn btn-sm btn-danger" id="settings-delete-theme">Delete</button>
+                    </div>
+                    <button class="btn btn-sm" id="settings-new-theme">New Theme</button>
                 </div>
             </div>
             <div class="settings-section">
@@ -105,7 +114,68 @@ const Settings = {
             themeSelect.appendChild(opt);
         }
         if (themeNames.includes(savedTheme)) themeSelect.value = savedTheme;
-        themeSelect.addEventListener('change', () => applyTheme(themeSelect.value));
+
+        const editBtn = document.getElementById('settings-edit-theme');
+        const deleteBtn = document.getElementById('settings-delete-theme');
+        const updateThemeButtons = () => {
+            const builtIn = isBuiltIn(themeSelect.value);
+            deleteBtn.disabled = builtIn || themeSelect.value === 'default';
+        };
+        updateThemeButtons();
+
+        themeSelect.addEventListener('change', () => {
+            applyTheme(themeSelect.value);
+            updateThemeButtons();
+        });
+
+        const refreshThemeList = async () => {
+            clearThemeCache();
+            const fresh = await loadThemes();
+            const names = fresh.map(t => t.name);
+            themeSelect.innerHTML = '';
+            const sorted = ['default', ...names.filter(n => n !== 'default').sort()];
+            for (const name of sorted) {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                themeSelect.appendChild(opt);
+            }
+            const current = localStorage.getItem('fh-theme') || 'default';
+            if (names.includes(current)) themeSelect.value = current;
+            updateThemeButtons();
+        };
+
+        ThemeEditor.init(async (name) => {
+            await refreshThemeList();
+            themeSelect.value = name;
+            updateThemeButtons();
+        });
+
+        editBtn.addEventListener('click', () => {
+            ThemeEditor.open(themeSelect.value);
+        });
+
+        document.getElementById('settings-new-theme').addEventListener('click', () => {
+            ThemeEditor.open(null);
+        });
+
+        deleteBtn.addEventListener('click', async () => {
+            const current = themeSelect.value;
+            if (isBuiltIn(current) || current === 'default') return;
+            const ok = await ConfirmModal.open({
+                title: 'Delete Theme',
+                message: `Delete theme "${current}"?`,
+                confirmLabel: 'Delete',
+            });
+            if (!ok) return;
+            const res = await API.delete(`/api/themes/${current}`);
+            if (!res.ok) {
+                Toast.error(res.error || 'Failed to delete theme.');
+                return;
+            }
+            applyTheme('default');
+            await refreshThemeList();
+        });
 
         // Users table
         this._renderUsers(users);

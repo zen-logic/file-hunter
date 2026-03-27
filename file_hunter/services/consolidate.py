@@ -626,7 +626,9 @@ async def run_consolidation(
 
 
 async def run_batch_consolidation(
-    file_ids: list[int], mode: str, dest_folder_id: str | None,
+    file_ids: list[int],
+    mode: str,
+    dest_folder_id: str | None,
     filename_match_only: bool = False,
 ):
     """Run consolidation for multiple files sequentially, sharing a single result log.

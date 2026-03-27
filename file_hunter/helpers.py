@@ -1,7 +1,6 @@
 """Shared helper functions — eliminates repeated patterns across services."""
 
-import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 def parse_mtime(value) -> float | None:
@@ -26,6 +25,7 @@ def parse_mtime(value) -> float | None:
 # ---------------------------------------------------------------------------
 # 1. Prefixed ID parsing  (loc-N, fld-N)
 # ---------------------------------------------------------------------------
+
 
 def parse_prefixed_id(prefixed: str) -> tuple[str, int]:
     """Parse 'loc-49' -> ('loc', 49), 'fld-123' -> ('fld', 123).
@@ -53,6 +53,7 @@ def parse_folder_id(prefixed: str) -> int:
 # ---------------------------------------------------------------------------
 # 4. Post-operation stats update
 # ---------------------------------------------------------------------------
+
 
 async def post_op_stats(
     *,
@@ -89,6 +90,7 @@ async def post_op_stats(
 # 5. Effective hash lookup
 # ---------------------------------------------------------------------------
 
+
 async def get_effective_hash(file_id: int) -> tuple[str | None, str | None]:
     """Return (effective_hash, hash_column) for a file.
 
@@ -108,7 +110,9 @@ async def get_effective_hash(file_id: int) -> tuple[str | None, str | None]:
     return None, None
 
 
-async def get_effective_hashes(file_ids: list[int]) -> dict[int, tuple[str | None, str | None]]:
+async def get_effective_hashes(
+    file_ids: list[int],
+) -> dict[int, tuple[str | None, str | None]]:
     """Batch version of get_effective_hash.
 
     Returns {file_id: (effective_hash, hash_column), ...}.
@@ -131,6 +135,7 @@ async def get_effective_hashes(file_ids: list[int]) -> dict[int, tuple[str | Non
 # ---------------------------------------------------------------------------
 # 7. Target resolution  (loc-N / fld-N -> location + folder metadata)
 # ---------------------------------------------------------------------------
+
 
 async def resolve_target(db, prefixed_id: str) -> dict | None:
     """Resolve a prefixed ID to location/folder metadata.

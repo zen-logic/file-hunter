@@ -1,7 +1,10 @@
 from starlette.requests import Request
 from file_hunter.db import read_db
 from file_hunter.core import json_ok
-from file_hunter.services.slideshow import get_slideshow_ids, get_slideshow_ids_from_search
+from file_hunter.services.slideshow import (
+    get_slideshow_ids,
+    get_slideshow_ids_from_search,
+)
 
 
 async def slideshow_ids(request: Request):

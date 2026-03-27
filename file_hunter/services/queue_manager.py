@@ -241,6 +241,7 @@ async def stop():
 
     # Clean up activity registrations for any ops that were still running
     from file_hunter.services.activity import unregister as _act_unregister
+
     for op_id in list(_running_ops):
         _act_unregister(f"op-{op_id}")
     _running_ops.clear()
@@ -378,7 +379,11 @@ async def _run():
                 _track_location(op_id, loc_id)
                 logger.info("Queue manager: starting %s (id=%d)", op_type, op_id)
 
-                from file_hunter.services.activity import register as _act_register, op_label
+                from file_hunter.services.activity import (
+                    register as _act_register,
+                    op_label,
+                )
+
                 _act_register(f"op-{op_id}", op_label(op_type, loc_name))
 
                 task = asyncio.create_task(_execute(op_type, op_id, agent_id, params))
@@ -408,6 +413,7 @@ async def _reap_finished():
         del _running_ops[op_id]
 
         from file_hunter.services.activity import unregister as _act_unregister
+
         _act_unregister(f"op-{op_id}")
 
         # Untrack location

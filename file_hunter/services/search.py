@@ -32,6 +32,7 @@ def _cancel_active_search():
         except Exception:
             pass
 
+
 _SEARCH_SCHEMA = """
 CREATE TABLE results (
     file_id INTEGER PRIMARY KEY,
@@ -66,6 +67,7 @@ RESULT_SORT_COLUMNS = {
 
 def _search_db_dir() -> Path:
     from file_hunter.config import load_config
+
     config = load_config()
     return Path(config.get("data_dir", "data")) / "temp"
 
@@ -73,9 +75,6 @@ def _search_db_dir() -> Path:
 async def _populate_search_db(db, where, params, search_path):
     """Run the search query and populate a temp SQLite DB with results."""
     global _active_search_conn
-    from file_hunter.hashes_db import get_file_hashes
-    from file_hunter.services.dup_counts import batch_dup_counts
-
     _active_search_conn = db
     try:
         return await _do_populate_search_db(db, where, params, search_path)
@@ -112,12 +111,11 @@ async def _do_populate_search_db(db, where, params, search_path):
 
     strong_list = [h["hash_strong"] for h in hash_map.values() if h.get("hash_strong")]
     fast_list = [
-        h["hash_fast"] for h in hash_map.values()
+        h["hash_fast"]
+        for h in hash_map.values()
         if not h.get("hash_strong") and h.get("hash_fast")
     ]
-    live_dups = await batch_dup_counts(
-        strong_hashes=strong_list, fast_hashes=fast_list
-    )
+    live_dups = await batch_dup_counts(strong_hashes=strong_list, fast_hashes=fast_list)
 
     # Build insert data
     insert_data = []
@@ -126,11 +124,23 @@ async def _do_populate_search_db(db, where, params, search_path):
         hs = h.get("hash_strong")
         hf = h.get("hash_fast")
         dc = live_dups.get(hs or hf, 0)
-        insert_data.append((
-            r["id"], r["filename"], r["file_type_high"], r["file_type_low"],
-            r["file_size"], r["modified_date"], r["stale"], r["hidden"],
-            r["location_id"], r["location_name"], hs, hf, dc,
-        ))
+        insert_data.append(
+            (
+                r["id"],
+                r["filename"],
+                r["file_type_high"],
+                r["file_type_low"],
+                r["file_size"],
+                r["modified_date"],
+                r["stale"],
+                r["hidden"],
+                r["location_id"],
+                r["location_name"],
+                hs,
+                hf,
+                dc,
+            )
+        )
 
     # Write to search DB in a thread (sync SQLite must not block event loop)
     await asyncio.to_thread(_write_search_db, str(search_path), insert_data)
@@ -173,22 +183,24 @@ def _read_search_page(search_path, sort, sort_dir, page):
 
     items = []
     for r in rows:
-        items.append({
-            "id": r["file_id"],
-            "name": r["filename"],
-            "typeHigh": r["file_type_high"],
-            "typeLow": r["file_type_low"],
-            "size": r["file_size"],
-            "date": r["modified_date"],
-            "dups": r["dup_count"],
-            "hashStrong": r["hash_strong"],
-            "hashFast": r["hash_fast"],
-            "stale": bool(r["stale"]),
-            "missing": False,
-            "hidden": bool(r["hidden"]),
-            "location": r["location_name"],
-            "locationId": r["location_id"],
-        })
+        items.append(
+            {
+                "id": r["file_id"],
+                "name": r["filename"],
+                "typeHigh": r["file_type_high"],
+                "typeLow": r["file_type_low"],
+                "size": r["file_size"],
+                "date": r["modified_date"],
+                "dups": r["dup_count"],
+                "hashStrong": r["hash_strong"],
+                "hashFast": r["hash_fast"],
+                "stale": bool(r["stale"]),
+                "missing": False,
+                "hidden": bool(r["hidden"]),
+                "location": r["location_name"],
+                "locationId": r["location_id"],
+            }
+        )
 
     return items, total
 
@@ -407,9 +419,16 @@ async def search_files(
     items = []
     if include_files:
         # Check if we have a cached search DB
-        if search_id and _search_id == search_id and _search_db_path and os.path.exists(_search_db_path):
+        if (
+            search_id
+            and _search_id == search_id
+            and _search_db_path
+            and os.path.exists(_search_db_path)
+        ):
             # Cache hit — page from existing search DB
-            items, total = await asyncio.to_thread(_read_search_page, _search_db_path, sort, sort_dir, page)
+            items, total = await asyncio.to_thread(
+                _read_search_page, _search_db_path, sort, sort_dir, page
+            )
         else:
             # New search — kill any running search first
             _cancel_active_search()
@@ -432,7 +451,9 @@ async def search_files(
             _search_db_path = search_path
 
             # Read first page
-            items, total = await asyncio.to_thread(_read_search_page, search_path, sort, sort_dir, page)
+            items, total = await asyncio.to_thread(
+                _read_search_page, search_path, sort, sort_dir, page
+            )
             search_id = new_id
 
     # Folder search (name filter only)
@@ -691,8 +712,15 @@ async def search_files_advanced(
     total = 0
     items = []
     if include_files:
-        if search_id and _search_id == search_id and _search_db_path and os.path.exists(_search_db_path):
-            items, total = await asyncio.to_thread(_read_search_page, _search_db_path, sort, sort_dir, page)
+        if (
+            search_id
+            and _search_id == search_id
+            and _search_db_path
+            and os.path.exists(_search_db_path)
+        ):
+            items, total = await asyncio.to_thread(
+                _read_search_page, _search_db_path, sort, sort_dir, page
+            )
         else:
             # Kill any running search first
             _cancel_active_search()
@@ -711,7 +739,9 @@ async def search_files_advanced(
             total = await _populate_search_db(db, where, where_params, search_path)
             _search_id = new_id
             _search_db_path = search_path
-            items, total = await asyncio.to_thread(_read_search_page, search_path, sort, sort_dir, page)
+            items, total = await asyncio.to_thread(
+                _read_search_page, search_path, sort, sort_dir, page
+            )
             search_id = new_id
 
     # Folder search — apply name conditions to folder name

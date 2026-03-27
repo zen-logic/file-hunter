@@ -15,7 +15,14 @@ from file_hunter.services import fs
 
 logger = logging.getLogger("file_hunter")
 
-CSV_HEADERS = ["source_location", "source_path", "destination_location", "destination_path", "result", "detail"]
+CSV_HEADERS = [
+    "source_location",
+    "source_path",
+    "destination_location",
+    "destination_path",
+    "result",
+    "detail",
+]
 
 
 def _make_filename(op_type: str) -> str:
@@ -41,13 +48,19 @@ async def create_log(dest_dir: str, dest_loc_id: int, op_type: str) -> str:
 
 
 async def append_row(
-    csv_path: str, dest_loc_id: int,
-    source_location: str, source_path: str,
-    dest_location: str, dest_path: str,
-    result: str, detail: str = "",
+    csv_path: str,
+    dest_loc_id: int,
+    source_location: str,
+    source_path: str,
+    dest_location: str,
+    dest_path: str,
+    result: str,
+    detail: str = "",
 ):
     """Append a single result row to the CSV."""
-    line = _row_to_csv([source_location, source_path, dest_location, dest_path, result, detail])
+    line = _row_to_csv(
+        [source_location, source_path, dest_location, dest_path, result, detail]
+    )
     await fs.file_write_text(csv_path, line, dest_loc_id, append=True)
 
 
@@ -79,13 +92,19 @@ async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None)
                 created_date, modified_date, date_cataloged, date_last_seen)
                VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?, '', '', ?, ?, ?, ?)""",
             (
-                filename, csv_path, rel_path, location_id, folder_id,
-                file_size, now_iso, now_iso, now_iso, now_iso,
+                filename,
+                csv_path,
+                rel_path,
+                location_id,
+                folder_id,
+                file_size,
+                now_iso,
+                now_iso,
+                now_iso,
+                now_iso,
             ),
         )
 
     from file_hunter.stats_db import update_stats_for_files
 
-    await update_stats_for_files(
-        location_id, added=[(folder_id, file_size, "text", 0)]
-    )
+    await update_stats_for_files(location_id, added=[(folder_id, file_size, "text", 0)])

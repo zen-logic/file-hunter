@@ -11,7 +11,10 @@ from file_hunter.services.search import (
 
 
 async def search(request: Request):
-    from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
+    from file_hunter.services.activity import (
+        register as _act_reg,
+        unregister as _act_unreg,
+    )
 
     page = int(request.query_params.get("page", 0))
     sort = request.query_params.get("sort", "name")
@@ -34,7 +37,16 @@ async def search(request: Request):
         return await _do_search(request, page, sort, sort_dir, location_id, folder_id)
     except Exception as e:
         if "interrupted" in str(e):
-            return json_ok({"items": [], "folders": [], "total": 0, "page": 0, "pageSize": 120, "cancelled": True})
+            return json_ok(
+                {
+                    "items": [],
+                    "folders": [],
+                    "total": 0,
+                    "page": 0,
+                    "pageSize": 120,
+                    "cancelled": True,
+                }
+            )
         raise
     finally:
         if is_new_search:
@@ -55,7 +67,9 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
                 page=page,
                 sort=sort,
                 sort_dir=sort_dir,
-                cached_total=int(request.query_params["cachedTotal"]) if "cachedTotal" in request.query_params else None,
+                cached_total=int(request.query_params["cachedTotal"])
+                if "cachedTotal" in request.query_params
+                else None,
                 search_id=request.query_params.get("searchId"),
             )
         else:
@@ -81,7 +95,9 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
                 page=page,
                 sort=sort,
                 sort_dir=sort_dir,
-                cached_total=int(request.query_params["cachedTotal"]) if "cachedTotal" in request.query_params else None,
+                cached_total=int(request.query_params["cachedTotal"])
+                if "cachedTotal" in request.query_params
+                else None,
                 search_id=request.query_params.get("searchId"),
             )
     return json_ok(results)

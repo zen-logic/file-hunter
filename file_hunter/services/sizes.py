@@ -27,7 +27,10 @@ def schedule_size_recalc(*location_ids: int):
 
 async def _bg_recalc_sizes(location_ids: list[int]):
     from file_hunter.ws.scan import broadcast
-    from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
+    from file_hunter.services.activity import (
+        register as _act_reg,
+        unregister as _act_unreg,
+    )
 
     activity_name = f"size-recalc-{id(location_ids)}"
     _act_reg(activity_name, "Size recalc")
@@ -289,9 +292,7 @@ async def populate_all_sizes_if_needed():
 
     # Check which locations have no entry in stats.db
     async with read_stats() as sdb:
-        existing = await sdb.execute_fetchall(
-            "SELECT location_id FROM location_stats"
-        )
+        existing = await sdb.execute_fetchall("SELECT location_id FROM location_stats")
     existing_ids = {r["location_id"] for r in existing}
     null_locs = [loc for loc in all_locs if loc["id"] not in existing_ids]
 

@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount, WebSocketRoute
@@ -52,7 +53,11 @@ from file_hunter.routes.scan import (
     cancel_scan,
     get_scan_queue,
 )
-from file_hunter.routes.consolidate import consolidate, batch_consolidate, consolidate_preview
+from file_hunter.routes.consolidate import (
+    consolidate,
+    batch_consolidate,
+    consolidate_preview,
+)
 from file_hunter.routes.merge import merge, cancel_merge
 from file_hunter.routes.upload import upload_files
 from file_hunter.routes.stats import (
@@ -88,6 +93,9 @@ from file_hunter.routes.settings import (
     get_pro_status,
     reset_queues,
     list_themes,
+    save_theme,
+    delete_theme,
+    serve_theme_css,
 )
 from file_hunter.routes.ignore import (
     list_ignore_rules,
@@ -257,9 +265,6 @@ async def on_shutdown():
     await close_stats_db()
 
 
-from contextlib import asynccontextmanager
-
-
 @asynccontextmanager
 async def lifespan(app):
     await on_startup()
@@ -283,6 +288,8 @@ app = Starlette(
         Route("/api/settings", get_settings, methods=["GET"]),
         Route("/api/settings", update_settings, methods=["PATCH"]),
         Route("/api/themes", list_themes, methods=["GET"]),
+        Route("/api/themes", save_theme, methods=["POST"]),
+        Route("/api/themes/{name}", delete_theme, methods=["DELETE"]),
         Route("/api/pro/status", get_pro_status, methods=["GET"]),
         Route("/api/update/check", check_update, methods=["POST"]),
         Route("/api/update/install", install_update, methods=["POST"]),
@@ -358,6 +365,7 @@ app = Starlette(
         Route("/api/folders/{id:int}/stats", folder_stats, methods=["GET"]),
         WebSocketRoute("/ws", ws_endpoint),
         WebSocketRoute("/ws/agent", agent_ws_endpoint),
+        Route("/css/themes/{name}", serve_theme_css, methods=["GET"]),
         *extensions.get_routes(),
         *[
             Mount(path, app=StaticFiles(directory=d))

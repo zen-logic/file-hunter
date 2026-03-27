@@ -157,27 +157,6 @@
             <div id="status-load-dropdown" class="hidden"></div>
             <div id="status-connection"></div>
         </footer>
-        <div id="prompt-modal" class="modal-overlay hidden">
-            <div class="modal-dialog">
-                <h2 class="modal-title" id="prompt-modal-title">Input</h2>
-                <p id="prompt-modal-text" class="modal-text"></p>
-                <input type="text" class="modal-input" id="prompt-modal-input">
-                <div class="modal-actions">
-                    <button class="btn" id="prompt-modal-cancel">Cancel</button>
-                    <button class="btn btn-primary" id="prompt-modal-submit">Save</button>
-                </div>
-            </div>
-        </div>
-        <div id="confirm-modal" class="modal-overlay hidden">
-            <div class="modal-dialog">
-                <h2 class="modal-title" id="confirm-modal-title">Confirm</h2>
-                <p id="confirm-modal-text" class="modal-text"></p>
-                <div class="modal-actions">
-                    <button class="btn" id="confirm-modal-cancel">Cancel</button>
-                    <button class="btn btn-primary" id="confirm-modal-submit">OK</button>
-                </div>
-            </div>
-        </div>
         <div id="scan-confirm-modal" class="modal-overlay hidden">
             <div class="modal-dialog">
                 <h2 class="modal-title">Scan</h2>
@@ -639,6 +618,36 @@
                     <button class="btn btn-sm" id="settings-close">&times;</button>
                 </div>
                 <div id="settings-content"></div>
+            </div>
+        </div>
+        <div id="theme-editor-modal" class="modal-overlay hidden">
+            <div class="modal-dialog theme-editor-dialog">
+                <div class="theme-editor-header">
+                    <h2 class="modal-title" id="theme-editor-title">Theme Editor</h2>
+                </div>
+                <div class="theme-editor-body" id="theme-editor-body"></div>
+                <div class="modal-actions" id="theme-editor-actions"></div>
+            </div>
+        </div>
+        <div id="prompt-modal" class="modal-overlay hidden">
+            <div class="modal-dialog">
+                <h2 class="modal-title" id="prompt-modal-title">Input</h2>
+                <p id="prompt-modal-text" class="modal-text"></p>
+                <input type="text" class="modal-input" id="prompt-modal-input">
+                <div class="modal-actions">
+                    <button class="btn" id="prompt-modal-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="prompt-modal-submit">Save</button>
+                </div>
+            </div>
+        </div>
+        <div id="confirm-modal" class="modal-overlay hidden">
+            <div class="modal-dialog">
+                <h2 class="modal-title" id="confirm-modal-title">Confirm</h2>
+                <p id="confirm-modal-text" class="modal-text"></p>
+                <div class="modal-actions">
+                    <button class="btn" id="confirm-modal-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="confirm-modal-submit">OK</button>
+                </div>
             </div>
         </div>
     </div>

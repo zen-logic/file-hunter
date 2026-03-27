@@ -1,0 +1,135 @@
+{
+    "groups": [
+        {
+            "label": "Background & Surfaces",
+            "vars": [
+                {"var": "--color-bg", "label": "Background", "type": "color"},
+                {"var": "--color-surface", "label": "Surface", "type": "color"},
+                {"var": "--color-surface-raised", "label": "Raised surface", "type": "color"},
+                {"var": "--color-surface-hover", "label": "Surface hover", "type": "color"},
+                {"var": "--color-surface-active", "label": "Surface active", "type": "color"},
+                {"var": "--color-selected", "label": "Selected row", "type": "color"},
+                {"var": "--color-overlay", "label": "Modal overlay", "type": "text"}
+            ]
+        },
+        {
+            "label": "Borders",
+            "vars": [
+                {"var": "--color-border", "label": "Border", "type": "color"},
+                {"var": "--color-border-subtle", "label": "Border subtle", "type": "color"},
+                {"var": "--color-border-hover", "label": "Border hover", "type": "color"},
+                {"var": "--color-border-card", "label": "Card border", "type": "color"}
+            ]
+        },
+        {
+            "label": "Text",
+            "vars": [
+                {"var": "--color-text", "label": "Primary text", "type": "color"},
+                {"var": "--color-text-bright", "label": "Bright text", "type": "color"},
+                {"var": "--color-text-dim", "label": "Dim text", "type": "color"},
+                {"var": "--color-text-muted", "label": "Muted text", "type": "color"},
+                {"var": "--color-text-secondary", "label": "Secondary text", "type": "color"},
+                {"var": "--color-text-placeholder", "label": "Placeholder text", "type": "color"}
+            ]
+        },
+        {
+            "label": "Typography",
+            "vars": [
+                {"var": "--font-family", "label": "Font family", "type": "text"},
+                {"var": "--font-size-xs", "label": "Font size XS", "type": "text"},
+                {"var": "--font-size-sm", "label": "Font size SM", "type": "text"},
+                {"var": "--font-size-md", "label": "Font size MD", "type": "text"},
+                {"var": "--font-size-base", "label": "Font size base", "type": "text"},
+                {"var": "--font-size-lg", "label": "Font size LG", "type": "text"},
+                {"var": "--font-size-xl", "label": "Font size XL", "type": "text"},
+                {"var": "--font-size-stat", "label": "Font size stat", "type": "text"},
+                {"var": "--font-weight-normal", "label": "Weight normal", "type": "text"},
+                {"var": "--font-weight-semibold", "label": "Weight semibold", "type": "text"},
+                {"var": "--font-weight-bold", "label": "Weight bold", "type": "text"}
+            ]
+        },
+        {
+            "label": "Primary & Buttons",
+            "vars": [
+                {"var": "--color-primary", "label": "Primary", "type": "color"},
+                {"var": "--color-primary-hover", "label": "Primary hover", "type": "color"},
+                {"var": "--color-btn-active", "label": "Button active", "type": "color"},
+                {"var": "--btn-primary-bg", "label": "Button background", "type": "text"},
+                {"var": "--btn-primary-bg-hover", "label": "Button bg hover", "type": "text"},
+                {"var": "--btn-primary-text", "label": "Button text", "type": "text"},
+                {"var": "--color-danger-hover", "label": "Danger hover", "type": "color"}
+            ]
+        },
+        {
+            "label": "Status & Badges",
+            "vars": [
+                {"var": "--color-status-ok", "label": "Status OK", "type": "color"},
+                {"var": "--color-status-warn", "label": "Status warning", "type": "color"},
+                {"var": "--color-status-error", "label": "Status error", "type": "color"},
+                {"var": "--color-dup-bg", "label": "Duplicate badge bg", "type": "color"},
+                {"var": "--color-dup-text", "label": "Duplicate badge text", "type": "color"},
+                {"var": "--color-tag-bg", "label": "Tag badge bg", "type": "color"},
+                {"var": "--color-tag-text", "label": "Tag badge text", "type": "color"},
+                {"var": "--color-scan-bg", "label": "Scanning badge bg", "type": "color"},
+                {"var": "--color-scan-border", "label": "Scanning badge border", "type": "color"},
+                {"var": "--color-scan-text", "label": "Scanning badge text", "type": "color"},
+                {"var": "--color-agent-bg", "label": "Agent badge bg", "type": "color"},
+                {"var": "--color-agent-text", "label": "Agent badge text", "type": "color"},
+                {"var": "--color-backfill-bg", "label": "Backfill badge bg", "type": "color"},
+                {"var": "--color-backfill-text", "label": "Backfill badge text", "type": "color"},
+                {"var": "--color-pending-bg", "label": "Pending badge bg", "type": "color"},
+                {"var": "--color-pending-text", "label": "Pending badge text", "type": "color"}
+            ]
+        },
+        {
+            "label": "Offline & Stale",
+            "vars": [
+                {"var": "--color-offline-bg", "label": "Offline background", "type": "color"},
+                {"var": "--color-offline-text", "label": "Offline text", "type": "color"},
+                {"var": "--opacity-offline", "label": "Offline opacity", "type": "slider", "min": 0, "max": 1, "step": 0.05},
+                {"var": "--color-stale-bg", "label": "Stale background", "type": "color"},
+                {"var": "--color-stale-text", "label": "Stale text", "type": "color"},
+                {"var": "--opacity-stale", "label": "Stale opacity", "type": "slider", "min": 0, "max": 1, "step": 0.05},
+                {"var": "--opacity-pending", "label": "Pending opacity", "type": "slider", "min": 0, "max": 1, "step": 0.05}
+            ]
+        },
+        {
+            "label": "Progress & Status Bar",
+            "vars": [
+                {"var": "--color-progress-track", "label": "Progress track", "type": "color"},
+                {"var": "--color-progress-fill", "label": "Progress fill", "type": "color"},
+                {"var": "--color-statusbar-bg", "label": "Status bar bg", "type": "color"}
+            ]
+        },
+        {
+            "label": "Treemap",
+            "vars": [
+                {"var": "--treemap-color-1", "label": "Treemap 1", "type": "color"},
+                {"var": "--treemap-color-2", "label": "Treemap 2", "type": "color"},
+                {"var": "--treemap-color-3", "label": "Treemap 3", "type": "color"},
+                {"var": "--treemap-color-4", "label": "Treemap 4", "type": "color"},
+                {"var": "--treemap-color-5", "label": "Treemap 5", "type": "color"},
+                {"var": "--treemap-color-6", "label": "Treemap 6", "type": "color"},
+                {"var": "--treemap-color-7", "label": "Treemap 7", "type": "color"},
+                {"var": "--treemap-color-8", "label": "Treemap 8", "type": "color"}
+            ]
+        },
+        {
+            "label": "Effects",
+            "vars": [
+                {"var": "--text-glow", "label": "Text glow", "type": "text"},
+                {"var": "--scanline-opacity", "label": "Scanline opacity", "type": "slider", "min": 0, "max": 1, "step": 0.05},
+                {"var": "--title-letter-spacing", "label": "Title letter spacing", "type": "text"},
+                {"var": "--title-text-transform", "label": "Title transform", "type": "select", "options": ["none", "uppercase", "lowercase", "capitalize"]},
+                {"var": "--title-glow", "label": "Title glow", "type": "text"},
+                {"var": "--glow-primary", "label": "Primary glow", "type": "text"},
+                {"var": "--glow-primary-hover", "label": "Primary glow hover", "type": "text"},
+                {"var": "--glow-focus", "label": "Focus glow", "type": "text"},
+                {"var": "--glow-modal", "label": "Modal glow", "type": "text"},
+                {"var": "--glow-stat", "label": "Stat glow", "type": "text"},
+                {"var": "--glow-status-dot", "label": "Status dot glow", "type": "text"},
+                {"var": "--glow-dup", "label": "Duplicate glow", "type": "text"}
+            ]
+        }
+    ]
+}

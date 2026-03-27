@@ -67,7 +67,9 @@ async def consolidate(request: Request):
 
     filename_match_only = body.get("filename_match_only", False)
     asyncio.create_task(
-        run_consolidation(file_id, mode, dest_folder_id, filename_match_only=filename_match_only)
+        run_consolidation(
+            file_id, mode, dest_folder_id, filename_match_only=filename_match_only
+        )
     )
 
     return json_ok({"message": f"Consolidation started for '{rows[0]['filename']}'"})
@@ -106,7 +108,9 @@ async def batch_consolidate(request: Request):
 
     filename_match_only = body.get("filename_match_only", False)
     asyncio.create_task(
-        run_batch_consolidation(file_ids, mode, dest_folder_id, filename_match_only=filename_match_only)
+        run_batch_consolidation(
+            file_ids, mode, dest_folder_id, filename_match_only=filename_match_only
+        )
     )
 
     return json_ok(
@@ -169,7 +173,9 @@ async def consolidate_preview(request: Request):
     finally:
         await hconn.close()
 
-    return json_ok({
-        "total_dups": total_dups,
-        "filename_matched_dups": filename_matched_dups,
-    })
+    return json_ok(
+        {
+            "total_dups": total_dups,
+            "filename_matched_dups": filename_matched_dups,
+        }
+    )

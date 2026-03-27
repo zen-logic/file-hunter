@@ -208,12 +208,12 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
 
         # Create result log CSV at destination
         from file_hunter.services.op_result_log import (
-            create_log, append_row, add_to_catalog,
+            create_log,
+            append_row,
+            add_to_catalog,
         )
 
-        csv_path = await create_log(
-            dest_info["abs_path"], dest_loc_id, "merge"
-        )
+        csv_path = await create_log(dest_info["abs_path"], dest_loc_id, "merge")
         csv_folder_id = dest_info["folder_id"]
 
         # Cache per-folder writability to avoid repeated probes
@@ -231,9 +231,13 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
             if not exists:
                 files_skipped += 1
                 await append_row(
-                    csv_path, dest_loc_id,
-                    source_label, src_path,
-                    dest_label, "", "skipped (file missing)",
+                    csv_path,
+                    dest_loc_id,
+                    source_label,
+                    src_path,
+                    dest_label,
+                    "",
+                    "skipped (file missing)",
                 )
                 # Throttled progress
                 now = time.monotonic()
@@ -270,16 +274,25 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
 
                     async with hashes_writer() as hdb:
                         await hdb.execute(
-                            "UPDATE file_hashes SET hash_fast=? "
-                            "WHERE file_id=?",
+                            "UPDATE file_hashes SET hash_fast=? WHERE file_id=?",
                             (hash_fast, src_file["id"]),
                         )
-                except (PermissionError, FileNotFoundError, OSError, ConnectionError) as e:
+                except (
+                    PermissionError,
+                    FileNotFoundError,
+                    OSError,
+                    ConnectionError,
+                ) as e:
                     files_skipped += 1
                     await append_row(
-                        csv_path, dest_loc_id,
-                        source_label, src_path,
-                        dest_label, "", "skipped (hash failed)", str(e),
+                        csv_path,
+                        dest_loc_id,
+                        source_label,
+                        src_path,
+                        dest_label,
+                        "",
+                        "skipped (hash failed)",
+                        str(e),
                     )
                     continue
 
@@ -355,8 +368,11 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         )
 
                         await fs.write_moved_stub(
-                            src_path, src_file["filename"], dest_canonical,
-                            now_iso, src_loc_id,
+                            src_path,
+                            src_file["filename"],
+                            dest_canonical,
+                            now_iso,
+                            src_loc_id,
                             dest_location_name=dest_label,
                         )
                         st = await fs.file_stat(stub_path, src_loc_id)
@@ -376,8 +392,11 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                 # Best-effort: .sources at destination
                 try:
                     await fs.write_or_append_sources(
-                        dest_canonical, src_file["location_name"],
-                        src_file["rel_path"], now_iso, dest_loc_id,
+                        dest_canonical,
+                        src_file["location_name"],
+                        src_file["rel_path"],
+                        now_iso,
+                        dest_loc_id,
                     )
                     dest_file_id = dest_entry.get("id")
                     if dest_file_id:
@@ -389,16 +408,23 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         if drows:
                             d_rel_dir = os.path.dirname(drows[0]["rel_path"])
                             await _upsert_sources_record(
-                                dest_canonical, dest_loc_id,
-                                drows[0]["folder_id"], d_rel_dir, now_iso,
+                                dest_canonical,
+                                dest_loc_id,
+                                drows[0]["folder_id"],
+                                d_rel_dir,
+                                now_iso,
                             )
                 except Exception as e:
                     logger.warning("Sources write failed for %s: %s", dest_canonical, e)
 
                 await append_row(
-                    csv_path, dest_loc_id,
-                    source_label, src_path,
-                    dest_label, dest_canonical, stub_result,
+                    csv_path,
+                    dest_loc_id,
+                    source_label,
+                    src_path,
+                    dest_label,
+                    dest_canonical,
+                    stub_result,
                 )
             else:
                 # Unique — copy to destination
@@ -410,7 +436,10 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     await fs.dir_create(dest_dir, dest_loc_id, exist_ok=True)
                     actual_dest = await fs.unique_dest_path(dest_rel_path, dest_loc_id)
                     await fs.copy_file(
-                        src_path, src_loc_id, actual_dest, dest_loc_id,
+                        src_path,
+                        src_loc_id,
+                        actual_dest,
+                        dest_loc_id,
                         mtime=parse_mtime(src_file["modified_date"]),
                     )
 
@@ -420,9 +449,13 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         await fs.file_delete(actual_dest, dest_loc_id)
                         files_skipped += 1
                         await append_row(
-                            csv_path, dest_loc_id,
-                            source_label, src_path,
-                            dest_label, actual_dest, "skipped (hash mismatch)",
+                            csv_path,
+                            dest_loc_id,
+                            source_label,
+                            src_path,
+                            dest_label,
+                            actual_dest,
+                            "skipped (hash mismatch)",
                         )
                         continue
 
@@ -505,7 +538,13 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                                 "VALUES (?, ?, ?, NULL, ?, ?) "
                                 "ON CONFLICT(file_id) DO UPDATE SET "
                                 "hash_fast=excluded.hash_fast, hash_strong=excluded.hash_strong",
-                                (new_dest_file_id, dest_loc_id, file_size, copy_fast, copy_strong),
+                                (
+                                    new_dest_file_id,
+                                    dest_loc_id,
+                                    file_size,
+                                    copy_fast,
+                                    copy_strong,
+                                ),
                             )
 
                     from file_hunter.stats_db import update_stats_for_files as _usf
@@ -524,9 +563,14 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                 except Exception as e:
                     files_skipped += 1
                     await append_row(
-                        csv_path, dest_loc_id,
-                        source_label, src_path,
-                        dest_label, "", "error", str(e),
+                        csv_path,
+                        dest_loc_id,
+                        source_label,
+                        src_path,
+                        dest_label,
+                        "",
+                        "error",
+                        str(e),
                     )
                     continue
 
@@ -594,7 +638,11 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         )
 
                         await fs.write_moved_stub(
-                            src_path, src_file["filename"], actual_dest, now_iso, src_loc_id,
+                            src_path,
+                            src_file["filename"],
+                            actual_dest,
+                            now_iso,
+                            src_loc_id,
                             dest_location_name=dest_label,
                         )
                         st_stub = await fs.file_stat(stub_path, src_loc_id)
@@ -614,20 +662,30 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                 # Best-effort: .sources at destination
                 try:
                     await fs.write_or_append_sources(
-                        actual_dest, src_file["location_name"],
-                        src_file["rel_path"], now_iso, dest_loc_id,
+                        actual_dest,
+                        src_file["location_name"],
+                        src_file["rel_path"],
+                        now_iso,
+                        dest_loc_id,
                     )
                     await _upsert_sources_record(
-                        actual_dest, dest_loc_id,
-                        dest_folder_id, full_rel_dir, now_iso,
+                        actual_dest,
+                        dest_loc_id,
+                        dest_folder_id,
+                        full_rel_dir,
+                        now_iso,
                     )
                 except Exception as e:
                     logger.warning("Sources write failed for %s: %s", actual_dest, e)
 
                 await append_row(
-                    csv_path, dest_loc_id,
-                    source_label, src_path,
-                    dest_label, actual_dest, stub_result,
+                    csv_path,
+                    dest_loc_id,
+                    source_label,
+                    src_path,
+                    dest_label,
+                    actual_dest,
+                    stub_result,
                 )
 
             # Throttled progress
@@ -763,8 +821,6 @@ async def _load_source_files(db, source_id, source_info):
 
 async def _build_dest_hash_index(db, location_id):
     """Build a hash->file dict for all hashed files in the destination location."""
-    from file_hunter.hashes_db import read_hashes
-
     # Get file IDs and paths from catalog
     file_rows = await db.execute_fetchall(
         "SELECT id, full_path FROM files WHERE location_id = ?",

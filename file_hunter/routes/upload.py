@@ -25,7 +25,11 @@ async def upload_files(request):
             return json_error("Target not found.", 404)
 
         location_id = target["location_id"]
-        location_name = target["name"] if target["kind"] == "loc" else target.get("location_name", target["name"])
+        location_name = (
+            target["name"]
+            if target["kind"] == "loc"
+            else target.get("location_name", target["name"])
+        )
         root_path = target["root_path"]
         folder_id = target["folder_id"]
         dest_dir = target["abs_path"]

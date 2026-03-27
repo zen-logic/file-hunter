@@ -198,7 +198,14 @@ async def run_upload(
                         "hash_partial=COALESCE(excluded.hash_partial, file_hashes.hash_partial), "
                         "hash_fast=excluded.hash_fast, "
                         "hash_strong=excluded.hash_strong",
-                        (file_id, location_id, file_size, hash_partial, hash_fast, hash_strong),
+                        (
+                            file_id,
+                            location_id,
+                            file_size,
+                            hash_partial,
+                            hash_fast,
+                            hash_strong,
+                        ),
                     )
 
                 affected_hashes.add(hash_fast)

@@ -147,7 +147,6 @@ async def _recover_interrupted():
             )
 
 
-
 async def _run():
     """Main loop — poll for housekeeping tasks, run when idle."""
     await _recover_interrupted()
@@ -192,7 +191,11 @@ async def _run():
             await broadcast({"type": "activity", "message": "Housekeeping..."})
             logger.info("Housekeeping: starting %s (id=%d)", task_type, task_id)
 
-            from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
+            from file_hunter.services.activity import (
+                register as _act_reg,
+                unregister as _act_unreg,
+            )
+
             _act_reg(f"housekeeping-{task_id}", f"Housekeeping: {task_type}")
 
             try:
@@ -391,7 +394,9 @@ async def _enqueue_dup_candidates():
         if lid is not None:
             existing_ids.add(lid)
 
-    location_ids = [r["location_id"] for r in rows if r["location_id"] not in existing_ids]
+    location_ids = [
+        r["location_id"] for r in rows if r["location_id"] not in existing_ids
+    ]
     if not location_ids:
         return
 
@@ -408,8 +413,4 @@ async def _enqueue_dup_candidates():
             loc["agent_id"],
             {"location_id": loc["id"], "location_name": loc["name"]},
         )
-        logger.info(
-            "Housekeeping: queued dup candidate processing for %s", loc["name"]
-        )
-
-
+        logger.info("Housekeeping: queued dup candidate processing for %s", loc["name"])

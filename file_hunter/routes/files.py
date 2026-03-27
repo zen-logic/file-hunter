@@ -251,12 +251,18 @@ async def file_verify(request: Request):
     group_file_ids = [r["file_id"] for r in group_rows]
 
     # Launch background task to verify the whole group
-    asyncio.create_task(_run_group_verify(file_id, f["filename"], hash_fast, group_file_ids))
+    asyncio.create_task(
+        _run_group_verify(file_id, f["filename"], hash_fast, group_file_ids)
+    )
 
-    return json_ok({"verifying": True, "filename": f["filename"], "groupSize": len(group_file_ids)})
+    return json_ok(
+        {"verifying": True, "filename": f["filename"], "groupSize": len(group_file_ids)}
+    )
 
 
-async def _run_group_verify(trigger_file_id: int, trigger_filename: str, hash_fast: str, file_ids: list[int]):
+async def _run_group_verify(
+    trigger_file_id: int, trigger_filename: str, hash_fast: str, file_ids: list[int]
+):
     """Background: compute SHA-256 for all files in a hash_fast group."""
     from file_hunter.services import fs
     from file_hunter.hashes_db import update_file_hash, get_file_hashes
@@ -508,7 +514,13 @@ async def _run_batch_rehash(file_ids: list[int]):
                     "hash_partial=COALESCE(excluded.hash_partial, file_hashes.hash_partial), "
                     "hash_fast=excluded.hash_fast, "
                     "hash_strong=NULL",
-                    (file_id, f["location_id"], f["file_size"], hash_partial, hash_fast),
+                    (
+                        file_id,
+                        f["location_id"],
+                        f["file_size"],
+                        hash_partial,
+                        hash_fast,
+                    ),
                 )
 
             affected_fast.add(hash_fast)
