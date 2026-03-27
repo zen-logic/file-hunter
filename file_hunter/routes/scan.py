@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import os
 
 from starlette.requests import Request
 
@@ -12,6 +14,9 @@ from file_hunter.services.queue_manager import (
     get_queue_status_for_broadcast,
 )
 from file_hunter.services.hash_backfill import cancel_backfill_by_location
+from file_hunter.services.quick_scan import run_quick_scan
+from file_hunter.ws.agent import get_agent_capabilities
+from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
 
@@ -54,8 +59,6 @@ async def start_scan(request: Request):
         folder_name = None
         raw_folder_id = body.get("folder_id")
         if raw_folder_id:
-            import os
-
             fld_id = int(str(raw_folder_id).replace("fld-", ""))
             fld_rows = await db.execute_fetchall(
                 "SELECT id, name, rel_path, location_id FROM folders WHERE id = ?",
@@ -81,8 +84,6 @@ async def start_scan(request: Request):
     )
 
     # Broadcast scan_queued for activity log (queue state already broadcast by enqueue)
-    from file_hunter.ws.scan import broadcast
-
     label = f"{location_name} / {folder_name}" if folder_name else location_name
     await broadcast(
         {
@@ -111,17 +112,12 @@ async def scan_capabilities(request: Request):
     if not rows or not rows[0]["agent_id"]:
         return json_ok({"quick_scan": False})
 
-    from file_hunter.ws.agent import get_agent_capabilities
-
     caps = get_agent_capabilities(rows[0]["agent_id"])
     return json_ok({"quick_scan": "quick_scan" in caps})
 
 
 async def start_quick_scan(request: Request):
     """POST /api/scan/quick — shallow scan of a single folder or location root."""
-    import asyncio
-    from file_hunter.services.quick_scan import run_quick_scan
-
     body = await request.json()
     raw_id = body.get("location_id", "")
     loc_id = int(str(raw_id).replace("loc-", ""))
@@ -138,8 +134,6 @@ async def start_quick_scan(request: Request):
             return json_error("Location has no agent assigned.", 400)
 
     # Check agent supports quick_scan
-    from file_hunter.ws.agent import get_agent_capabilities
-
     caps = get_agent_capabilities(agent_id)
     if "quick_scan" not in caps:
         return json_error(
@@ -187,8 +181,6 @@ async def cancel_scan(request: Request):
 
     cancelled = await cancel_by_location(loc_id)
     if cancelled:
-        from file_hunter.ws.scan import broadcast
-
         await broadcast(
             {
                 "type": "scan_dequeued",

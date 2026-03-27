@@ -11,7 +11,9 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from file_hunter.db import db_writer, read_db
 from file_hunter.services import fs
+from file_hunter.stats_db import update_stats_for_files
 
 logger = logging.getLogger("file_hunter")
 
@@ -66,8 +68,6 @@ async def append_row(
 
 async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None):
     """Insert the CSV file as a record in the catalog."""
-    from file_hunter.db import db_writer, read_db
-
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     filename = os.path.basename(csv_path)
     st = await fs.file_stat(csv_path, location_id)
@@ -104,7 +104,5 @@ async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None)
                 now_iso,
             ),
         )
-
-    from file_hunter.stats_db import update_stats_for_files
 
     await update_stats_for_files(location_id, added=[(folder_id, file_size, "text", 0)])

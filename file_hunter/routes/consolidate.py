@@ -4,9 +4,11 @@ from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import read_db
+from file_hunter.hashes_db import get_file_hashes, open_hashes_connection
 from file_hunter.helpers import get_effective_hashes
 from file_hunter.services import fs
 from file_hunter.services.consolidate import (
+    _resolve_folder_path_with_loc,
     run_consolidation,
     run_batch_consolidation,
     is_consolidation_running,
@@ -40,8 +42,6 @@ async def consolidate(request: Request):
             return json_error("File not found.", 404)
 
         # Check hash from hashes.db
-        from file_hunter.hashes_db import get_file_hashes
-
         h_map = await get_file_hashes([file_id])
         h = h_map.get(file_id, {})
         effective_hash = h.get("hash_strong") or h.get("hash_fast")
@@ -54,8 +54,6 @@ async def consolidate(request: Request):
 
         # For copy_to, verify destination is online
         if mode == "copy_to":
-            from file_hunter.services.consolidate import _resolve_folder_path_with_loc
-
             dest_path, dest_loc_id = await _resolve_folder_path_with_loc(
                 db, dest_folder_id
             )
@@ -94,8 +92,6 @@ async def batch_consolidate(request: Request):
 
     # Validate destination once upfront
     if mode == "copy_to":
-        from file_hunter.services.consolidate import _resolve_folder_path_with_loc
-
         async with read_db() as db:
             dest_path, dest_loc_id = await _resolve_folder_path_with_loc(
                 db, dest_folder_id
@@ -128,8 +124,6 @@ async def consolidate_preview(request: Request):
     file_ids = body.get("file_ids", [])
     if not file_ids:
         return json_ok({"total_dups": 0, "filename_matched_dups": 0})
-
-    from file_hunter.hashes_db import open_hashes_connection
 
     # Get filenames and effective hashes for all selected files
     async with read_db() as db:

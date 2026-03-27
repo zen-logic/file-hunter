@@ -1,18 +1,31 @@
 """Routes for catalog import."""
 
 import asyncio
+import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 
 from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
-from file_hunter.db import read_db
+from file_hunter.db import db_writer, read_db
+from file_hunter.services.agent_ops import _resolve_agent, _post
+from file_hunter.services.dup_counts import (
+    drain_pending_hashes,
+    post_ingest_dup_processing,
+)
 from file_hunter.services.import_catalog import (
+    _progress,
     get_progress,
     read_catalog_meta,
     run_import,
 )
+from file_hunter.services.online_check import register_agent_location
+from file_hunter.services.queue_manager import paused_queue
+from file_hunter.services.sizes import recalculate_location_sizes
+from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.ws.scan import broadcast
 
 
 async def import_catalog_upload(request: Request):
@@ -104,9 +117,6 @@ async def import_catalog_run(request: Request):
         location_name = row["name"]
     elif agent_id and root_path and location_name:
         # Create new location
-        from file_hunter.db import db_writer
-        from datetime import datetime, timezone
-
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         async with db_writer() as wdb:
             cursor = await wdb.execute(
@@ -117,8 +127,6 @@ async def import_catalog_run(request: Request):
             location_id = cursor.lastrowid
 
         # Push location to agent config so it knows about the new path
-        from file_hunter.services.agent_ops import _resolve_agent, _post
-
         resolved = _resolve_agent(agent_id)
         if resolved:
             host, port, token = resolved
@@ -131,8 +139,6 @@ async def import_catalog_run(request: Request):
                     {"name": location_name, "path": root_path},
                 )
             except Exception:
-                import logging
-
                 logging.getLogger("file_hunter").warning(
                     "Failed to push imported location to agent"
                 )
@@ -143,8 +149,6 @@ async def import_catalog_run(request: Request):
 
     # Register in online check state so location shows as online immediately
     if agent_id is not None:
-        from file_hunter.services.online_check import register_agent_location
-
         register_agent_location(agent_id, location_id)
 
     # Launch import in background
@@ -163,14 +167,7 @@ async def _run_and_notify(
     location_name: str,
 ):
     """Pause queue, run import, recount dups, resume queue."""
-    import logging
-
     log = logging.getLogger("file_hunter")
-
-    from file_hunter.services.import_catalog import _progress
-    from file_hunter.services.queue_manager import paused_queue
-    from file_hunter.services.stats import invalidate_stats_cache
-    from file_hunter.ws.scan import broadcast
 
     try:
         _progress["status"] = "pausing"
@@ -180,11 +177,6 @@ async def _run_and_notify(
             # Post-ingest: same order as scan
             if _progress["status"] == "complete":
                 # 1. Find dup candidates, copy small file hashes, queue large files
-                from file_hunter.services.dup_counts import (
-                    post_ingest_dup_processing,
-                    drain_pending_hashes,
-                )
-
                 _progress["status"] = "checking_duplicates"
                 await post_ingest_dup_processing(
                     location_id,
@@ -210,8 +202,6 @@ async def _run_and_notify(
 
                 # 3. Rebuild stats with correct dup counts
                 _progress["status"] = "rebuilding_stats"
-                from file_hunter.services.sizes import recalculate_location_sizes
-
                 await recalculate_location_sizes(location_id)
 
                 _progress["status"] = "complete"

@@ -9,6 +9,7 @@ params for resume on restart.
 import asyncio
 import logging
 
+from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import hashes_writer, open_hashes_connection
 from file_hunter.services.agent_ops import hash_partial_batch
 from file_hunter.services.queue_manager import update_params
@@ -69,8 +70,6 @@ async def run_rehash_partial(op_id: int, agent_id: int, params: dict):
     errors_total = 0
 
     # Need full_path from catalog for agent dispatch
-    from file_hunter.db import read_db
-
     while True:
         await asyncio.sleep(0)
 
@@ -136,8 +135,6 @@ async def run_rehash_partial(op_id: int, agent_id: int, params: dict):
         )
 
     # Set backfill_needed so dup detection picks up the new groupings
-    from file_hunter.db import db_writer
-
     async with db_writer() as wdb:
         await wdb.execute(
             "UPDATE locations SET backfill_needed = 1 WHERE id = ?",

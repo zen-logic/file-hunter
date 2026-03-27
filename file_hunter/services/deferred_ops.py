@@ -4,9 +4,12 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from file_hunter.core import classify_file
 from file_hunter.db import db_writer, read_db
-from file_hunter.helpers import parse_mtime
+from file_hunter.hashes_db import get_file_hashes, remove_file_hashes, update_file_hash
+from file_hunter.helpers import parse_mtime, post_op_stats
 from file_hunter.services import fs
+from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -42,8 +45,6 @@ async def cancel_pending_op(file_id: int):
             "UPDATE files SET pending_op = NULL WHERE id = ?",
             (file_id,),
         )
-
-    from file_hunter.helpers import post_op_stats
 
     await post_op_stats()
 
@@ -115,9 +116,7 @@ async def drain_pending_ops(location_id: int, root_path: str):
 
             if op_type == "delete":
                 await _drain_delete(f, op_id, now_iso)
-                from file_hunter.hashes_db import get_file_hashes as _gfh
-
-                _h = (await _gfh([file_id])).get(file_id, {})
+                _h = (await get_file_hashes([file_id])).get(file_id, {})
                 if _h.get("hash_strong"):
                     affected_strong.add(_h["hash_strong"])
                 elif _h.get("hash_fast"):
@@ -154,8 +153,6 @@ async def drain_pending_ops(location_id: int, root_path: str):
             failed += 1
 
     # Post-drain: recalc sizes and dup counts
-    from file_hunter.helpers import post_op_stats
-
     await post_op_stats(
         location_ids=affected_location_ids,
         strong_hashes=affected_strong or None,
@@ -197,11 +194,7 @@ async def _drain_delete(f, op_id: int, now_iso: str):
             (now_iso, op_id),
         )
 
-    from file_hunter.hashes_db import remove_file_hashes
-
     await remove_file_hashes([file_id])
-
-    from file_hunter.stats_db import update_stats_for_files
 
     await update_stats_for_files(
         location_id,
@@ -216,8 +209,6 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
 
     Returns destination location_id if different from source, else None.
     """
-    from file_hunter.core import classify_file
-
     file_id = f["id"]
     full_path = f["full_path"]
     location_id = f["location_id"]
@@ -292,9 +283,7 @@ async def _drain_verify(f, op_id: int, now_iso: str) -> dict | None:
     full_path = f["full_path"]
     location_id = f["location_id"]
 
-    from file_hunter.hashes_db import get_file_hashes as _gfh
-
-    _h = (await _gfh([file_id])).get(file_id, {})
+    _h = (await get_file_hashes([file_id])).get(file_id, {})
     old_hash_fast = _h.get("hash_fast")
 
     if _h.get("hash_strong"):
@@ -325,8 +314,6 @@ async def _drain_verify(f, op_id: int, now_iso: str) -> dict | None:
             "date_completed = ? WHERE id = ?",
             (now_iso, op_id),
         )
-
-    from file_hunter.hashes_db import update_file_hash
 
     await update_file_hash(file_id, hash_fast=hash_fast, hash_strong=hash_strong)
 

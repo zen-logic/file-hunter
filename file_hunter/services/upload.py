@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
 from file_hunter.db import db_writer, read_db
+from file_hunter.hashes_db import hashes_writer, read_hashes
+from file_hunter.helpers import post_op_stats
 from file_hunter.services import fs
+from file_hunter.services.agent_ops import hash_partial_batch
+from file_hunter.services.dup_counts import recalculate_dup_counts
+from file_hunter.services.sizes import recalculate_location_sizes
+from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 
@@ -49,8 +55,6 @@ async def run_upload(
             # Compute hash_partial — needed for dup candidate detection
             hash_partial = None
             if agent_id is not None:
-                from file_hunter.services.agent_ops import hash_partial_batch
-
                 try:
                     hp_result = await hash_partial_batch(agent_id, [sf["full_path"]])
                     for hr in hp_result.get("results", []):
@@ -61,8 +65,6 @@ async def run_upload(
                     pass  # hash_partial is optional — hash_fast/strong still work
 
             # Check for existing file with same hash (read)
-            from file_hunter.hashes_db import read_hashes
-
             async with read_hashes() as hdb:
                 hash_rows = await hdb.execute_fetchall(
                     "SELECT file_id FROM active_hashes WHERE hash_fast = ? LIMIT 1",
@@ -126,8 +128,6 @@ async def run_upload(
                 duplicates += 1
 
                 # Stats: stub file added
-                from file_hunter.stats_db import update_stats_for_files
-
                 await update_stats_for_files(
                     location_id,
                     added=[(folder_id, stub_size, "text", 0)],
@@ -187,8 +187,6 @@ async def run_upload(
                     file_id = row_lid[0]
 
                 # Register in hashes.db for dup detection
-                from file_hunter.hashes_db import hashes_writer
-
                 async with hashes_writer() as hdb:
                     await hdb.execute(
                         "INSERT INTO file_hashes "
@@ -236,8 +234,6 @@ async def run_upload(
 
                 # Stats: new file added
                 is_hidden = 1 if sf["filename"].startswith(".") else 0
-                from file_hunter.stats_db import update_stats_for_files
-
                 await update_stats_for_files(
                     location_id,
                     added=[(folder_id, file_size, type_high, is_hidden)],
@@ -276,18 +272,12 @@ async def run_upload(
             "duplicates": duplicates,
         }
     )
-    from file_hunter.helpers import post_op_stats
-
     await post_op_stats()
-
-    from file_hunter.services.sizes import recalculate_location_sizes
 
     try:
         await recalculate_location_sizes(location_id)
     except Exception:
         pass
-
-    from file_hunter.services.dup_counts import recalculate_dup_counts
 
     try:
         await recalculate_dup_counts(

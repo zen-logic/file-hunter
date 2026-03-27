@@ -1,10 +1,22 @@
 """Location CRUD and tree building."""
 
 import asyncio
+import logging
 import os
 from datetime import datetime
 
-from file_hunter.helpers import parse_location_id, parse_folder_id, parse_mtime
+from file_hunter.extensions import get_agent_location_ids, get_agent_label_prefixes
+from file_hunter.helpers import parse_folder_id, parse_location_id, parse_mtime, post_op_stats
+from file_hunter.services import fs
+from file_hunter.services.activity import register, unregister, update
+from file_hunter.services.online_check import (
+    agent_disk_stats,
+    agent_online_check,
+    register_agent_location,
+)
+from file_hunter.services.settings import get_setting
+from file_hunter.stats_db import read_stats
+from file_hunter.ws.scan import broadcast
 
 
 async def get_tree(db):
@@ -75,8 +87,6 @@ async def get_shallow_tree(db):
     Each folder includes a hasChildren flag. children is set to null (None)
     to signal "not loaded yet" to the frontend.
     """
-    from file_hunter.services.settings import get_setting
-
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
     hidden_filter = "" if show_hidden else " AND f.hidden = 0"
     child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
@@ -97,14 +107,12 @@ async def get_shallow_tree(db):
     )
 
     # Fetch sizes from stats.db
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     loc_ids = [loc["id"] for loc in locations]
     folder_ids = [f["id"] for f in root_folders]
 
     loc_sizes: dict[int, int] = {}
     folder_sizes: dict[int, int] = {}
-    async with read_stats_db() as sdb:
+    async with read_stats() as sdb:
         if loc_ids:
             ph = ",".join("?" for _ in loc_ids)
             ls_rows = await sdb.execute_fetchall(
@@ -140,8 +148,6 @@ async def get_shallow_tree(db):
         else:
             disk_stats_tasks.append(asyncio.sleep(0, result=None))
     disk_stats_results = await asyncio.gather(*disk_stats_tasks)
-
-    from file_hunter.extensions import get_agent_location_ids, get_agent_label_prefixes
 
     agent_loc_ids = get_agent_location_ids()
     agent_prefixes = get_agent_label_prefixes()
@@ -194,8 +200,6 @@ async def get_children(db, folder_ids: list[int]):
     if not folder_ids:
         return {}
 
-    from file_hunter.services.settings import get_setting
-
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
     hidden_filter = "" if show_hidden else " AND f.hidden = 0"
     child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
@@ -211,12 +215,10 @@ async def get_children(db, folder_ids: list[int]):
     )
 
     # Fetch sizes from stats.db
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     child_ids = [r["id"] for r in rows]
     child_sizes: dict[int, int] = {}
     if child_ids:
-        async with read_stats_db() as sdb:
+        async with read_stats() as sdb:
             ph = ",".join("?" for _ in child_ids)
             fs_rows = await sdb.execute_fetchall(
                 f"SELECT folder_id, total_size FROM folder_stats "
@@ -290,8 +292,6 @@ async def get_expand_path(db, target_id: int):
         parent_ids_to_fetch.append(a["id"])  # children of this ancestor
 
     # Fetch children for all ancestor folders (batch)
-    from file_hunter.services.settings import get_setting
-
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
     hidden_filter = "" if show_hidden else " AND f.hidden = 0"
     child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
@@ -310,12 +310,10 @@ async def get_expand_path(db, target_id: int):
         )
 
         # Fetch sizes from stats.db
-        from file_hunter.stats_db import read_stats as read_stats_db
-
         all_ids = [r["id"] for r in rows]
         sz_map: dict[int, int] = {}
         if all_ids:
-            async with read_stats_db() as sdb:
+            async with read_stats() as sdb:
                 ph = ",".join("?" for _ in all_ids)
                 fs_rows = await sdb.execute_fetchall(
                     f"SELECT folder_id, total_size FROM folder_stats "
@@ -356,7 +354,7 @@ async def get_expand_path(db, target_id: int):
     root_ids = [r["id"] for r in root_rows]
     root_sz: dict[int, int] = {}
     if root_ids:
-        async with read_stats_db() as sdb:
+        async with read_stats() as sdb:
             ph = ",".join("?" for _ in root_ids)
             fs_rows = await sdb.execute_fetchall(
                 f"SELECT folder_id, total_size FROM folder_stats "
@@ -404,8 +402,6 @@ def check_location_online(location_id: int, root_path: str) -> bool:
         (via asyncio.to_thread) since it performs synchronous I/O. Called by
         get_shallow_tree, get_location_stats, get_folder_stats, and others.
     """
-    from file_hunter.services.online_check import agent_online_check
-
     return agent_online_check({"id": location_id, "root_path": root_path})
 
 
@@ -424,8 +420,6 @@ async def get_disk_stats(location_id: int, root_path: str) -> dict | None:
         Async — calls agent_disk_stats which makes an HTTP request to the agent.
         Called by get_shallow_tree, get_location_stats, and get_folder_stats.
     """
-    from file_hunter.services.online_check import agent_disk_stats
-
     try:
         return await agent_disk_stats(location_id, root_path)
     except Exception:
@@ -446,8 +440,6 @@ def _check_paths_exist(locations: list) -> list[bool]:
         Runs in asyncio.to_thread. Delegates each check to agent_online_check().
         Called by get_tree() and get_shallow_tree().
     """
-    from file_hunter.services.online_check import agent_online_check
-
     return [agent_online_check(loc) for loc in locations]
 
 
@@ -513,8 +505,6 @@ async def create_folder(db, parent_id: str, name: str) -> dict:
     Notes:
         Called from the create-folder HTTP endpoint.
     """
-    from file_hunter.services import fs
-
     # Resolve parent to get location info and path
     if str(parent_id).startswith("loc-"):
         loc_id = parse_location_id(parent_id)
@@ -620,8 +610,6 @@ async def create_location(db, name: str, root_path: str, agent_id: int = None) -
 
     # Register in online check state so the location is immediately visible
     if agent_id is not None:
-        from file_hunter.services.online_check import register_agent_location
-
         register_agent_location(agent_id, loc_id)
 
     online = await asyncio.to_thread(check_location_online, loc_id, root_path)
@@ -788,12 +776,10 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
             breadcrumb.append({"id": a["id"], "name": a["name"]})
 
     # Fetch sizes from stats.db for treemap children
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     tm_ids = [r["id"] for r in children_rows]
     tm_sizes: dict[int, int] = {}
     if tm_ids:
-        async with read_stats_db() as sdb:
+        async with read_stats() as sdb:
             ph = ",".join("?" for _ in tm_ids)
             fs_rows = await sdb.execute_fetchall(
                 f"SELECT folder_id, total_size FROM folder_stats "
@@ -882,16 +868,6 @@ async def _cross_location_dir_move(
         deletes the source tree via fs.dir_delete after ALL copies succeed.
         Called only by move_folder() for cross-location moves.
     """
-    import logging
-
-    from file_hunter.services import fs
-    from file_hunter.services.activity import (
-        register as _act_reg,
-        unregister as _act_unreg,
-        update as _act_upd,
-    )
-    from file_hunter.ws.scan import broadcast
-
     log = logging.getLogger(__name__)
 
     # Count total files for progress
@@ -904,7 +880,7 @@ async def _cross_location_dir_move(
     total_files = count_row[0]["cnt"] if count_row else 0
 
     act_name = f"cross-move-{fld['id']}"
-    _act_reg(act_name, f"Moving {fld['name']}", f"0/{total_files} files")
+    register(act_name, f"Moving {fld['name']}", f"0/{total_files} files")
 
     try:
         # 1. Create destination root folder
@@ -943,7 +919,7 @@ async def _cross_location_dir_move(
                         skipped += 1
                     else:
                         raise
-                _act_upd(act_name, progress=f"{copied}/{total_files} files")
+                update(act_name, progress=f"{copied}/{total_files} files")
                 await broadcast(
                     {
                         "type": "batch_move_progress",
@@ -971,7 +947,7 @@ async def _cross_location_dir_move(
             pass  # best-effort cleanup
         raise
     finally:
-        _act_unreg(act_name)
+        unregister(act_name)
         await broadcast({"type": "status_bar_idle"})
 
 
@@ -1005,8 +981,6 @@ async def move_folder(
         then delete, with rollback on failure). Called from the move-folder
         HTTP endpoint.
     """
-    from file_hunter.services import fs
-
     if not destination_parent_id and not new_name:
         raise ValueError("Provide destination_parent_id and/or new_name.")
 
@@ -1200,8 +1174,6 @@ async def move_folder(
                 )
 
     await db.commit()
-
-    from file_hunter.helpers import post_op_stats
 
     if cross_location:
         await post_op_stats(

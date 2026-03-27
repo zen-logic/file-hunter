@@ -4,7 +4,9 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from file_hunter.core import classify_file
 from file_hunter.db import db_writer, read_db
+from file_hunter.hashes_db import hashes_writer, read_hashes, remove_file_hashes
 from file_hunter.helpers import (
     get_effective_hash,
     parse_folder_id,
@@ -14,6 +16,9 @@ from file_hunter.helpers import (
     resolve_target,
 )
 from file_hunter.services import fs
+from file_hunter.services.dup_counts import recalculate_dup_counts
+from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
+from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -157,8 +162,6 @@ async def run_consolidation(
         )
 
         # Find ALL copies by effective hash from hashes.db
-        from file_hunter.hashes_db import read_hashes
-
         async with read_hashes() as hdb:
             dup_rows = await hdb.execute_fetchall(
                 f"SELECT file_id FROM active_hashes WHERE {hash_col} = ?",
@@ -233,95 +236,113 @@ async def run_consolidation(
                 )
                 return
 
-            canonical_path = await fs.unique_dest_path(
-                os.path.join(dest_dir, filename), dest_loc_id
+            # Check if a copy already lives at the destination — use it as
+            # canonical instead of copying a duplicate and renaming with (2).
+            dest_file_path = os.path.join(dest_dir, filename)
+            existing_at_dest = next(
+                (
+                    c
+                    for c in all_copies
+                    if c["full_path"] == dest_file_path
+                    and c["location_id"] == dest_loc_id
+                ),
+                None,
             )
-            # Update filename if collision rename happened
-            actual_filename = os.path.basename(canonical_path)
-            if actual_filename != filename:
-                selected["filename"] = actual_filename
-                filename = actual_filename
 
-            # Find a source copy that's online
-            source_path = None
-            source_loc_id = None
-            for copy in all_copies:
-                copy_loc_id = copy["location_id"]
-                if await fs.file_exists(copy["full_path"], copy_loc_id):
-                    source_path = copy["full_path"]
-                    source_loc_id = copy_loc_id
-                    break
-
-            if source_path is None:
-                await broadcast(
-                    {
-                        "type": "consolidate_error",
-                        "fileId": file_id,
-                        "filename": filename,
-                        "error": "No online copy available to copy from.",
-                    }
+            if existing_at_dest:
+                # A copy already exists at the destination — promote it
+                canonical_path = existing_at_dest["full_path"]
+                canonical_id = existing_at_dest["id"]
+            else:
+                canonical_path = await fs.unique_dest_path(
+                    dest_file_path, dest_loc_id
                 )
-                return
+                # Update filename if collision rename happened
+                actual_filename = os.path.basename(canonical_path)
+                if actual_filename != filename:
+                    selected["filename"] = actual_filename
+                    filename = actual_filename
 
-            # Copy with progress — streaming, constant memory
-            async def _copy_progress(bytes_sent, total_bytes):
+                # Find a source copy that's online
+                source_path = None
+                source_loc_id = None
+                for copy in all_copies:
+                    copy_loc_id = copy["location_id"]
+                    if await fs.file_exists(copy["full_path"], copy_loc_id):
+                        source_path = copy["full_path"]
+                        source_loc_id = copy_loc_id
+                        break
+
+                if source_path is None:
+                    await broadcast(
+                        {
+                            "type": "consolidate_error",
+                            "fileId": file_id,
+                            "filename": filename,
+                            "error": "No online copy available to copy from.",
+                        }
+                    )
+                    return
+
+                # Copy with progress — streaming, constant memory
+                async def _copy_progress(bytes_sent, total_bytes):
+                    await broadcast(
+                        {
+                            "type": "consolidate_progress",
+                            "fileId": file_id,
+                            "filename": filename,
+                            "phase": "copying",
+                            "bytesSent": bytes_sent,
+                            "bytesTotal": total_bytes,
+                        }
+                    )
+
+                try:
+                    await fs.copy_file(
+                        source_path,
+                        source_loc_id,
+                        canonical_path,
+                        dest_loc_id,
+                        on_progress=_copy_progress,
+                        mtime=parse_mtime(selected["modified_date"]),
+                    )
+                except Exception as copy_exc:
+                    # Clean up partial file at destination
+                    try:
+                        await fs.file_delete(canonical_path, dest_loc_id)
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"Copy failed: {copy_exc}") from copy_exc
+
+                # Hash-verify the copy against source using hash_fast
                 await broadcast(
                     {
                         "type": "consolidate_progress",
                         "fileId": file_id,
                         "filename": filename,
-                        "phase": "copying",
-                        "bytesSent": bytes_sent,
-                        "bytesTotal": total_bytes,
+                        "phase": "verifying",
                     }
                 )
-
-            try:
-                await fs.copy_file(
-                    source_path,
-                    source_loc_id,
-                    canonical_path,
-                    dest_loc_id,
-                    on_progress=_copy_progress,
-                    mtime=parse_mtime(selected["modified_date"]),
-                )
-            except Exception as copy_exc:
-                # Clean up partial file at destination
-                try:
+                (source_hash_fast,) = await fs.file_hash(source_path, source_loc_id)
+                (copy_hash_fast,) = await fs.file_hash(canonical_path, dest_loc_id)
+                if copy_hash_fast != source_hash_fast:
                     await fs.file_delete(canonical_path, dest_loc_id)
-                except Exception:
-                    pass
-                raise RuntimeError(f"Copy failed: {copy_exc}") from copy_exc
+                    await broadcast(
+                        {
+                            "type": "consolidate_error",
+                            "fileId": file_id,
+                            "filename": filename,
+                            "error": "Hash verification failed after copy.",
+                        }
+                    )
+                    return
 
-            # Hash-verify the copy against source using hash_fast
-            await broadcast(
-                {
-                    "type": "consolidate_progress",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "phase": "verifying",
-                }
-            )
-            (source_hash_fast,) = await fs.file_hash(source_path, source_loc_id)
-            (copy_hash_fast,) = await fs.file_hash(canonical_path, dest_loc_id)
-            if copy_hash_fast != source_hash_fast:
-                await fs.file_delete(canonical_path, dest_loc_id)
-                await broadcast(
-                    {
-                        "type": "consolidate_error",
-                        "fileId": file_id,
-                        "filename": filename,
-                        "error": "Hash verification failed after copy.",
-                    }
+                selected["hash_fast"] = source_hash_fast
+
+                # Create DB record for the canonical copy at destination
+                canonical_id = await _ensure_canonical_record(
+                    canonical_path, dest_folder_id, dest_loc_id, selected, now_iso
                 )
-                return
-
-            selected["hash_fast"] = source_hash_fast
-
-            # Create DB record for the canonical copy at destination
-            canonical_id = await _ensure_canonical_record(
-                canonical_path, dest_folder_id, dest_loc_id, selected, now_iso
-            )
 
         else:
             await broadcast(
@@ -349,12 +370,6 @@ async def run_consolidation(
             logger.warning("Could not write .sources file: %s", e)
 
         # Result log CSV — use shared one from batch, or create per-file
-        from file_hunter.services.op_result_log import (
-            create_log,
-            append_row,
-            add_to_catalog,
-        )
-
         owns_csv = shared_csv_path is None
         if owns_csv:
             dest_dir = os.path.dirname(canonical_path)
@@ -525,12 +540,7 @@ async def run_consolidation(
                                 copy["id"],
                             ),
                         )
-                    from file_hunter.hashes_db import remove_file_hashes
-
                     await remove_file_hashes([copy["id"]])
-
-                    from file_hunter.stats_db import update_stats_for_files
-
                     await update_stats_for_files(
                         copy_loc_id,
                         removed=[
@@ -654,11 +664,6 @@ async def run_batch_consolidation(
     Called by:
         routes/consolidate.py (via asyncio.create_task).
     """
-    from file_hunter.services.op_result_log import (
-        create_log,
-        add_to_catalog,
-    )
-
     # Resolve destination for the shared CSV
     dest_dir = None
     dest_loc_id = None
@@ -712,8 +717,6 @@ async def run_batch_consolidation(
     await add_to_catalog(csv_path, dest_loc_id, csv_folder_id)
 
     # Post-processing once for the entire batch
-    from file_hunter.services.dup_counts import recalculate_dup_counts
-
     await post_op_stats(
         location_ids={dest_loc_id},
         source=f"batch consolidate ({len(file_ids)} files)",
@@ -821,12 +824,8 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                                 fid,
                             ),
                         )
-                        from file_hunter.hashes_db import remove_file_hashes
-
                         await remove_file_hashes([fid])
                         # Stats: original removed, stub added
-                        from file_hunter.stats_db import update_stats_for_files
-
                         await update_stats_for_files(
                             location_id,
                             removed=[(orig_folder_id, orig_size, orig_type, 0)],
@@ -843,11 +842,7 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                             (source_path, location_id),
                         )
                         if del_rows:
-                            from file_hunter.hashes_db import remove_file_hashes
-
                             await remove_file_hashes([r["id"] for r in del_rows])
-                            from file_hunter.stats_db import update_stats_for_files
-
                             await update_stats_for_files(
                                 location_id,
                                 removed=[
@@ -958,8 +953,6 @@ async def _ensure_canonical_record(
     Called by:
         run_consolidation (copy_to mode only, after file copy and verification).
     """
-    from file_hunter.core import classify_file
-
     # Determine location_id and folder_id from dest_folder_id
     async with read_db() as db:
         target = await resolve_target(db, dest_folder_id)
@@ -1007,8 +1000,6 @@ async def _ensure_canonical_record(
     hash_fast = source.get("hash_fast")
     hash_strong = source.get("hash_strong")
     if hash_fast or hash_strong:
-        from file_hunter.hashes_db import hashes_writer
-
         async with hashes_writer() as hdb:
             await hdb.execute(
                 "INSERT INTO file_hashes "

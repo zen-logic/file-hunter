@@ -1,6 +1,9 @@
 """Shared helper functions — eliminates repeated patterns across services."""
 
+import os
 from datetime import datetime
+
+from file_hunter.hashes_db import get_file_hashes
 
 
 def parse_mtime(value) -> float | None:
@@ -97,8 +100,6 @@ async def get_effective_hash(file_id: int) -> tuple[str | None, str | None]:
     Prefers hash_strong over hash_fast.
     Returns (None, None) when no hash exists.
     """
-    from file_hunter.hashes_db import get_file_hashes
-
     h_map = await get_file_hashes([file_id])
     h = h_map.get(file_id, {})
     hs = h.get("hash_strong")
@@ -117,8 +118,6 @@ async def get_effective_hashes(
 
     Returns {file_id: (effective_hash, hash_column), ...}.
     """
-    from file_hunter.hashes_db import get_file_hashes
-
     h_map = await get_file_hashes(file_ids)
     result = {}
     for fid in file_ids:
@@ -151,8 +150,6 @@ async def resolve_target(db, prefixed_id: str) -> dict | None:
 
     Returns None if the target doesn't exist.
     """
-    import os
-
     kind, num_id = parse_prefixed_id(prefixed_id)
 
     if kind == "loc":

@@ -1,10 +1,27 @@
 import asyncio
 import logging
+from collections import defaultdict
 
 from starlette.requests import Request
 from file_hunter.core import ProgressTracker, json_ok, json_error
-from file_hunter.db import read_db
-from file_hunter.services.stats import get_stats, get_location_stats, get_folder_stats
+from file_hunter.db import read_db, open_connection
+from file_hunter.hashes_db import hashes_writer
+from file_hunter.services.agent_ops import hash_fast_batch
+from file_hunter.services.dup_counts import (
+    find_dup_candidates,
+    optimized_dup_recount,
+    update_location_dup_counts,
+)
+from file_hunter.services.online_check import agent_online_check
+from file_hunter.services.queue_manager import enqueue, paused_queue
+from file_hunter.services.sizes import recalculate_location_sizes
+from file_hunter.services.stats import (
+    get_stats,
+    get_location_stats,
+    get_folder_stats,
+    invalidate_stats_cache,
+)
+from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger("file_hunter")
 
@@ -100,19 +117,6 @@ async def _bg_repair(phases: list[str] | None = None):
     """
     if phases is None:
         phases = ["hashes", "duplicates", "sizes"]
-    from collections import defaultdict
-
-    from file_hunter.db import open_connection
-    from file_hunter.services.agent_ops import hash_fast_batch
-    from file_hunter.services.dup_counts import (
-        optimized_dup_recount,
-        update_location_dup_counts,
-    )
-    from file_hunter.services.online_check import agent_online_check
-    from file_hunter.services.queue_manager import paused_queue
-    from file_hunter.services.sizes import recalculate_location_sizes
-    from file_hunter.services.stats import invalidate_stats_cache
-    from file_hunter.ws.scan import broadcast
 
     HASH_BATCH_SIZE = 200
 
@@ -135,9 +139,6 @@ async def _bg_repair(phases: list[str] | None = None):
             else:
                 _repair_progress["phase"] = "querying"
                 log.info("Catalog repair: phase 1 — querying candidates")
-
-                from file_hunter.services.dup_counts import find_dup_candidates
-
                 all_candidates = await find_dup_candidates()
 
                 # Build location → agent mapping, filter to online agents
@@ -209,8 +210,6 @@ async def _bg_repair(phases: list[str] | None = None):
                             break
 
                         # Write hash_fast results to hashes.db
-                        from file_hunter.hashes_db import hashes_writer
-
                         hash_results = result.get("results", [])
                         written = 0
                         if hash_results:
@@ -330,8 +329,6 @@ async def _bg_repair(phases: list[str] | None = None):
 
 async def rehash_partial(request: Request):
     """Enqueue a rehash_partial operation for every agent-backed location."""
-    from file_hunter.services.queue_manager import enqueue
-
     async with read_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, name, agent_id FROM locations WHERE agent_id IS NOT NULL"

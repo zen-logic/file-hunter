@@ -10,6 +10,10 @@ import json
 import sys
 from pathlib import Path
 
+from file_hunter.config import load_config
+from file_hunter.db import close_db, get_db
+from file_hunter.services.agents import ensure_local_agent
+
 
 async def _run(base_dir: Path):
     # Ensure data directory exists
@@ -17,20 +21,14 @@ async def _run(base_dir: Path):
     data_dir.mkdir(exist_ok=True)
 
     # Initialize the database (creates tables, runs migrations)
-    from file_hunter.db import get_db
-
     db = await get_db()
 
     # Create the local agent if it doesn't exist
-    from file_hunter.services.agents import ensure_local_agent
-
     token = await ensure_local_agent(db)
 
     # Write agent config if this is first run (token returned)
     agent_config_path = data_dir / "agent_config.json"
     if token:
-        from file_hunter.config import load_config
-
         config = load_config()
         host = config.get("host", "127.0.0.1")
         port = config.get("port", 8000)
@@ -44,8 +42,6 @@ async def _run(base_dir: Path):
         }
         agent_config_path.write_text(json.dumps(agent_config, indent=2) + "\n")
         print(f"  Local agent configured (token prefix: {token[:8]})")
-
-    from file_hunter.db import close_db
 
     await close_db()
 

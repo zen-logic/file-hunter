@@ -10,6 +10,7 @@ dup_count reads return 0 until migration runs.
 """
 
 import asyncio
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -80,8 +81,6 @@ async def init_hashes_db():
         await conn.commit()
 
         # Column migration (idempotent)
-        import sqlite3 as _sqlite3
-
         for migration in [
             "ALTER TABLE file_hashes ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE file_hashes ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
@@ -89,7 +88,7 @@ async def init_hashes_db():
             try:
                 await conn.execute(migration)
                 await conn.commit()
-            except _sqlite3.OperationalError:
+            except sqlite3.OperationalError:
                 pass  # column already exists
 
         # Recreate view to include stale filter

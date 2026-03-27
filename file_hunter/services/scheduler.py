@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime
 
 from file_hunter.db import read_db, execute_write
+from file_hunter.services.queue_manager import enqueue, get_queue_status
 
 
 async def start_scheduler():
@@ -61,8 +62,6 @@ async def _check_schedules():
             agent_id = loc_row[0]["agent_id"] if loc_row else None
             if not agent_id:
                 continue
-
-            from file_hunter.services.queue_manager import enqueue, get_queue_status
 
             # Skip if already queued/running
             status = await get_queue_status()

@@ -10,12 +10,15 @@ not a required step in every scan.
 """
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiosqlite
 
 from file_hunter.config import load_config
+from file_hunter.core import format_size
+from file_hunter.db import read_db
 
 _write_db = None
 _write_lock = asyncio.Lock()
@@ -149,8 +152,6 @@ async def apply_file_deltas(
     each level, writes all affected folder_stats + location_stats.
     Runs on the stats writer — no catalog contention.
     """
-    import json
-
     if not added and not removed:
         return
 
@@ -302,8 +303,6 @@ async def apply_file_deltas(
         new_hc = (loc_row["hidden_count"] or 0) + loc_hidden if loc_row else loc_hidden
         loc_entry["fileCount"] = max(0, new_fc)
         loc_entry["totalSize"] = max(0, new_ts)
-        from file_hunter.core import format_size
-
         loc_entry["totalSizeFormatted"] = format_size(max(0, new_ts))
         loc_entry["hiddenFiles"] = max(0, new_hc)
 
@@ -327,8 +326,6 @@ async def update_stats_for_files(
     """
     if not added and not removed:
         return
-    from file_hunter.db import read_db
-
     async with read_db() as rdb:
         fp_rows = await rdb.execute_fetchall(
             "SELECT id, parent_id FROM folders WHERE location_id = ?",

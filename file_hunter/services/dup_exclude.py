@@ -10,9 +10,13 @@ import asyncio
 import logging
 
 from file_hunter.core import ProgressTracker
-from file_hunter.db import db_writer, read_db
-from file_hunter.services.dup_counts import SQL_VAR_LIMIT
+from file_hunter.db import db_writer, open_connection, read_db
+from file_hunter.hashes_db import hashes_writer, open_hashes_connection
 from file_hunter.helpers import post_op_stats
+from file_hunter.services.dup_counts import SQL_VAR_LIMIT, _batched_recalc, stop_writer
+from file_hunter.services.queue_manager import pause, resume
+from file_hunter.services.settings import get_setting
+from file_hunter.services.sizes import recalculate_location_sizes
 from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
@@ -42,8 +46,6 @@ async def restore_pending():
     the operation from scratch on a background task. Zero cost if no
     pending operation exists.
     """
-    from file_hunter.services.settings import get_setting
-
     async with read_db() as db:
         pending = await get_setting(db, "dup_exclude_pending")
     if not pending:
@@ -89,11 +91,6 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
     Heavy reads via open_connection(). Writes via db_writer().
     Zeroes excluded files AFTER recalc succeeds (not before).
     """
-    from file_hunter.db import open_connection
-    from file_hunter.services.dup_counts import _batched_recalc, stop_writer
-    from file_hunter.services.queue_manager import pause, resume
-    from file_hunter.services.sizes import recalculate_location_sizes
-
     flag = 1 if exclude else 0
     direction = "exclude" if exclude else "include"
 
@@ -207,8 +204,6 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
             await conn.close()
 
         # Read hashes from hashes.db
-        from file_hunter.hashes_db import open_hashes_connection
-
         hconn = await open_hashes_connection()
         try:
             for i in range(0, len(all_file_ids), SQL_VAR_LIMIT):
@@ -261,8 +256,6 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
             await asyncio.sleep(0)
 
         # Toggle excluded flag in hashes.db — preserves hash data
-        from file_hunter.hashes_db import hashes_writer
-
         for i in range(0, len(all_file_ids), 500):
             batch = all_file_ids[i : i + 500]
             ph = ",".join("?" for _ in batch)

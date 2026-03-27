@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 import httpx
 
 from file_hunter.db import db_writer, read_db
+from file_hunter.services.activity import op_label, register, unregister
+from file_hunter.services.dup_counts import run_hash_file
+from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
 
@@ -240,10 +243,8 @@ async def stop():
     _task = None
 
     # Clean up activity registrations for any ops that were still running
-    from file_hunter.services.activity import unregister as _act_unregister
-
     for op_id in list(_running_ops):
-        _act_unregister(f"op-{op_id}")
+        unregister(f"op-{op_id}")
     _running_ops.clear()
 
     logger.info("Queue manager stopped")
@@ -295,8 +296,6 @@ class paused_queue:
 
     async def __aenter__(self):
         await pause()
-        from file_hunter.ws.scan import broadcast
-
         await broadcast(
             {
                 "type": "queue_paused",
@@ -308,8 +307,6 @@ class paused_queue:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         resume()
-        from file_hunter.ws.scan import broadcast
-
         await broadcast({"type": "queue_resumed"})
         return False
 
@@ -379,12 +376,7 @@ async def _run():
                 _track_location(op_id, loc_id)
                 logger.info("Queue manager: starting %s (id=%d)", op_type, op_id)
 
-                from file_hunter.services.activity import (
-                    register as _act_register,
-                    op_label,
-                )
-
-                _act_register(f"op-{op_id}", op_label(op_type, loc_name))
+                register(f"op-{op_id}", op_label(op_type, loc_name))
 
                 task = asyncio.create_task(_execute(op_type, op_id, agent_id, params))
                 _running_ops[op_id] = (agent_id, task)
@@ -412,9 +404,7 @@ async def _reap_finished():
         reaped = True
         del _running_ops[op_id]
 
-        from file_hunter.services.activity import unregister as _act_unregister
-
-        _act_unregister(f"op-{op_id}")
+        unregister(f"op-{op_id}")
 
         # Untrack location
         async with read_db() as db:
@@ -553,8 +543,6 @@ async def _handle_rehash_partial(op_id: int, agent_id: int | None, params: dict)
 
 
 async def _handle_hash_file(op_id: int, agent_id: int | None, params: dict):
-    from file_hunter.services.dup_counts import run_hash_file
-
     await run_hash_file(op_id, agent_id, params)
 
 
@@ -609,8 +597,6 @@ async def get_queue_status_for_broadcast() -> dict:
 
 async def _broadcast_queue_state():
     """Build and broadcast the current queue state to all connected browsers."""
-    from file_hunter.ws.scan import broadcast
-
     queue = await get_queue_status_for_broadcast()
     await broadcast({"type": "scan_queue_updated", "queue": queue})
 

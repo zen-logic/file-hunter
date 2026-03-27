@@ -17,6 +17,16 @@ from file_hunter.services.delete import (
     delete_file_and_duplicates,
     delete_folder,
 )
+from file_hunter.extensions import get_content_proxy
+from file_hunter.hashes_db import get_file_hashes, hashes_writer, read_hashes, update_file_hash
+from file_hunter.services import fs
+from file_hunter.services.agent_ops import hash_partial_batch
+from file_hunter.services.batch import build_streaming_zip
+from file_hunter.services.content_proxy import fetch_agent_byte_range
+from file_hunter.services.deferred_ops import cancel_pending_op, queue_deferred_op
+from file_hunter.services.dup_counts import batch_dup_counts
+from file_hunter.services.dup_exclude import get_progress, is_running, toggle_dup_exclude
+from file_hunter.services.settings import set_setting
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -51,7 +61,6 @@ async def file_dup_counts(request: Request):
     hashes = body.get("hashes")
     if not hashes or not isinstance(hashes, list):
         return json_error("hashes list is required.")
-    from file_hunter.services.dup_counts import batch_dup_counts
 
     # Auto-detect: SHA-256 = 64 hex chars, xxHash64 = 16 hex chars
     strong = [h for h in hashes if h and len(h) == 64]
@@ -83,8 +92,6 @@ async def file_content(request: Request):
     full_path = row["full_path"]
     filename = row["filename"]
 
-    from file_hunter.extensions import get_content_proxy
-
     content_proxy = get_content_proxy()
     if content_proxy:
         response = await content_proxy(
@@ -115,8 +122,6 @@ async def file_bytes(request: Request):
 
     offset = int(request.query_params.get("offset", 0))
     limit = min(int(request.query_params.get("limit", 4096)), 65536)
-
-    from file_hunter.services.content_proxy import fetch_agent_byte_range
 
     data = await fetch_agent_byte_range(full_path, location_id, offset, limit)
     if data is None:
@@ -226,8 +231,6 @@ async def file_verify(request: Request):
 
         f = dict(row[0])
 
-        from file_hunter.hashes_db import get_file_hashes
-
         h_map = await get_file_hashes([file_id])
         h = h_map.get(file_id, {})
         hash_fast = h.get("hash_fast")
@@ -241,8 +244,6 @@ async def file_verify(request: Request):
             return json_error("File has no hash — scan or re-hash it first.", 400)
 
     # Find all files in the same hash_fast group
-    from file_hunter.hashes_db import read_hashes
-
     async with read_hashes() as hdb:
         group_rows = await hdb.execute_fetchall(
             "SELECT file_id FROM active_hashes WHERE hash_fast = ?",
@@ -264,10 +265,6 @@ async def _run_group_verify(
     trigger_file_id: int, trigger_filename: str, hash_fast: str, file_ids: list[int]
 ):
     """Background: compute SHA-256 for all files in a hash_fast group."""
-    from file_hunter.services import fs
-    from file_hunter.hashes_db import update_file_hash, get_file_hashes
-    from file_hunter.services.deferred_ops import queue_deferred_op
-
     verified = 0
     skipped = 0
     deferred = 0
@@ -374,9 +371,6 @@ async def file_rehash(request: Request):
         )
     agent_id = loc_row[0]["agent_id"] if loc_row else None
 
-    from file_hunter.services import fs
-    from file_hunter.hashes_db import get_file_hashes
-
     # Read old hashes before overwriting
     old_h = (await get_file_hashes([file_id])).get(file_id, {})
     old_fast = old_h.get("hash_fast")
@@ -399,8 +393,6 @@ async def file_rehash(request: Request):
     # Compute hash_partial
     hash_partial = None
     if agent_id is not None:
-        from file_hunter.services.agent_ops import hash_partial_batch
-
         try:
             hp_result = await hash_partial_batch(agent_id, [f["full_path"]])
             for hr in hp_result.get("results", []):
@@ -411,8 +403,6 @@ async def file_rehash(request: Request):
             pass
 
     # Ensure entry exists in hashes.db, then update
-    from file_hunter.hashes_db import hashes_writer
-
     async with hashes_writer() as hdb:
         await hdb.execute(
             "INSERT INTO file_hashes (file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
@@ -452,9 +442,6 @@ async def batch_rehash(request: Request):
 
 async def _run_batch_rehash(file_ids: list[int]):
     """Background task: rehash each file (partial + fast)."""
-    from file_hunter.services import fs
-    from file_hunter.hashes_db import hashes_writer
-
     affected_fast: set[str] = set()
     affected_strong: set[str] = set()
     total = len(file_ids)
@@ -484,8 +471,6 @@ async def _run_batch_rehash(file_ids: list[int]):
                 continue
 
             # Read old hash before overwriting
-            from file_hunter.hashes_db import get_file_hashes
-
             old_h = (await get_file_hashes([file_id])).get(file_id, {})
             old_fast = old_h.get("hash_fast")
             old_strong = old_h.get("hash_strong")
@@ -494,8 +479,6 @@ async def _run_batch_rehash(file_ids: list[int]):
 
             hash_partial = None
             if agent_id is not None:
-                from file_hunter.services.agent_ops import hash_partial_batch
-
                 try:
                     hp_result = await hash_partial_batch(agent_id, [f["full_path"]])
                     for hr in hp_result.get("results", []):
@@ -551,8 +534,6 @@ async def _run_batch_rehash(file_ids: list[int]):
 
 async def folder_download(request: Request):
     """GET /api/folders/{id:int}/download — download folder as ZIP."""
-    from file_hunter.services.batch import build_streaming_zip
-
     folder_id = int(request.path_params["id"])
 
     async with read_db() as db:
@@ -596,8 +577,6 @@ async def folder_download(request: Request):
 
 async def location_download(request: Request):
     """GET /api/locations/{id:int}/download — download entire location as ZIP."""
-    from file_hunter.services.batch import build_streaming_zip
-
     loc_id = int(request.path_params["id"])
 
     async with read_db() as db:
@@ -682,8 +661,6 @@ async def file_cancel_pending(request: Request):
     if not row[0]["pending_op"]:
         return json_error("No pending operation on this file.", 400)
 
-    from file_hunter.services.deferred_ops import cancel_pending_op
-
     await cancel_pending_op(file_id)
 
     return json_ok({"cancelled": True, "filename": row[0]["filename"]})
@@ -700,8 +677,6 @@ async def folder_dup_exclude(request: Request):
     body = await request.json()
     exclude = bool(body.get("exclude", False))
     confirmed = bool(body.get("confirmed", False))
-
-    from file_hunter.services.dup_exclude import is_running
 
     if is_running():
         return json_error("A duplicate exclusion operation is already running.")
@@ -751,24 +726,18 @@ async def folder_dup_exclude(request: Request):
     # --- Confirmed: start the operation ---
 
     # Persist pending operation so it survives restarts
-    from file_hunter.services.settings import set_setting
-
     async with db_writer() as wdb:
         await set_setting(
             wdb, "dup_exclude_pending", f"{folder_id}:{1 if exclude else 0}"
         )
 
     # Heavy work in background task
-    from file_hunter.services.dup_exclude import toggle_dup_exclude
-
     asyncio.create_task(toggle_dup_exclude(folder_id, exclude))
     return json_ok({"started": True})
 
 
 async def dup_exclude_progress(request: Request):
     """GET /api/dup-exclude/progress — poll dup_exclude operation progress."""
-    from file_hunter.services.dup_exclude import get_progress
-
     return json_ok(get_progress())
 
 

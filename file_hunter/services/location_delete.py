@@ -8,8 +8,11 @@ removes anything from the catalog.
 import asyncio
 import logging
 
+from file_hunter.db import db_writer
+from file_hunter.hashes_db import read_hashes, remove_location_hashes
 from file_hunter.helpers import post_op_stats
 from file_hunter.services.agent_ops import delete_agent_location, invalidate_loc_cache
+from file_hunter.stats_db import remove_location_stats
 
 logger = logging.getLogger("file_hunter")
 
@@ -76,8 +79,6 @@ async def _collect_affected_hashes(location_id: int) -> tuple[set[str], set[str]
     affected_fast: set[str] = set()
     affected_strong: set[str] = set()
 
-    from file_hunter.hashes_db import read_hashes
-
     async with read_hashes() as hdb:
         fast_rows = await hdb.execute_fetchall(
             "SELECT DISTINCT hash_fast FROM active_hashes "
@@ -102,10 +103,6 @@ async def _collect_affected_hashes(location_id: int) -> tuple[set[str], set[str]
 
 async def _purge_location_batched(location_id: int):
     """Remove all traces of a location, batched to avoid holding writer lock."""
-    from file_hunter.db import db_writer
-    from file_hunter.hashes_db import remove_location_hashes
-    from file_hunter.stats_db import remove_location_stats
-
     # Remove all hashes and stats for this location
     await remove_location_hashes(location_id)
     await remove_location_stats(location_id)

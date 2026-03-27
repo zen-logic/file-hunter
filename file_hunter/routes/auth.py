@@ -1,14 +1,15 @@
+import sqlite3
+
 from starlette.requests import Request
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import read_db, execute_write
 from file_hunter.services import auth as auth_svc
+from file_hunter.services.settings import get_setting
 
 
 async def auth_status(request: Request):
     async with read_db() as db:
         count = await auth_svc.user_count(db)
-        from file_hunter.services.settings import get_setting
-
         server_name = await get_setting(db, "serverName") or ""
     return json_ok({"needsSetup": count == 0, "serverName": server_name})
 
@@ -92,8 +93,6 @@ async def create_user(request: Request):
     if not username or not password:
         return json_error("Username and password are required.")
 
-    import sqlite3
-
     try:
 
         async def _create(conn, u, p, d):
@@ -124,8 +123,6 @@ async def update_user(request: Request):
 
     if not kwargs:
         return json_error("Nothing to update.")
-
-    import sqlite3
 
     try:
 

@@ -4,6 +4,8 @@ import asyncio
 import os
 
 from file_hunter.core import classify_file
+from file_hunter.db import execute_write
+from file_hunter.hashes_db import get_file_hashes, read_hashes
 from file_hunter.helpers import (
     parse_folder_id,
     parse_location_id,
@@ -11,6 +13,11 @@ from file_hunter.helpers import (
     post_op_stats,
     resolve_target,
 )
+from file_hunter.services import fs
+from file_hunter.services.deferred_ops import queue_deferred_op
+from file_hunter.services.dup_counts import batch_dup_counts
+from file_hunter.services.locations import check_location_online
+from file_hunter.services.settings import get_setting
 
 PAGE_SIZE = 120
 
@@ -59,8 +66,6 @@ async def list_files(
     Called by:
         Route handler files_list (GET /api/files).
     """
-    from file_hunter.services.settings import get_setting
-
     col = SORT_COLUMNS.get(sort, "f.filename")
     direction = "DESC" if sort_dir == "desc" else "ASC"
     offset = page * PAGE_SIZE
@@ -188,9 +193,6 @@ async def list_files(
     ]
 
     # Fetch hash data from hashes.db
-    from file_hunter.hashes_db import get_file_hashes
-    from file_hunter.services.dup_counts import batch_dup_counts
-
     file_ids = [f["id"] for f in files]
     hash_map = await get_file_hashes(file_ids)
 
@@ -308,8 +310,6 @@ async def get_file_detail(db, file_id: int):
     f = dict(row[0])
 
     # Hash data from hashes.db
-    from file_hunter.hashes_db import get_file_hashes
-
     hash_map = await get_file_hashes([file_id])
     h = hash_map.get(file_id, {})
     hash_partial = h.get("hash_partial")
@@ -322,8 +322,6 @@ async def get_file_detail(db, file_id: int):
     effective_hash = hash_strong or hash_fast
     hash_col = "hash_strong" if hash_strong else "hash_fast"
     if effective_hash:
-        from file_hunter.hashes_db import read_hashes
-
         async with read_hashes() as hdb:
             count_row = await hdb.execute_fetchall(
                 f"SELECT COUNT(*) as cnt FROM active_hashes "
@@ -361,8 +359,6 @@ async def get_file_detail(db, file_id: int):
 
     tags = [t.strip() for t in f["tags"].split(",") if t.strip()] if f["tags"] else []
 
-    from file_hunter.services.locations import check_location_online
-
     location_online = await asyncio.to_thread(
         check_location_online, f["location_id"], f["location_root_path"]
     )
@@ -370,12 +366,8 @@ async def get_file_detail(db, file_id: int):
     # If stale but location is online, check if file actually exists
     stale = bool(f["stale"])
     if stale and location_online:
-        from file_hunter.services import fs
-
         exists = await fs.file_exists(f["full_path"], f["location_id"])
         if exists:
-            from file_hunter.db import execute_write
-
             async def _clear_stale(conn, fid):
                 await conn.execute("UPDATE files SET stale = 0 WHERE id = ?", (fid,))
                 await conn.commit()
@@ -511,8 +503,6 @@ async def move_file(
         Route handler file_move (POST /api/files/{id}/move).
         batch_move() in batch.py (per-file, with skip_post_processing=True).
     """
-    from file_hunter.services import fs
-
     row = await db.execute_fetchall(
         """SELECT f.*, l.root_path AS location_root_path, l.name AS location_name
            FROM files f JOIN locations l ON l.id = f.location_id
@@ -560,8 +550,6 @@ async def move_file(
     # If any involved location is offline, defer the operation
     any_offline = not src_online or (cross_location and not dst_online)
     if any_offline:
-        from file_hunter.services.deferred_ops import queue_deferred_op
-
         params = {
             "dst_full_path": new_full_path,
             "dst_rel_path": new_rel_path,

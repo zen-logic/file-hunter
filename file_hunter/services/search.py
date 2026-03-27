@@ -12,6 +12,11 @@ import sqlite3
 import logging
 from pathlib import Path
 
+from file_hunter.config import load_config
+from file_hunter.hashes_db import get_file_hashes, read_hashes
+from file_hunter.services.dup_counts import batch_dup_counts
+from file_hunter.services.settings import get_setting
+
 logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 120
@@ -66,8 +71,6 @@ RESULT_SORT_COLUMNS = {
 
 
 def _search_db_dir() -> Path:
-    from file_hunter.config import load_config
-
     config = load_config()
     return Path(config.get("data_dir", "data")) / "temp"
 
@@ -84,9 +87,6 @@ async def _populate_search_db(db, where, params, search_path):
 
 async def _do_populate_search_db(db, where, params, search_path):
     """Inner search population — separated so _active_search_conn is always cleared."""
-    from file_hunter.hashes_db import get_file_hashes
-    from file_hunter.services.dup_counts import batch_dup_counts
-
     # Fetch all matching file IDs + display data
     rows = await db.execute_fetchall(
         f"""SELECT f.id, f.filename, f.file_type_high, f.file_type_low,
@@ -300,8 +300,6 @@ async def search_files(
     search_id=None,
 ):
     """Search files with optional filters. Returns paged envelope."""
-    from file_hunter.services.settings import get_setting
-
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
     scope_file_frag, scope_folder_frag, scope_params = await _build_scope_sql(
         db, location_id=location_id, folder_id=folder_id
@@ -395,8 +393,6 @@ async def search_files(
 
     if hash_strong:
         # Hashes live in hashes.db, not catalog — look up file IDs there
-        from file_hunter.hashes_db import read_hashes
-
         async with read_hashes() as hdb:
             hash_rows = await hdb.execute_fetchall(
                 "SELECT file_id FROM active_hashes "
@@ -679,8 +675,6 @@ async def search_files_advanced(
     search_id=None,
 ):
     """Search files with advanced include/exclude conditions."""
-    from file_hunter.services.settings import get_setting
-
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
     scope_file_frag, scope_folder_frag, scope_params = await _build_scope_sql(
         db, location_id=location_id, folder_id=folder_id

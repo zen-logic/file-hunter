@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -7,6 +8,7 @@ from starlette.responses import FileResponse
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import db_writer, read_db, execute_write
 from file_hunter.services import settings as settings_svc
+from file_hunter.services.queue_manager import _running_ops, cancel
 from file_hunter.ws.scan import broadcast
 from file_hunter import __version__
 
@@ -160,8 +162,6 @@ async def update_settings(request: Request):
 
 async def reset_queues(request: Request):
     """POST /api/maintenance/reset-queues — cancel all ops, clear temp DBs, queues, pending hashes."""
-    from file_hunter.services.queue_manager import _running_ops, cancel
-
     # Cancel all running operations
     cancelled = 0
     for op_id in list(_running_ops.keys()):
@@ -170,8 +170,6 @@ async def reset_queues(request: Request):
 
     # Wait briefly for cancellations to complete
     if cancelled:
-        import asyncio
-
         await asyncio.sleep(1)
 
     # Clear temp DBs

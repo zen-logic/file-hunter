@@ -12,7 +12,13 @@ import os
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db
+from file_hunter.hashes_db import hashes_writer
+from file_hunter.helpers import post_op_stats
+from file_hunter.services import fs
+from file_hunter.services.activity import register, unregister, update as activity_update
 from file_hunter.services.agent_ops import dispatch
+from file_hunter.services.dup_counts import recalculate_dup_counts
+from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
 
@@ -25,12 +31,6 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
     location_id: the location
     folder_id: specific folder, or None for location root
     """
-    from file_hunter.services.activity import (
-        register as _act_reg,
-        unregister as _act_unreg,
-        update as _act_upd,
-    )
-
     # Resolve paths
     async with read_db() as db:
         loc_row = await db.execute_fetchall(
@@ -67,7 +67,7 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             label = location_name
 
     act_name = f"quick-scan-{location_id}-{folder_id or 'root'}"
-    _act_reg(act_name, f"Quick scan {label}")
+    register(act_name, f"Quick scan {label}")
 
     try:
         await broadcast(
@@ -80,7 +80,7 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         )
 
         # Get listing from agent
-        _act_upd(act_name, progress="listing")
+        activity_update(act_name, progress="listing")
         listing = await dispatch("list_dir", location_id, path=scan_path)
         disk_folders = {f["name"]: f for f in listing["folders"]}
         disk_files = {f["name"]: f for f in listing["files"]}
@@ -120,7 +120,7 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         stats_added = []  # (folder_id, file_size, file_type_high, is_hidden)
         stats_removed = []  # (folder_id, file_size, file_type_high, is_hidden)
 
-        _act_upd(act_name, progress="comparing")
+        activity_update(act_name, progress="comparing")
 
         async with db_writer() as db:
             # --- Folders ---
@@ -255,15 +255,12 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
 
         # Hash new files
         if new_file_ids:
-            _act_upd(act_name, progress=f"hashing {len(new_file_ids)} files")
+            activity_update(act_name, progress=f"hashing {len(new_file_ids)} files")
             await _hash_new_files(new_file_ids, location_id, agent_id)
 
         # Update stats incrementally — only the affected folder and its ancestors
         if stats_added or stats_removed:
-            _act_upd(act_name, progress="updating stats")
-            from file_hunter.stats_db import update_stats_for_files
-            from file_hunter.helpers import post_op_stats
-
+            activity_update(act_name, progress="updating stats")
             await update_stats_for_files(
                 location_id,
                 added=stats_added or None,
@@ -273,8 +270,6 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
 
         # Recalc dup counts if we added files
         if new_file_ids:
-            from file_hunter.services.dup_counts import recalculate_dup_counts
-
             await recalculate_dup_counts(
                 source=f"quick scan {label} ({len(new_file_ids)} new files)"
             )
@@ -324,14 +319,11 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         )
         raise
     finally:
-        _act_unreg(act_name)
+        unregister(act_name)
 
 
 async def _hash_new_files(file_ids: list[int], location_id: int, agent_id: int):
     """Hash new files via the agent and store in hashes.db."""
-    from file_hunter.services import fs
-    from file_hunter.hashes_db import hashes_writer
-
     async with read_db() as db:
         ph = ",".join("?" for _ in file_ids)
         rows = await db.execute_fetchall(

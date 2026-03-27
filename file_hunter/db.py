@@ -1,10 +1,12 @@
 import asyncio
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 
 import aiosqlite
 from pathlib import Path
 from file_hunter.config import load_config
+from file_hunter.seed import seed_db
 
 _db = None
 _write_db = None
@@ -231,15 +233,11 @@ async def get_db() -> aiosqlite.Connection:
         await _db.execute("PRAGMA busy_timeout=30000")
         fresh = await init_db(_db)
         if fresh and os.environ.get("FILE_HUNTER_DEMO"):
-            from file_hunter.seed import seed_db
-
             await seed_db(_db)
     return _db
 
 
 async def init_db(db: aiosqlite.Connection):
-    import sqlite3
-
     # Check if tables exist already
     cursor = await db.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='locations'"

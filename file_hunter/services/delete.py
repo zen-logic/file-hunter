@@ -2,8 +2,16 @@
 
 import os
 
+from file_hunter.hashes_db import (
+    get_file_hashes,
+    open_hashes_connection,
+    read_hashes,
+    remove_file_hashes,
+)
 from file_hunter.helpers import get_effective_hash, post_op_stats
 from file_hunter.services import fs
+from file_hunter.services.deferred_ops import queue_deferred_op
+from file_hunter.stats_db import remove_folder_stats, update_stats_for_files
 
 
 async def delete_file(db, file_id: int) -> dict:
@@ -51,8 +59,6 @@ async def delete_file(db, file_id: int) -> dict:
     location_id = rec["location_id"]
 
     # Get hash values from hashes.db for dup recalc
-    from file_hunter.hashes_db import get_file_hashes
-
     h_map = await get_file_hashes([file_id])
     h = h_map.get(file_id, {})
     hash_fast = h.get("hash_fast")
@@ -63,8 +69,6 @@ async def delete_file(db, file_id: int) -> dict:
 
     if not online:
         # Defer — keep file in catalog with pending_op indicator
-        from file_hunter.services.deferred_ops import queue_deferred_op
-
         await queue_deferred_op(db, file_id, location_id, "delete")
         await db.commit()
 
@@ -81,11 +85,7 @@ async def delete_file(db, file_id: int) -> dict:
     await db.execute("DELETE FROM files WHERE id = ?", (file_id,))
     await db.commit()
 
-    from file_hunter.hashes_db import remove_file_hashes
-
     await remove_file_hashes([file_id])
-
-    from file_hunter.stats_db import update_stats_for_files
 
     await update_stats_for_files(
         location_id,
@@ -158,8 +158,6 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
         return await delete_file(db, file_id)
 
     # Find all files with the same effective hash from hashes.db
-    from file_hunter.hashes_db import read_hashes
-
     async with read_hashes() as hdb:
         dup_rows = await hdb.execute_fetchall(
             f"SELECT file_id FROM active_hashes WHERE {hash_col} = ?",
@@ -212,22 +210,16 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
                 )
             )
         else:
-            from file_hunter.services.deferred_ops import queue_deferred_op
-
             await queue_deferred_op(db, fid, loc_id, "delete")
             deferred_count += 1
 
     await db.commit()
 
     if deleted_ids:
-        from file_hunter.hashes_db import remove_file_hashes
-
         await remove_file_hashes(deleted_ids)
 
     # Update stats per affected location
     if removed_by_loc:
-        from file_hunter.stats_db import update_stats_for_files
-
         for loc_id, removed_files in removed_by_loc.items():
             await update_stats_for_files(loc_id, removed=removed_files)
 
@@ -315,8 +307,6 @@ async def delete_folder(db, folder_id: int) -> dict:
     affected_strong: set[str] = set()
     affected_fast: set[str] = set()
     if file_id_rows:
-        from file_hunter.hashes_db import open_hashes_connection
-
         hconn = await open_hashes_connection()
         try:
             fids = [r["id"] for r in file_id_rows]
@@ -391,14 +381,10 @@ async def delete_folder(db, folder_id: int) -> dict:
     await db.commit()
 
     if deleted_file_ids:
-        from file_hunter.hashes_db import remove_file_hashes
-
         await remove_file_hashes(deleted_file_ids)
 
     # Update stats: remove file deltas from ancestor folders, remove folder_stats entries
     if removed_deltas:
-        from file_hunter.stats_db import update_stats_for_files, remove_folder_stats
-
         await update_stats_for_files(location_id, removed=removed_deltas)
         await remove_folder_stats(deleted_folder_ids)
 

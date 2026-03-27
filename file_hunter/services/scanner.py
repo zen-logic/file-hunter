@@ -6,6 +6,8 @@ ingests results via scan_ingest.py, which calls these functions.
 
 import logging
 
+from file_hunter.hashes_db import mark_hashes_stale
+
 log = logging.getLogger("file_hunter")
 
 
@@ -46,8 +48,6 @@ async def _mark_stale_files(
 
     stale_ids = [r["id"] for r in stale_rows]
     if stale_ids:
-        from file_hunter.hashes_db import mark_hashes_stale
-
         await mark_hashes_stale(stale_ids)
 
     return cursor.rowcount

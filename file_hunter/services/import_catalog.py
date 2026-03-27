@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from file_hunter.core import ProgressTracker
 from file_hunter.db import db_writer, read_db
+from file_hunter.hashes_db import hashes_writer
 
 logger = logging.getLogger("file_hunter")
 
@@ -253,8 +254,6 @@ async def run_import(
                                     )
                                 )
                         if hashes_to_insert:
-                            from file_hunter.hashes_db import hashes_writer
-
                             async with hashes_writer() as hdb:
                                 await hdb.executemany(
                                     "INSERT INTO file_hashes "

@@ -10,6 +10,15 @@ in core. The extension hooks below allow Pro to override or extend behaviour
 core implementations.
 """
 
+from file_hunter.services.agent_ops import dispatch
+from file_hunter.services.content_proxy import fetch_agent_bytes, proxy_agent_content
+from file_hunter.services.online_check import (
+    agent_disk_stats,
+    agent_label_prefixes,
+    all_agent_location_ids,
+)
+from file_hunter.services.queue_manager import is_location_running
+
 _extra_routes = []
 _extra_startup = []
 _static_dirs = {}  # mount_path -> directory
@@ -97,8 +106,6 @@ def set_content_proxy(fn):
 def get_content_proxy():
     if _content_proxy_fn:
         return _content_proxy_fn
-    from file_hunter.services.content_proxy import proxy_agent_content
-
     return proxy_agent_content
 
 
@@ -110,8 +117,6 @@ def set_fetch_bytes(fn):
 def get_fetch_bytes():
     if _fetch_bytes_fn:
         return _fetch_bytes_fn
-    from file_hunter.services.content_proxy import fetch_agent_bytes
-
     return fetch_agent_bytes
 
 
@@ -123,8 +128,6 @@ def set_agent_proxy(fn):
 def get_agent_proxy():
     if _agent_proxy_fn:
         return _agent_proxy_fn
-    from file_hunter.services.agent_ops import dispatch
-
     return dispatch
 
 
@@ -136,8 +139,6 @@ def set_agent_location_ids(fn):
 def get_agent_location_ids():
     if _agent_location_ids_fn:
         return _agent_location_ids_fn()
-    from file_hunter.services.online_check import all_agent_location_ids
-
     return all_agent_location_ids()
 
 
@@ -150,8 +151,6 @@ def get_agent_label_prefixes():
     """Return {location_id: agent_name} for agent-backed locations."""
     if _agent_label_prefixes_fn:
         return _agent_label_prefixes_fn()
-    from file_hunter.services.online_check import agent_label_prefixes
-
     return agent_label_prefixes()
 
 
@@ -164,8 +163,6 @@ def is_agent_scanning(location_id: int) -> bool:
     """Check if an agent is currently scanning this location."""
     if _agent_scanning_fn:
         return _agent_scanning_fn(location_id)
-    from file_hunter.services.queue_manager import is_location_running
-
     return is_location_running(location_id)
 
 
@@ -177,8 +174,6 @@ def set_disk_stats(fn):
 def get_disk_stats():
     if _disk_stats_fn:
         return _disk_stats_fn
-    from file_hunter.services.online_check import agent_disk_stats
-
     return agent_disk_stats
 
 
@@ -200,8 +195,6 @@ async def get_agent_status(location_id: int):
     """Return agent activity status, or None if not available."""
     if _agent_status_fn:
         return await _agent_status_fn(location_id)
-    from file_hunter.services.agent_ops import dispatch
-
     try:
         return await dispatch("agent_status", location_id)
     except Exception:

@@ -24,15 +24,24 @@ from datetime import datetime, timezone
 
 import httpx
 
-from file_hunter.db import db_writer, read_db
-from file_hunter.hashes_db import hashes_writer
+from file_hunter.db import db_writer, open_connection, read_db
+from file_hunter.hashes_db import clear_hashes_stale, hashes_writer, mark_hashes_stale
+from file_hunter.helpers import post_op_stats
+from file_hunter.services.activity import update as activity_update
+from file_hunter.services.agent_ops import hash_partial_batch, stream_tree
+from file_hunter.services.dup_counts import (
+    HASH_BATCH_BYTES,
+    drain_pending_hashes,
+    post_ingest_dup_processing,
+)
+from file_hunter.services.queue_manager import wait_if_paused
 from file_hunter.services.scanner import (
     ensure_folder_hierarchy,
     mark_stale_files,
     mark_stale_folders,
 )
-from file_hunter.helpers import post_op_stats
-from file_hunter.services.agent_ops import stream_tree
+from file_hunter.services.settings import get_setting
+from file_hunter.stats_db import apply_file_deltas, read_stats as read_stats_db
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
 
@@ -150,8 +159,6 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         )
 
     # Launch hash drainer as concurrent task
-    from file_hunter.services.dup_counts import drain_pending_hashes
-
     scan_done_event = asyncio.Event()
 
     async def _drainer_progress(done, total):
@@ -186,11 +193,9 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         if is_rescan:
             # === RESCAN PATH ===
             logger.info("Rescan starting for %s", location_name)
-            from file_hunter.services.activity import update as _act_upd
-
             _act_name = f"op-{op_id}"
 
-            _act_upd(_act_name, label=f"Scanning {location_name}", progress="tree walk")
+            activity_update(_act_name, label=f"Scanning {location_name}", progress="tree walk")
 
             # --- Phase 1: stream metadata only into temp DB ---
             files_found, dirs_found = await _stream_to_temp_db(
@@ -209,7 +214,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 dirs_found,
                 location_name,
             )
-            _act_upd(_act_name, progress=f"{files_found:,} files, diffing")
+            activity_update(_act_name, progress=f"{files_found:,} files, diffing")
 
             # --- Phase 2: diff temp DB against catalog, apply changes ---
             (
@@ -238,15 +243,13 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 recovered_count,
                 location_name,
             )
-            _act_upd(
+            activity_update(
                 _act_name, progress=f"+{new_count:,} new, {changed_count:,} changed"
             )
 
             # --- Phase 3: find dup candidates for new/changed/recovered files ---
             # Pre-existing unprocessed candidates are handled by housekeeping
             if new_count > 0 or changed_count > 0 or recovered_count > 0:
-                from file_hunter.services.dup_counts import post_ingest_dup_processing
-
                 candidates_total = await post_ingest_dup_processing(
                     location_id,
                     agent_id,
@@ -255,10 +258,8 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
         else:
             # === FIRST SCAN PATH ===
-            from file_hunter.services.activity import update as _act_upd
-
             _act_name = f"op-{op_id}"
-            _act_upd(_act_name, label=f"Scanning {location_name}", progress="tree walk")
+            activity_update(_act_name, label=f"Scanning {location_name}", progress="tree walk")
 
             # --- Phase 1: stream metadata + hashes into temp DB ---
             files_found, dirs_found = await _stream_to_temp_db(
@@ -276,7 +277,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 dirs_found,
                 location_name,
             )
-            _act_upd(_act_name, progress=f"{files_found:,} files, ingesting")
+            activity_update(_act_name, progress=f"{files_found:,} files, ingesting")
 
             # --- Phase 2: bulk ingest from temp DB into catalog ---
             files_new = await _bulk_ingest(
@@ -300,8 +301,6 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             await _broadcast_location_children(location_id)
 
             # --- Phase 3: find dup candidates and queue for hashing ---
-            from file_hunter.services.dup_counts import post_ingest_dup_processing
-
             candidates_total = await post_ingest_dup_processing(
                 location_id,
                 agent_id,
@@ -359,8 +358,6 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         logger.info("Hash drainer finished for %s", location_name)
 
         await post_op_stats()
-
-        from file_hunter.stats_db import read_stats as read_stats_db
 
         async with read_stats_db() as sdb:
             loc_stats = await sdb.execute_fetchall(
@@ -550,8 +547,6 @@ async def _stream_to_temp_db(
     async for record in stream_tree(
         agent_id, root_path, prefix=prefix, metadata_only=metadata_only
     ):
-        from file_hunter.services.queue_manager import wait_if_paused
-
         await wait_if_paused()
 
         rtype = record.get("type")
@@ -880,8 +875,6 @@ async def _bulk_ingest(
                     )
 
         # Update stats.db with deltas — runs on stats writer, no catalog contention
-        from file_hunter.stats_db import apply_file_deltas, read_stats as read_stats_db
-
         live_totals = await apply_file_deltas(
             location_id,
             folder_parents,
@@ -1004,9 +997,6 @@ async def _diff_and_update(
 
     Called by run_scan on the rescan path only.
     """
-    from file_hunter.db import open_connection
-    from file_hunter.services.agent_ops import hash_partial_batch
-
     # --- Phase 2a: ensure folder hierarchy ---
     tmp_db = sqlite3.connect(tmp_path)
     tmp_db.row_factory = sqlite3.Row
@@ -1176,18 +1166,14 @@ async def _diff_and_update(
             await asyncio.sleep(0)
 
         # Flag stale in hashes.db (preserves hash data for recovery)
-        from file_hunter.hashes_db import mark_hashes_stale
-
         await mark_hashes_stale(stale_id_list)
 
         # Stats: remove stale file deltas
-        from file_hunter.stats_db import apply_file_deltas as _apply_deltas
-
         stale_removed = [
             (r["folder_id"], r["file_size"] or 0, r["file_type_high"], r["hidden"])
             for r in stale_ids
         ]
-        await _apply_deltas(location_id, folder_parents, removed=stale_removed)
+        await apply_file_deltas(location_id, folder_parents, removed=stale_removed)
 
     # Un-stale recovered files
     if recovered_rows:
@@ -1203,8 +1189,6 @@ async def _diff_and_update(
             await asyncio.sleep(0)
 
         # Clear stale flag in hashes.db — hash data was preserved
-        from file_hunter.hashes_db import clear_hashes_stale
-
         await clear_hashes_stale(recovered_id_list)
 
     # Mark all seen files with current scan_id — batched to avoid holding writer
@@ -1316,9 +1300,7 @@ async def _diff_and_update(
                 (b[4], b[7], b[5], b[13])  # folder_id, file_size, type_high, hidden
                 for b in batch
             ]
-            from file_hunter.stats_db import apply_file_deltas as _apply_deltas
-
-            await _apply_deltas(location_id, folder_parents, added=batch_deltas)
+            await apply_file_deltas(location_id, folder_parents, added=batch_deltas)
 
             # Register in hashes.db (no hash values yet — populated in phase 2e)
             rel_paths = [b[2] for b in batch]  # rel_path
@@ -1431,9 +1413,7 @@ async def _diff_and_update(
             is_hidden = 1 if os.path.basename(r["rel_path"]).startswith(".") else 0
             changed_added.append((folder_id, r["file_size"], file_type_high, is_hidden))
 
-        from file_hunter.stats_db import apply_file_deltas as _apply_deltas
-
-        await _apply_deltas(
+        await apply_file_deltas(
             location_id,
             folder_parents,
             removed=changed_removed,
@@ -1472,8 +1452,6 @@ async def _diff_and_update(
         )
 
         # Batch by bytes using HASH_BATCH_BYTES
-        from file_hunter.services.dup_counts import HASH_BATCH_BYTES
-
         # Get file sizes for byte-based batching
         size_map: dict[str, int] = {}
         for r in new_rows:
@@ -1583,8 +1561,6 @@ async def _write_hash_partials_to_hashes_db(
 async def _broadcast_location_children(location_id: int):
     """Broadcast root folders for a location so frontend can populate the tree."""
     async with read_db() as rdb:
-        from file_hunter.services.settings import get_setting
-
         show_hidden = await get_setting(rdb, "showHiddenFiles") == "1"
         hidden_filter = "" if show_hidden else " AND f.hidden = 0"
         child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"

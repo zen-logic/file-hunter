@@ -1,10 +1,9 @@
+import sqlite3
 from datetime import datetime, timezone
 
 
 async def add_ignore_rule(db, filename, file_size, location_id=None):
     """Insert an ignore rule. Returns the new rule dict or raises on duplicate."""
-    import sqlite3
-
     now = datetime.now(timezone.utc).isoformat()
     try:
         cursor = await db.execute(

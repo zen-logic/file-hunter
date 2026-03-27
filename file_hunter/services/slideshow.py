@@ -13,8 +13,17 @@ import asyncio
 import os
 import sqlite3
 
+from file_hunter.hashes_db import read_hashes
 from file_hunter.helpers import parse_prefixed_id
 from file_hunter.services.locations import check_location_online
+from file_hunter.services.search import (
+    _search_db_path,
+    _search_id,
+    build_condition_sql,
+    parse_conditions_from_params,
+    parse_size,
+)
+from file_hunter.services.settings import get_setting
 
 
 async def get_slideshow_ids_from_search(
@@ -25,8 +34,6 @@ async def get_slideshow_ids_from_search(
     Uses the existing search cache — no re-query, correct scope, fast.
     Returns empty list if the cache is missing or expired.
     """
-    from file_hunter.services.search import _search_id, _search_db_path
-
     if not search_id or search_id != _search_id or not _search_db_path:
         return []
     path = str(_search_db_path)
@@ -52,8 +59,6 @@ async def get_slideshow_ids(db, *, folder_id=None, media_type: str = "image"):
     folder_id must be provided.
     Returns all matching IDs in one call — the client navigates locally.
     """
-    from file_hunter.services.settings import get_setting
-
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
     hidden_filter = "" if show_hidden else " AND f.hidden = 0"
 
@@ -168,8 +173,6 @@ async def _ids_for_search(db, search_params, hidden_filter):
             conditions.append("f.tags LIKE ?")
             params.append(f"%{tag}%")
 
-    from file_hunter.services.search import parse_size
-
     size_min = search_params.get("sizeMin")
     size_max = search_params.get("sizeMax")
     size_min_bytes = parse_size(size_min) if size_min else None
@@ -218,8 +221,6 @@ async def _ids_for_search(db, search_params, hidden_filter):
     hash_val = search_params.get("hash")
     if hash_val:
         # Hashes live in hashes.db, not catalog — look up file IDs there
-        from file_hunter.hashes_db import read_hashes
-
         async with read_hashes() as hdb:
             hash_rows = await hdb.execute_fetchall(
                 "SELECT file_id FROM active_hashes "
@@ -255,11 +256,6 @@ async def _ids_for_search(db, search_params, hidden_filter):
 
 async def _ids_for_advanced_search(db, search_params, hidden_filter):
     """Advanced search with image type filter, return all matching IDs."""
-    from file_hunter.services.search import (
-        parse_conditions_from_params,
-        build_condition_sql,
-    )
-
     conditions_list = parse_conditions_from_params(search_params)
 
     where_parts = ["f.file_type_high = 'image'", "f.stale = 0"]

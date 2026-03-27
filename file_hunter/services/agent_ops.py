@@ -4,6 +4,8 @@ All filesystem operations on agent-backed locations are routed through
 this single dispatch function.
 """
 
+import asyncio
+import io
 import logging
 
 import httpx
@@ -18,11 +20,7 @@ _loc_agent_cache: dict[int, int] = {}
 
 def _resolve_agent(agent_id: int):
     """Return (host, port, token) for an online agent, or None."""
-    from file_hunter.ws.agent import (
-        get_online_agent_ids,
-        get_agent_token,
-        get_agent_info,
-    )
+    from file_hunter.ws.agent import get_agent_info, get_agent_token, get_online_agent_ids
 
     if agent_id not in get_online_agent_ids():
         return None
@@ -91,9 +89,6 @@ async def _upload_multipart(
     host, port, token, dest_dir, filename, file_obj, file_size, on_progress
 ):
     """Upload a file to agent via multipart POST — raw binary, no base64."""
-    import asyncio
-    import io
-
     url = f"http://{host}:{port}/upload"
     total = file_size
 

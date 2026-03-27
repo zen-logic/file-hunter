@@ -3,6 +3,7 @@ import json
 from starlette.requests import Request
 from file_hunter.db import read_db, execute_write
 from file_hunter.core import json_ok, json_error
+from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
 from file_hunter.services.search import (
     search_files,
     search_files_advanced,
@@ -11,11 +12,6 @@ from file_hunter.services.search import (
 
 
 async def search(request: Request):
-    from file_hunter.services.activity import (
-        register as _act_reg,
-        unregister as _act_unreg,
-    )
-
     page = int(request.query_params.get("page", 0))
     sort = request.query_params.get("sort", "name")
     sort_dir = request.query_params.get("sortDir", "asc")

@@ -1,3 +1,6 @@
+import logging
+import re
+
 from starlette.requests import Request
 from file_hunter.db import read_db, db_writer, execute_write
 from file_hunter.core import json_ok, json_error
@@ -12,7 +15,12 @@ from file_hunter.services.locations import (
     move_folder,
     get_treemap_children,
 )
+from file_hunter.extensions import get_location_changed
 from file_hunter.helpers import post_op_stats
+from file_hunter.services.agent_ops import _resolve_agent, _post, _get
+from file_hunter.services.hash_backfill import cancel_backfill_by_location
+from file_hunter.services.housekeeping import enqueue as hk_enqueue
+from file_hunter.services.queue_manager import cancel_by_location
 from file_hunter.ws.scan import broadcast
 
 
@@ -37,15 +45,12 @@ async def add_location(request: Request):
 
     # Validate path via the local agent
     if agent_id:
-        from file_hunter.services.agent_ops import _resolve_agent, _post
-
         resolved = _resolve_agent(agent_id)
         if resolved:
             host, port, token = resolved
             # Use /browse-system to validate — /files/exists rejects paths
             # not yet in a configured location, but we're adding a new one.
             from urllib.parse import quote
-            from file_hunter.services.agent_ops import _get
 
             try:
                 browse_data = await _get(
@@ -78,8 +83,6 @@ async def add_location(request: Request):
     try:
         await _post(host, port, token, "/locations/add", {"name": name, "path": path})
     except Exception as e:
-        import logging
-
         logging.getLogger("file_hunter").warning(
             "Failed to push new location to agent: %s", e
         )
@@ -105,9 +108,6 @@ async def remove_location(request: Request):
     agent_id = row[0]["agent_id"]
 
     # Cancel any running scan/backfill for this location first
-    from file_hunter.services.queue_manager import cancel_by_location
-    from file_hunter.services.hash_backfill import cancel_backfill_by_location
-
     await cancel_by_location(loc_id)
     cancel_backfill_by_location(loc_id)
 
@@ -129,8 +129,6 @@ async def remove_location(request: Request):
     await post_op_stats()
 
     # Queue the purge as housekeeping — runs when system is idle
-    from file_hunter.services.housekeeping import enqueue as hk_enqueue
-
     await hk_enqueue(
         "purge_location",
         agent_id,
@@ -151,8 +149,6 @@ async def update_location(request: Request):
 
     # Schedule update (can be sent alone or with name)
     if "scheduleEnabled" in body:
-        import re
-
         enabled = bool(body.get("scheduleEnabled"))
         days = body.get("scheduleDays", [])
         time_val = body.get("scheduleTime", "03:00")
@@ -188,8 +184,6 @@ async def update_location(request: Request):
     )
     await post_op_stats()
     # Notify agent (if agent-backed) so its config.json stays in sync
-    from file_hunter.extensions import get_location_changed
-
     hook = get_location_changed()
     if hook:
         async with read_db() as db:

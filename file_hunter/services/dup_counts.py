@@ -17,14 +17,23 @@ writes target file_hashes directly.
 import asyncio
 import logging
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from typing import Callable, Awaitable
 
 import httpx
 
-from file_hunter.db import db_writer, read_db
+from file_hunter.db import db_writer, open_connection, read_db
 from file_hunter.hashes_db import hashes_writer, read_hashes, open_hashes_connection
 from file_hunter.helpers import post_op_stats
+from file_hunter.services.activity import (
+    register as _act_reg,
+    unregister as _act_unreg,
+    update as _act_upd,
+)
+from file_hunter.services.agent_ops import dispatch, hash_fast_batch
+from file_hunter.services.sizes import recalculate_location_sizes
+from file_hunter.stats_db import stats_writer
 from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
@@ -80,8 +89,6 @@ async def _batched_recalc(
     dedicated connection (temp table + JOIN), then groups hashes by target
     dup_count value and writes in batches. Yields between batches.
     """
-    from collections import Counter
-
     hash_list = list(hashes)
     total = len(hash_list)
     if not total:
@@ -384,8 +391,6 @@ async def optimized_dup_recount(
     all_dup_hashes: list[tuple[str, str, int]] = []  # (hash_col, hash_val, dup_count)
 
     conn = await open_hashes_connection()
-    from collections import Counter
-
     try:
         for hash_column, update_extra in hash_configs:
             if location_id:
@@ -640,8 +645,6 @@ async def _dup_recalc_writer():
             await update_location_dup_counts(affected)
 
             # Rebuild folder-level dup counts now that hashes.db is up to date
-            from file_hunter.services.sizes import recalculate_location_sizes
-
             for lid in affected:
                 await recalculate_location_sizes(lid)
 
@@ -672,9 +675,6 @@ async def find_dup_candidates(
 
     Returns [{id, full_path, location_id, file_size, hash_partial, inode}, ...]
     """
-    from collections import Counter
-    from file_hunter.db import open_connection
-
     scope = f"location {location_id}" if location_id else "global"
 
     log.info("find_dup_candidates: starting (scope=%s)", scope)
@@ -837,8 +837,6 @@ async def update_location_dup_counts(location_ids: set[int]):
     finally:
         await conn.close()
 
-    from file_hunter.stats_db import stats_writer
-
     async with stats_writer() as sdb:
         for dc, lid in loc_updates:
             await sdb.execute(
@@ -917,12 +915,6 @@ async def recalculate_dup_counts(
         len(strong),
         len(fast),
         source or "inline",
-    )
-
-    from file_hunter.services.activity import (
-        register as _act_reg,
-        unregister as _act_unreg,
-        update as _act_upd,
     )
 
     activity_name = f"dup-recalc-{id(strong)}"
@@ -1128,9 +1120,6 @@ async def hash_candidates_for_location(
 
     Returns (total_candidates, small_handled, large_queued).
     """
-    from file_hunter.db import read_db
-    from datetime import datetime, timezone
-
     candidates = await find_dup_candidates(location_id=location_id)
 
     log.info(
@@ -1252,8 +1241,6 @@ async def post_ingest_dup_processing(
     log.info("Post-ingest dup processing for %s", location_name)
 
     if broadcast_scan_progress:
-        from file_hunter.ws.scan import broadcast
-
         await broadcast(
             {
                 "type": "scan_progress",
@@ -1288,8 +1275,6 @@ async def run_hash_file(op_id: int, agent_id: int, params: dict):
     Called by queue_manager for the 'hash_file' operation type.
     Dispatches file_hash to the agent, writes hash_fast, submits to dup recalc.
     """
-    from file_hunter.services.agent_ops import dispatch
-
     file_id = params["file_id"]
     location_id = params["location_id"]
     full_path = params["full_path"]
@@ -1332,8 +1317,6 @@ async def drain_pending_hashes(
     for the location being scanned/imported. Leftover cleanup for other
     locations is a housekeeping concern, not a scan/import concern.
     """
-    from file_hunter.services.agent_ops import hash_fast_batch
-
     FETCH_LIMIT = 2000
     total_hashed = 0
     total_pending = 0

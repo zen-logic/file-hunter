@@ -6,6 +6,7 @@ from starlette.requests import Request
 
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import read_db
+from file_hunter.services.agent_ops import _resolve_agent, _get
 
 
 async def browse(request: Request):
@@ -17,8 +18,6 @@ async def browse(request: Request):
         row = await cursor.fetchone()
     if not row:
         return json_error("Local agent not configured.", 503)
-
-    from file_hunter.services.agent_ops import _resolve_agent, _get
 
     resolved = _resolve_agent(row["id"])
     if not resolved:

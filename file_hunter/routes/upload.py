@@ -7,6 +7,7 @@ from file_hunter.core import json_ok, json_error
 from file_hunter.db import read_db
 from file_hunter.helpers import resolve_target
 from file_hunter.services import fs
+from file_hunter.services.fs import agent_upload_file
 from file_hunter.services.upload import run_upload
 from file_hunter.ws.scan import broadcast
 
@@ -63,8 +64,6 @@ async def upload_files(request):
         upload_file.file.seek(0, 2)
         file_size = upload_file.file.tell()
         upload_file.file.seek(0)
-
-        from file_hunter.services.fs import agent_upload_file
 
         file_size_mb = file_size / 1048576
 

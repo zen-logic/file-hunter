@@ -7,8 +7,18 @@ from datetime import datetime, timezone
 
 from file_hunter_core.classify import classify_file
 from file_hunter.db import db_writer, read_db
+from file_hunter.hashes_db import (
+    get_file_hashes,
+    hashes_writer,
+    remove_file_hashes,
+)
 from file_hunter.helpers import parse_mtime, parse_prefixed_id
 from file_hunter.services import fs
+from file_hunter.services.dup_counts import recalculate_dup_counts
+from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
+from file_hunter.services.sizes import recalculate_location_sizes
+from file_hunter.services.stats import invalidate_stats_cache
+from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -207,12 +217,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
         folder_cache: dict[str, int] = {}
 
         # Create result log CSV at destination
-        from file_hunter.services.op_result_log import (
-            create_log,
-            append_row,
-            add_to_catalog,
-        )
-
         csv_path = await create_log(dest_info["abs_path"], dest_loc_id, "merge")
         csv_folder_id = dest_info["folder_id"]
 
@@ -270,8 +274,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     (hash_fast,) = await fs.file_hash(src_path, src_loc_id)
                     effective_hash = hash_fast
                     files_hashed += 1
-                    from file_hunter.hashes_db import hashes_writer
-
                     async with hashes_writer() as hdb:
                         await hdb.execute(
                             "UPDATE file_hashes SET hash_fast=? WHERE file_id=?",
@@ -347,13 +349,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                                 ),
                             )
 
-                        from file_hunter.hashes_db import remove_file_hashes
-
                         _del_ids = [r["id"] for r in _replaced] + [src_file["id"]]
                         await remove_file_hashes(_del_ids)
-
-                        from file_hunter.stats_db import update_stats_for_files
-
                         await update_stats_for_files(
                             src_file["location_id"],
                             removed=[
@@ -529,9 +526,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
 
                     # Register hashes in hashes.db for the new file record
                     if new_dest_file_id and (copy_fast or copy_strong):
-                        from file_hunter.hashes_db import hashes_writer as _hw
-
-                        async with _hw() as hdb:
+                        async with hashes_writer() as hdb:
                             await hdb.execute(
                                 "INSERT INTO file_hashes "
                                 "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
@@ -547,9 +542,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                                 ),
                             )
 
-                    from file_hunter.stats_db import update_stats_for_files as _usf
-
-                    await _usf(
+                    await update_stats_for_files(
                         dest_loc_id,
                         added=[(dest_folder_id, file_size, type_high, is_hidden)],
                     )
@@ -617,13 +610,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                                 ),
                             )
 
-                        from file_hunter.hashes_db import remove_file_hashes
-
                         _del_ids = [r["id"] for r in _replaced] + [src_file["id"]]
                         await remove_file_hashes(_del_ids)
-
-                        from file_hunter.stats_db import update_stats_for_files
-
                         await update_stats_for_files(
                             src_file["location_id"],
                             removed=[
@@ -732,19 +720,12 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     "filesSkipped": files_skipped,
                 }
             )
-        from file_hunter.services.stats import invalidate_stats_cache
-
         invalidate_stats_cache()
-
-        from file_hunter.services.sizes import recalculate_location_sizes
-
         for lid in {src_loc_id, dest_loc_id}:
             try:
                 await recalculate_location_sizes(lid)
             except Exception:
                 pass
-
-        from file_hunter.services.dup_counts import recalculate_dup_counts
 
         affected_strong = {h for h in affected_hashes if len(h) == 64}
         affected_fast = {h for h in affected_hashes if len(h) == 16}
@@ -807,8 +788,6 @@ async def _load_source_files(db, source_id, source_info):
 
     # Fetch hashes from hashes.db
     if result:
-        from file_hunter.hashes_db import get_file_hashes
-
         file_ids = [r["id"] for r in result]
         h_map = await get_file_hashes(file_ids)
         for r in result:
@@ -831,8 +810,6 @@ async def _build_dest_hash_index(db, location_id):
 
     # Get hashes from hashes.db
     file_ids = [r["id"] for r in file_rows]
-    from file_hunter.hashes_db import get_file_hashes
-
     hash_map = await get_file_hashes(file_ids)
 
     path_by_id = {r["id"]: r["full_path"] for r in file_rows}

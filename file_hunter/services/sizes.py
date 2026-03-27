@@ -9,7 +9,14 @@ and SUM/GROUP BY aggregates on every tree/stats request.
 import asyncio
 import json
 import logging
-from collections import defaultdict
+import time
+from collections import Counter, defaultdict
+
+from file_hunter.db import read_db
+from file_hunter.hashes_db import open_hashes_connection
+from file_hunter.services.activity import register, unregister
+from file_hunter.stats_db import read_stats, stats_writer
+from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
 
@@ -26,14 +33,8 @@ def schedule_size_recalc(*location_ids: int):
 
 
 async def _bg_recalc_sizes(location_ids: list[int]):
-    from file_hunter.ws.scan import broadcast
-    from file_hunter.services.activity import (
-        register as _act_reg,
-        unregister as _act_unreg,
-    )
-
     activity_name = f"size-recalc-{id(location_ids)}"
-    _act_reg(activity_name, "Size recalc")
+    register(activity_name, "Size recalc")
     try:
         for lid in location_ids:
             await recalculate_location_sizes(lid)
@@ -41,7 +42,7 @@ async def _bg_recalc_sizes(location_ids: list[int]):
     except Exception:
         log.error("Background size recalc failed", exc_info=True)
     finally:
-        _act_unreg(activity_name)
+        unregister(activity_name)
 
 
 def _merge_type_counts(a: dict, b: dict) -> dict:
@@ -64,8 +65,6 @@ async def recalculate_location_sizes(location_id: int):
     3. Bottom-up accumulation: leaf folders get direct values, parents sum children.
     4. Batch UPDATE folders, then UPDATE the location row (write via db_writer()).
     """
-    from file_hunter.db import read_db
-
     async with read_db() as db:
         # 1a. Direct file sizes and counts per folder
         direct_rows = await db.execute_fetchall(
@@ -75,8 +74,6 @@ async def recalculate_location_sizes(location_id: int):
         )
 
         # 1b. Direct duplicate counts per folder — dup_count from hashes.db
-        from file_hunter.hashes_db import open_hashes_connection
-
         hconn = await open_hashes_connection()
         try:
             dup_file_rows = await hconn.execute_fetchall(
@@ -101,9 +98,7 @@ async def recalculate_location_sizes(location_id: int):
                 dup_rows.extend(folder_rows_batch)
 
         # Group by folder_id to get counts
-        from collections import Counter as _Counter
-
-        _dup_folder_counts = _Counter(r["folder_id"] for r in dup_rows)
+        _dup_folder_counts = Counter(r["folder_id"] for r in dup_rows)
         dup_rows = [
             {"folder_id": fid, "cnt": cnt} for fid, cnt in _dup_folder_counts.items()
         ]
@@ -224,8 +219,6 @@ async def recalculate_location_sizes(location_id: int):
         for ftype, cnt in direct_types.get(fid, {}).items():
             loc_type_counts[ftype] = loc_type_counts.get(ftype, 0) + cnt
 
-    from file_hunter.stats_db import stats_writer
-
     # Write to stats.db — own writer, no catalog contention
     async with stats_writer() as sdb:
         await sdb.executemany(
@@ -278,11 +271,6 @@ async def recalculate_location_sizes(location_id: int):
 
 async def populate_all_sizes_if_needed():
     """Populate stats for locations missing from stats.db."""
-    import time
-
-    from file_hunter.db import read_db
-    from file_hunter.stats_db import read_stats
-
     async with read_db() as db:
         all_locs = await db.execute_fetchall(
             "SELECT id, name FROM locations WHERE name NOT LIKE '__deleting_%'"

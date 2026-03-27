@@ -12,7 +12,12 @@ import logging
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db, open_connection, execute_write
+from file_hunter.hashes_db import hashes_writer, open_hashes_connection
 from file_hunter.helpers import post_op_stats
+from file_hunter.services.agent_ops import dispatch as _agent_dispatch
+from file_hunter.services.dup_counts import find_dup_candidates, submit_hashes_for_recalc
+from file_hunter.services.online_check import agent_online_check
+from file_hunter.services.queue_manager import wait_if_paused
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -162,8 +167,6 @@ async def run_backfill(
         )
         return
 
-    from file_hunter.services.agent_ops import dispatch
-
     _active_backfills[agent_id] = False
     _backfill_info[agent_id] = (location_id, location_name, scan_prefix)
     await persist_backfill(agent_id, location_id, location_name, scan_prefix)
@@ -178,8 +181,6 @@ async def run_backfill(
                 "totalFiles": 0,
             }
         )
-
-        from file_hunter.services.dup_counts import find_dup_candidates
 
         all_candidates = await find_dup_candidates(location_id=location_id)
 
@@ -243,7 +244,7 @@ async def run_backfill(
                 if _active_backfills.get(agent_id):
                     return
                 try:
-                    result = await dispatch("file_hash", location_id, path=full_path)
+                    result = await _agent_dispatch("file_hash", location_id, path=full_path)
                     pending_writes.append((file_id, result["hash_fast"]))
                     affected_hashes.add(result["hash_fast"])
                     agent_hashed += 1
@@ -253,8 +254,6 @@ async def run_backfill(
 
         for i, row in enumerate(candidates):
             # Checkpoint: block here while queue is paused (e.g. during import)
-            from file_hunter.services.queue_manager import wait_if_paused
-
             await wait_if_paused()
 
             if _active_backfills.get(agent_id):
@@ -318,8 +317,6 @@ async def run_backfill(
             )
 
         if affected_hashes:
-            from file_hunter.services.dup_counts import submit_hashes_for_recalc
-
             submit_hashes_for_recalc(
                 fast_hashes=affected_hashes,
                 source=f"backfill {location_name}",
@@ -360,8 +357,6 @@ async def run_backfill(
 
 async def _flush_writes(writes: list[tuple[int, str]]):
     """Batch-update hash_fast in hashes.db for a list of file IDs."""
-    from file_hunter.hashes_db import hashes_writer
-
     async with hashes_writer() as wdb:
         for file_id, hash_fast in writes:
             await wdb.execute(
@@ -377,14 +372,9 @@ async def _backfill_agents(
     affected_hashes: set[str],
 ) -> int:
     """Hash files on OTHER agent locations that match by (size, partial)."""
-    from file_hunter.services.agent_ops import dispatch
-    from file_hunter.services.online_check import agent_online_check
-
     logger.info(
         "Cross-agent backfill: querying candidates for location %d", agent_location_id
     )
-
-    from file_hunter.hashes_db import open_hashes_connection
 
     hconn = await open_hashes_connection()
     try:
@@ -456,8 +446,6 @@ async def _backfill_agents(
 
     for row in rows:
         # Checkpoint: block here while queue is paused (e.g. during import)
-        from file_hunter.services.queue_manager import wait_if_paused
-
         await wait_if_paused()
 
         if row["location_id"] not in online_loc_ids:
@@ -465,7 +453,7 @@ async def _backfill_agents(
         if _active_backfills.get(agent_id):
             break
         try:
-            result = await dispatch(
+            result = await _agent_dispatch(
                 "file_hash", row["location_id"], path=row["full_path"]
             )
             pending.append((row["id"], result["hash_fast"]))

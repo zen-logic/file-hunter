@@ -7,6 +7,9 @@ A DB-backed cache (_all_agent_loc_ids) is loaded at startup so that agent
 locations are correctly identified even before any agent connects.
 """
 
+from file_hunter.db import read_db
+from file_hunter.services.agent_ops import dispatch
+
 # Persistent cache of ALL agent-backed location IDs (online or offline).
 # Loaded from DB at startup, updated on agent connect/disconnect.
 _all_agent_loc_ids: set[int] = set()
@@ -23,8 +26,6 @@ async def load_agent_location_ids():
 
     Called once at startup and whenever an agent connects/disconnects.
     """
-    from file_hunter.db import read_db
-
     async with read_db() as db:
         cursor = await db.execute(
             """SELECT l.id, a.name AS agent_name
@@ -109,8 +110,6 @@ def agent_online_check(loc):
 
 async def agent_disk_stats(location_id: int, root_path: str) -> dict | None:
     """Get disk stats from the agent for a location."""
-    from file_hunter.services.agent_ops import dispatch
-
     try:
         return await dispatch("disk_stats", location_id, path=root_path)
     except Exception:

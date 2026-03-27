@@ -9,6 +9,8 @@ import asyncio
 import logging
 import time
 
+from file_hunter.ws.scan import broadcast
+
 log = logging.getLogger(__name__)
 
 _activities: dict[str, dict] = {}
@@ -78,8 +80,6 @@ def _ensure_broadcaster():
 
 async def _broadcaster():
     """Broadcast activity state every 2 seconds while activities exist."""
-    from file_hunter.ws.scan import broadcast
-
     while _activities:
         await broadcast(
             {

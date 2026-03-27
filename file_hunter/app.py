@@ -1,4 +1,7 @@
 import asyncio
+import logging
+import time
+import traceback
 from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
@@ -67,6 +70,7 @@ from file_hunter.routes.stats import (
     rehash_partial,
     location_stats,
     folder_stats,
+    stop_repair,
 )
 from file_hunter.routes.browse import browse
 from file_hunter.routes.batch import (
@@ -119,6 +123,25 @@ from file_hunter.routes.import_catalog import (
 )
 from file_hunter.middleware import AuthMiddleware
 from file_hunter import extensions
+from file_hunter.hashes_db import init_hashes_db, close_hashes_db
+from file_hunter.stats_db import init_stats_db, close_stats_db
+from file_hunter.services.agents import ensure_local_agent
+from file_hunter.services.dup_counts import stop_writer as stop_dup_writer
+from file_hunter.services.dup_exclude import restore_pending as restore_dup_exclude
+from file_hunter.services.hash_backfill import restore_backfills
+from file_hunter.services.housekeeping import (
+    init_schema as init_housekeeping,
+    start as start_housekeeping,
+    stop as stop_housekeeping,
+)
+from file_hunter.services.online_check import load_agent_location_ids
+from file_hunter.services.queue_manager import (
+    start as start_queue_manager,
+    stop as stop_queue_manager,
+)
+from file_hunter.services.scheduler import start_scheduler
+from file_hunter.services.sizes import populate_all_sizes_if_needed
+from file_hunter.services.stats import warm_stats_cache
 
 static_dir = Path(__file__).resolve().parent.parent / "static"
 
@@ -130,15 +153,10 @@ try:
 except ImportError:
     pass
 except Exception:
-    import traceback
-
     traceback.print_exc()
 
 
 async def on_startup():
-    import logging
-    import time
-
     logger = logging.getLogger("file_hunter")
 
     t0 = time.monotonic()
@@ -150,20 +168,14 @@ async def on_startup():
         pass  # ensures DB is initialized
     _elapsed("db ready")
 
-    from file_hunter.hashes_db import init_hashes_db
-
     await init_hashes_db()
     _elapsed("hashes db ready")
-
-    from file_hunter.stats_db import init_stats_db
 
     await init_stats_db()
     _elapsed("stats db ready")
 
     # Local agent is created by preflight.py before the server starts.
     # If somehow missed (e.g. manual startup), create it now.
-    from file_hunter.services.agents import ensure_local_agent
-
     async with db_writer() as wdb:
         token = await ensure_local_agent(wdb)
     if token:
@@ -173,17 +185,11 @@ async def on_startup():
             token[:8],
         )
 
-    from file_hunter.services.online_check import load_agent_location_ids
-
     await load_agent_location_ids()
     _elapsed("agent location ids loaded")
 
-    from file_hunter.services.sizes import populate_all_sizes_if_needed
-
     await populate_all_sizes_if_needed()
     _elapsed("sizes checked")
-
-    from file_hunter.services.scheduler import start_scheduler
 
     await start_scheduler()
     _elapsed("scheduler started")
@@ -198,8 +204,6 @@ async def on_startup():
             "UPDATE agents SET status = 'offline' WHERE status = 'online'"
         )
     _elapsed("stale agent status reset")
-
-    from file_hunter.services.dup_exclude import restore_pending as restore_dup_exclude
 
     await restore_dup_exclude()
 
@@ -218,50 +222,27 @@ async def on_startup():
                 )
         logger.info("Marked %d interrupted scan(s) as error", len(interrupted))
 
-    from file_hunter.services.hash_backfill import restore_backfills
-
     await restore_backfills()
     _elapsed("backfills restored")
-
-    from file_hunter.services.queue_manager import start as start_queue_manager
 
     start_queue_manager()
     _elapsed("queue manager started")
 
-    from file_hunter.services.housekeeping import (
-        init_schema as init_housekeeping,
-        start as start_housekeeping,
-    )
-
     await init_housekeeping()
     start_housekeeping()
     _elapsed("housekeeping started")
-
-    from file_hunter.services.stats import warm_stats_cache
 
     asyncio.get_event_loop().create_task(warm_stats_cache())
     _elapsed("startup complete")
 
 
 async def on_shutdown():
-    from file_hunter.routes.stats import stop_repair
-    from file_hunter.services.queue_manager import stop as stop_queue_manager
-    from file_hunter.services.dup_counts import stop_writer as stop_dup_writer
-
-    from file_hunter.services.housekeeping import stop as stop_housekeeping
-
     await stop_repair()
     await stop_housekeeping()
     await stop_queue_manager()
     await stop_dup_writer()
     await close_db()
-
-    from file_hunter.hashes_db import close_hashes_db
-
     await close_hashes_db()
-
-    from file_hunter.stats_db import close_stats_db
-
     await close_stats_db()
 
 

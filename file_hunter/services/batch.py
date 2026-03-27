@@ -1,11 +1,22 @@
 """Batch operations — delete, move, tag, and download multiple items."""
 
 import os
+import tempfile
 import zipfile
 
+from starlette.responses import StreamingResponse
+
+from file_hunter.hashes_db import get_file_hashes, read_hashes, remove_file_hashes
 from file_hunter.helpers import parse_prefixed_id, post_op_stats
+from file_hunter.services import fs
+from file_hunter.services.activity import register, unregister, update
+from file_hunter.services.content_proxy import stream_agent_file
+from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.delete import delete_folder
 from file_hunter.services.files import move_file, update_file
+from file_hunter.services.locations import move_folder
+from file_hunter.stats_db import update_stats_for_files
+from file_hunter.ws.scan import broadcast
 
 
 async def batch_delete(
@@ -43,19 +54,9 @@ async def batch_delete(
     Called by:
         Route handler batch_delete_route (POST /api/batch/delete) via execute_write.
     """
-    from file_hunter.services import fs
-    from file_hunter.hashes_db import get_file_hashes, remove_file_hashes
-    from file_hunter.services.deferred_ops import queue_deferred_op
-    from file_hunter.services.activity import (
-        register as _act_reg,
-        unregister as _act_unreg,
-        update as _act_upd,
-    )
-    from file_hunter.ws.scan import broadcast
-
     total = len(file_ids) + len(folder_ids)
     act_name = f"batch-delete-{id(file_ids)}"
-    _act_reg(act_name, "Deleting files", f"0/{total}")
+    register(act_name, "Deleting files", f"0/{total}")
     done = 0
 
     deleted_files = 0
@@ -71,7 +72,7 @@ async def batch_delete(
                 if result.get("deleted_from_disk"):
                     deleted_from_disk += 1
             done += 1
-            _act_upd(act_name, progress=f"{done}/{total}")
+            update(act_name, progress=f"{done}/{total}")
 
         if not file_ids:
             return {
@@ -82,8 +83,6 @@ async def batch_delete(
 
         # Expand to include duplicates if requested
         if all_duplicates:
-            from file_hunter.hashes_db import read_hashes
-
             h_map = await get_file_hashes(file_ids)
             strong_set = {
                 h["hash_strong"] for h in h_map.values() if h.get("hash_strong")
@@ -181,7 +180,7 @@ async def batch_delete(
                 affected_fast.add(h["hash_fast"])
 
             done += 1
-            _act_upd(act_name, progress=f"{done}/{total}")
+            update(act_name, progress=f"{done}/{total}")
             await broadcast(
                 {
                     "type": "batch_delete_progress",
@@ -203,8 +202,6 @@ async def batch_delete(
 
         # Update stats once per location
         if removed_by_loc:
-            from file_hunter.stats_db import update_stats_for_files
-
             for loc_id, removed in removed_by_loc.items():
                 await update_stats_for_files(loc_id, removed=removed)
 
@@ -220,7 +217,7 @@ async def batch_delete(
             "deleted_from_disk": deleted_from_disk,
         }
     finally:
-        _act_unreg(act_name)
+        unregister(act_name)
         await broadcast({"type": "status_bar_idle"})
 
 
@@ -254,17 +251,9 @@ async def batch_move(
     Called by:
         Route handler batch_move_route (POST /api/batch/move) via execute_write.
     """
-    from file_hunter.services.locations import move_folder
-    from file_hunter.services.activity import (
-        register as _act_reg,
-        unregister as _act_unreg,
-        update as _act_upd,
-    )
-    from file_hunter.ws.scan import broadcast
-
     total = len(file_ids) + len(folder_ids)
     act_name = f"batch-move-{id(file_ids)}"
-    _act_reg(act_name, "Moving files", f"0/{total}")
+    register(act_name, "Moving files", f"0/{total}")
 
     moved_files = 0
     moved_folders = 0
@@ -322,7 +311,7 @@ async def batch_move(
             except ValueError as e:
                 errors.append(f"Folder {fid}: {e}")
             done = moved_folders + moved_files
-            _act_upd(act_name, progress=f"{done}/{total}")
+            update(act_name, progress=f"{done}/{total}")
 
         # Move files
         for fid in file_ids:
@@ -346,9 +335,9 @@ async def batch_move(
             except ValueError as e:
                 errors.append(f"File {fid}: {e}")
             done = moved_folders + moved_files
-            _act_upd(act_name, progress=f"{done}/{total}")
+            update(act_name, progress=f"{done}/{total}")
     finally:
-        _act_unreg(act_name)
+        unregister(act_name)
 
     # Post-processing once — recalc all affected locations
     kind, num_id = parse_prefixed_id(destination_folder_id)
@@ -492,12 +481,6 @@ async def build_streaming_zip(files, zip_name):
     incrementally. The ZIP is built in a temp file to avoid accumulating the
     entire archive in memory.
     """
-    import tempfile
-
-    from starlette.responses import StreamingResponse
-
-    from file_hunter.services.content_proxy import stream_agent_file
-
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip")
     os.close(tmp_fd)
 

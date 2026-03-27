@@ -12,9 +12,14 @@ at read time.
 import asyncio
 import json
 import logging
+import time
 
 from file_hunter.core import format_size
+from file_hunter.db import read_db
+from file_hunter.services.deferred_ops import get_pending_ops_count
 from file_hunter.services.locations import check_location_online, get_disk_stats
+from file_hunter.stats_db import read_stats as read_stats_db
+from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +80,6 @@ async def _refresh_all():
     Folder entries are cleared but not repopulated — they are lazily
     re-fetched on next access.
     """
-    import time as _time
-
-    from file_hunter.db import read_db
-
     _debug = logging.getLogger("scan_debug")
     _debug.debug("STATS_REFRESH: starting _refresh_all")
 
@@ -86,28 +87,26 @@ async def _refresh_all():
 
     try:
         async with read_db() as conn:
-            _t0 = _time.monotonic()
+            _t0 = time.monotonic()
             _debug.debug("STATS_REFRESH: getting read_db()")
-            _debug.debug("STATS_REFRESH: read_db() in %.3fs", _time.monotonic() - _t0)
+            _debug.debug("STATS_REFRESH: read_db() in %.3fs", time.monotonic() - _t0)
 
-            _t0 = _time.monotonic()
+            _t0 = time.monotonic()
             _debug.debug("STATS_REFRESH: commit()")
             await conn.commit()
-            _debug.debug("STATS_REFRESH: commit() in %.3fs", _time.monotonic() - _t0)
+            _debug.debug("STATS_REFRESH: commit() in %.3fs", time.monotonic() - _t0)
 
-            _t0 = _time.monotonic()
+            _t0 = time.monotonic()
             _debug.debug("STATS_REFRESH: _refresh_dashboard")
             await _refresh_dashboard(conn)
-            _debug.debug("STATS_REFRESH: dashboard in %.3fs", _time.monotonic() - _t0)
+            _debug.debug("STATS_REFRESH: dashboard in %.3fs", time.monotonic() - _t0)
 
-            _t0 = _time.monotonic()
+            _t0 = time.monotonic()
             _debug.debug("STATS_REFRESH: _refresh_all_locations")
             await _refresh_all_locations(conn)
-            _debug.debug("STATS_REFRESH: locations in %.3fs", _time.monotonic() - _t0)
+            _debug.debug("STATS_REFRESH: locations in %.3fs", time.monotonic() - _t0)
 
         # Notify connected browsers that cached stats have been updated
-        from file_hunter.ws.scan import broadcast
-
         await broadcast({"type": "stats_updated"})
     except asyncio.CancelledError:
         raise
@@ -117,8 +116,6 @@ async def _refresh_all():
 
 async def _refresh_dashboard(db):
     """Refresh dashboard stats from stats.db + catalog for non-counter data."""
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     # Counter aggregates from stats.db
     async with read_stats_db() as sdb:
         loc_agg_rows = await sdb.execute_fetchall(
@@ -169,8 +166,6 @@ async def _refresh_dashboard(db):
         for r in recent_scans_rows
     ]
 
-    from file_hunter.services.deferred_ops import get_pending_ops_count
-
     pending_ops = await get_pending_ops_count(db)
 
     _cache["dashboard"] = {
@@ -187,8 +182,6 @@ async def _refresh_dashboard(db):
 
 async def _refresh_all_locations(db):
     """Refresh cached stats for all locations from stats.db + catalog."""
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     # Location metadata from catalog
     loc_rows = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, "
@@ -265,8 +258,6 @@ async def get_stats(db):
         return cached
 
     # Cache miss — counters from stats.db, recent scans from catalog
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     async with read_stats_db() as sdb:
         loc_agg_rows = await sdb.execute_fetchall(
             "SELECT COUNT(*) as c, COALESCE(SUM(total_size), 0) as s, "
@@ -310,8 +301,6 @@ async def get_stats(db):
         }
         for r in recent_scans_rows
     ]
-
-    from file_hunter.services.deferred_ops import get_pending_ops_count
 
     pending_ops = await get_pending_ops_count(db)
 
@@ -383,8 +372,6 @@ async def get_location_stats(db, location_id: int):
         }
 
     # Cache miss — metadata from catalog, counters from stats.db
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     loc_row = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, date_last_scanned, "
         "scan_schedule_enabled, scan_schedule_days, scan_schedule_time, "
@@ -484,8 +471,6 @@ async def get_folder_stats(db, folder_id: int):
         return result
 
     # Folder metadata from catalog (structural), counters from stats.db
-    from file_hunter.stats_db import read_stats as read_stats_db
-
     folder_row = await db.execute_fetchall(
         """SELECT f.id, f.name, f.rel_path, f.location_id,
                   f.dup_exclude,

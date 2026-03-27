@@ -15,6 +15,14 @@ import logging
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db
+from file_hunter.hashes_db import open_hashes_connection, remove_location_hashes
+from file_hunter.helpers import post_op_stats
+from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
+from file_hunter.services.agent_ops import invalidate_loc_cache
+from file_hunter.services.dup_counts import post_ingest_dup_processing
+from file_hunter.services.location_delete import _collect_affected_hashes
+from file_hunter.services.queue_manager import _running_ops, _paused
+from file_hunter.stats_db import remove_location_stats
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -81,8 +89,6 @@ def _now() -> str:
 
 def _is_idle() -> bool:
     """Check if the system is idle — no user operations running."""
-    from file_hunter.services.queue_manager import _running_ops, _paused
-
     # Queue is paused = import has exclusive access
     if _paused:
         return False
@@ -191,11 +197,6 @@ async def _run():
             await broadcast({"type": "activity", "message": "Housekeeping..."})
             logger.info("Housekeeping: starting %s (id=%d)", task_type, task_id)
 
-            from file_hunter.services.activity import (
-                register as _act_reg,
-                unregister as _act_unreg,
-            )
-
             _act_reg(f"housekeeping-{task_id}", f"Housekeeping: {task_type}")
 
             try:
@@ -255,8 +256,6 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
     location_name = params.get("location_name", f"location {location_id}")
 
     # Collect affected hashes before deletion (for dup recount after)
-    from file_hunter.services.location_delete import _collect_affected_hashes
-
     affected_fast, affected_strong = await _collect_affected_hashes(location_id)
     logger.info(
         "Housekeeping purge #%d: %d affected hash_fast, %d affected hash_strong",
@@ -266,9 +265,6 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
     )
 
     # Remove from hashes.db and stats.db (fast, indexed by location_id)
-    from file_hunter.hashes_db import remove_location_hashes
-    from file_hunter.stats_db import remove_location_stats
-
     await remove_location_hashes(location_id)
     await remove_location_stats(location_id)
 
@@ -323,15 +319,11 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
         await db.execute("DELETE FROM locations WHERE id = ?", (location_id,))
 
     # Submit affected hashes for dup recount + invalidate stats
-    from file_hunter.helpers import post_op_stats
-
     await post_op_stats(
         strong_hashes=affected_strong or None,
         fast_hashes=affected_fast or None,
         source=f"delete location {location_name}",
     )
-
-    from file_hunter.services.agent_ops import invalidate_loc_cache
 
     invalidate_loc_cache(location_id)
 
@@ -355,8 +347,6 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
         )
         return
 
-    from file_hunter.services.dup_counts import post_ingest_dup_processing
-
     await post_ingest_dup_processing(
         location_id, agent_id, location_name, broadcast_scan_progress=False
     )
@@ -364,8 +354,6 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
 
 async def _enqueue_dup_candidates():
     """On startup, check for locations with unprocessed dup candidates and enqueue."""
-    from file_hunter.hashes_db import open_hashes_connection
-
     hconn = await open_hashes_connection()
     try:
         rows = await hconn.execute_fetchall(

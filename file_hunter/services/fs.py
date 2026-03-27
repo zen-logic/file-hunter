@@ -4,9 +4,11 @@ Every location is agent-backed. Operations are dispatched via the
 registered agent_proxy hook.
 """
 
+import base64
 import os
 
-from file_hunter.extensions import get_agent_proxy
+from file_hunter.extensions import get_agent_proxy, get_fetch_bytes
+from file_hunter.services.agent_ops import stream_copy
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +64,6 @@ async def file_write_bytes(path: str, data: bytes, location_id: int):
     proxy = get_agent_proxy()
     if not proxy:
         raise ConnectionError("Agent proxy not available.")
-    import base64
 
     return await proxy(
         "file_write",
@@ -94,8 +95,6 @@ async def file_write_bytes_chunked(
     if not proxy:
         raise ConnectionError("Agent proxy not available.")
 
-    import base64
-
     total = len(data)
     offset = 0
     first = True
@@ -117,8 +116,6 @@ async def file_write_bytes_chunked(
 
 
 async def file_read_bytes(path: str, location_id: int) -> bytes:
-    from file_hunter.extensions import get_fetch_bytes
-
     fetch = get_fetch_bytes()
     if fetch:
         data = await fetch(path, location_id)
@@ -189,8 +186,6 @@ async def copy_file(
 
     mtime: if provided, destination agent restores this as the file's modified time.
     """
-    from file_hunter.services.agent_ops import stream_copy
-
     await stream_copy(
         src,
         src_loc_id,
@@ -283,8 +278,6 @@ async def agent_upload_file(
     Streams from file_obj (file-like) — no full-file read into RAM.
     Progress is reported via on_progress(bytes_sent, total_bytes).
     """
-    from file_hunter.extensions import get_agent_proxy
-
     proxy = get_agent_proxy()
     if not proxy:
         raise ConnectionError("Agent proxy not available.")
