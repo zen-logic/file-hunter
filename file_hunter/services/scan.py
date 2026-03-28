@@ -105,7 +105,9 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             "FROM locations WHERE id = ?",
             (location_id,),
         )
-        location_name = loc_row[0]["name"] if loc_row else f"Location #{location_id}"
+        location_name = params.get("location_name") or (
+            loc_row[0]["name"] if loc_row else f"Location #{location_id}"
+        )
         is_rescan = bool(loc_row and loc_row[0]["date_last_scanned"])
 
         now_iso = _now()
@@ -195,7 +197,9 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             logger.info("Rescan starting for %s", location_name)
             _act_name = f"op-{op_id}"
 
-            activity_update(_act_name, label=f"Scanning {location_name}", progress="tree walk")
+            activity_update(
+                _act_name, label=f"Scanning {location_name}", progress="tree walk"
+            )
 
             # --- Phase 1: stream metadata only into temp DB ---
             files_found, dirs_found = await _stream_to_temp_db(
@@ -222,6 +226,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
                 changed_count,
                 stale_count,
                 recovered_count,
+                affected_file_ids,
             ) = await _diff_and_update(
                 tmp_path,
                 location_id,
@@ -249,17 +254,20 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
             # --- Phase 3: find dup candidates for new/changed/recovered files ---
             # Pre-existing unprocessed candidates are handled by housekeeping
-            if new_count > 0 or changed_count > 0 or recovered_count > 0:
+            if affected_file_ids:
                 candidates_total = await post_ingest_dup_processing(
                     location_id,
                     agent_id,
                     location_name,
+                    file_ids=affected_file_ids,
                 )
 
         else:
             # === FIRST SCAN PATH ===
             _act_name = f"op-{op_id}"
-            activity_update(_act_name, label=f"Scanning {location_name}", progress="tree walk")
+            activity_update(
+                _act_name, label=f"Scanning {location_name}", progress="tree walk"
+            )
 
             # --- Phase 1: stream metadata + hashes into temp DB ---
             files_found, dirs_found = await _stream_to_temp_db(
@@ -359,13 +367,25 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
         await post_op_stats()
 
-        async with read_stats_db() as sdb:
-            loc_stats = await sdb.execute_fetchall(
-                "SELECT duplicate_count, total_size FROM location_stats WHERE location_id = ?",
-                (location_id,),
-            )
-        final_dup_count = (loc_stats[0]["duplicate_count"] or 0) if loc_stats else 0
-        final_total_size = (loc_stats[0]["total_size"] or 0) if loc_stats else 0
+        scan_folder_id = params.get("folder_id")
+        if scan_folder_id:
+            # Subfolder scan — report folder-scoped stats
+            async with read_db() as rdb:
+                fld_stats = await rdb.execute_fetchall(
+                    "SELECT duplicate_count, total_size FROM folders WHERE id = ?",
+                    (scan_folder_id,),
+                )
+            final_dup_count = (fld_stats[0]["duplicate_count"] or 0) if fld_stats else 0
+            final_total_size = (fld_stats[0]["total_size"] or 0) if fld_stats else 0
+        else:
+            # Full location scan — report location stats
+            async with read_stats_db() as sdb:
+                loc_stats = await sdb.execute_fetchall(
+                    "SELECT duplicate_count, total_size FROM location_stats WHERE location_id = ?",
+                    (location_id,),
+                )
+            final_dup_count = (loc_stats[0]["duplicate_count"] or 0) if loc_stats else 0
+            final_total_size = (loc_stats[0]["total_size"] or 0) if loc_stats else 0
 
         await broadcast(
             {
@@ -947,7 +967,7 @@ async def _diff_and_update(
     location_name: str,
     total_files: int,
     scan_prefix: str | None = None,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int, list[int]]:
     """Diff the temp DB against the existing catalog and apply only the delta (rescan path).
 
     Uses ATTACH DATABASE on a dedicated read connection to efficiently JOIN the temp DB
@@ -997,6 +1017,8 @@ async def _diff_and_update(
 
     Called by run_scan on the rescan path only.
     """
+    affected_file_ids: list[int] = []
+
     # --- Phase 2a: ensure folder hierarchy ---
     tmp_db = sqlite3.connect(tmp_path)
     tmp_db.row_factory = sqlite3.Row
@@ -1178,6 +1200,7 @@ async def _diff_and_update(
     # Un-stale recovered files
     if recovered_rows:
         recovered_id_list = [r["id"] for r in recovered_rows]
+        affected_file_ids.extend(recovered_id_list)
         for i in range(0, len(recovered_id_list), 5000):
             batch = recovered_id_list[i : i + 5000]
             ph = ",".join("?" for _ in batch)
@@ -1316,6 +1339,7 @@ async def _diff_and_update(
                     (ir["id"], location_id, ir["file_size"], None, None, None)
                     for ir in id_rows
                 ]
+                affected_file_ids.extend(ir["id"] for ir in id_rows)
                 async with hashes_writer() as hdb:
                     await hdb.executemany(
                         "INSERT INTO file_hashes "
@@ -1339,6 +1363,7 @@ async def _diff_and_update(
 
     # --- Phase 2d: update changed files ---
     if changed_rows:
+        affected_file_ids.extend(r["file_id"] for r in changed_rows)
         for i in range(0, len(changed_rows), INGEST_BATCH_SIZE):
             batch_rows = changed_rows[i : i + INGEST_BATCH_SIZE]
             update_batch = []
@@ -1506,7 +1531,7 @@ async def _diff_and_update(
     # Broadcast updated tree children
     await _broadcast_location_children(location_id)
 
-    return new_count, changed_count, stale_count, recovered_count
+    return new_count, changed_count, stale_count, recovered_count, affected_file_ids
 
 
 async def _write_hash_partials_to_hashes_db(

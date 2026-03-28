@@ -14,10 +14,13 @@ from datetime import datetime, timezone
 from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import hashes_writer
 from file_hunter.helpers import post_op_stats
-from file_hunter.services import fs
-from file_hunter.services.activity import register, unregister, update as activity_update
-from file_hunter.services.agent_ops import dispatch
-from file_hunter.services.dup_counts import recalculate_dup_counts
+from file_hunter.services.activity import (
+    register,
+    unregister,
+    update as activity_update,
+)
+from file_hunter.services.agent_ops import dispatch, hash_partial_batch
+from file_hunter.services.dup_counts import HASH_BATCH_BYTES, post_ingest_dup_processing
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
@@ -117,6 +120,7 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         stale_files = 0
         recovered_files = 0
         new_file_ids = []
+        recovered_file_ids = []
         stats_added = []  # (folder_id, file_size, file_type_high, is_hidden)
         stats_removed = []  # (folder_id, file_size, file_type_high, is_hidden)
 
@@ -225,6 +229,7 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
                             (info["size"], now_iso, cat["id"]),
                         )
                         recovered_files += 1
+                        recovered_file_ids.append(cat["id"])
                         stats_added.append(
                             (
                                 folder_id,
@@ -253,10 +258,12 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
 
             await db.commit()
 
-        # Hash new files
+        # Register new files in hashes.db and get hash_partial from agent
         if new_file_ids:
             activity_update(act_name, progress=f"hashing {len(new_file_ids)} files")
-            await _hash_new_files(new_file_ids, location_id, agent_id)
+            await _hash_new_files_partial(
+                new_file_ids, location_id, agent_id, root_path
+            )
 
         # Update stats incrementally — only the affected folder and its ancestors
         if stats_added or stats_removed:
@@ -268,10 +275,16 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             )
             await post_op_stats()
 
-        # Recalc dup counts if we added files
-        if new_file_ids:
-            await recalculate_dup_counts(
-                source=f"quick scan {label} ({len(new_file_ids)} new files)"
+        # Dup processing for new + recovered files
+        affected_ids = new_file_ids + recovered_file_ids
+        if affected_ids:
+            activity_update(act_name, progress="checking duplicates")
+            await post_ingest_dup_processing(
+                location_id,
+                agent_id,
+                label,
+                file_ids=affected_ids,
+                broadcast_scan_progress=False,
             )
 
         logger.info(
@@ -322,8 +335,15 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         unregister(act_name)
 
 
-async def _hash_new_files(file_ids: list[int], location_id: int, agent_id: int):
-    """Hash new files via the agent and store in hashes.db."""
+async def _hash_new_files_partial(
+    file_ids: list[int], location_id: int, agent_id: int, root_path: str
+):
+    """Register new files in hashes.db and get hash_partial from agent.
+
+    Same pipeline as full scan: register file in hashes.db, request
+    hash_partial_batch from agent, store result. post_ingest_dup_processing
+    handles the rest (hash_fast for dup candidates).
+    """
     async with read_db() as db:
         ph = ",".join("?" for _ in file_ids)
         rows = await db.execute_fetchall(
@@ -331,20 +351,81 @@ async def _hash_new_files(file_ids: list[int], location_id: int, agent_id: int):
             file_ids,
         )
 
-    for row in rows:
-        try:
-            result = await fs.file_hash(row["full_path"], location_id)
-            hash_fast = (
-                result[0] if isinstance(result, tuple) else result.get("hash_fast")
-            )
-            if hash_fast:
-                async with hashes_writer() as hdb:
-                    await hdb.execute(
-                        "INSERT INTO file_hashes "
-                        "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
-                        "VALUES (?, ?, ?, NULL, ?, NULL) "
-                        "ON CONFLICT(file_id) DO UPDATE SET hash_fast=excluded.hash_fast",
-                        (row["id"], location_id, row["file_size"], hash_fast),
-                    )
-        except Exception as e:
-            logger.warning("Quick scan: hash failed for %s: %s", row["full_path"], e)
+    if not rows:
+        return
+
+    # Register in hashes.db (no hash values yet)
+    h_batch = [(r["id"], location_id, r["file_size"], None, None, None) for r in rows]
+    async with hashes_writer() as hdb:
+        await hdb.executemany(
+            "INSERT INTO file_hashes "
+            "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(file_id) DO UPDATE SET file_size=excluded.file_size",
+            h_batch,
+        )
+
+    # Get hash_partial from agent in batches
+    paths_to_hash = [
+        (r["id"], r["full_path"], r["file_size"]) for r in rows if r["file_size"] > 0
+    ]
+    if not paths_to_hash:
+        return
+
+    batch_paths: list[str] = []
+    batch_bytes = 0
+
+    for fid, full_path, fsize in paths_to_hash:
+        batch_paths.append(full_path)
+        batch_bytes += fsize
+
+        if batch_bytes >= HASH_BATCH_BYTES:
+            result = await hash_partial_batch(agent_id, batch_paths)
+            await _write_hash_partials(result, location_id, root_path)
+            batch_paths = []
+            batch_bytes = 0
+
+    if batch_paths:
+        result = await hash_partial_batch(agent_id, batch_paths)
+        await _write_hash_partials(result, location_id, root_path)
+
+
+async def _write_hash_partials(result: dict, location_id: int, root_path: str):
+    """Write hash_partial results from agent to hashes.db."""
+    hash_results = result.get("results", [])
+    if not hash_results:
+        return
+
+    updates = []
+    for hr in hash_results:
+        hp = hr.get("hash_partial")
+        if hp:
+            rel = os.path.relpath(hr["path"], root_path)
+            updates.append((rel, hp))
+
+    if not updates:
+        return
+
+    rel_paths = [u[0] for u in updates]
+    hash_by_rel = {u[0]: u[1] for u in updates}
+
+    async with read_db() as rdb:
+        ph = ",".join("?" for _ in rel_paths)
+        id_rows = await rdb.execute_fetchall(
+            f"SELECT id, rel_path FROM files "
+            f"WHERE location_id = ? AND rel_path IN ({ph})",
+            [location_id] + rel_paths,
+        )
+
+    if id_rows:
+        h_updates = []
+        for ir in id_rows:
+            hp = hash_by_rel.get(ir["rel_path"])
+            if hp:
+                h_updates.append((hp, ir["id"]))
+        if h_updates:
+            async with hashes_writer() as hdb:
+                await hdb.executemany(
+                    "UPDATE file_hashes SET hash_partial = ? WHERE file_id = ?",
+                    h_updates,
+                )

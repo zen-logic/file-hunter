@@ -368,6 +368,7 @@ async def get_file_detail(db, file_id: int):
     if stale and location_online:
         exists = await fs.file_exists(f["full_path"], f["location_id"])
         if exists:
+
             async def _clear_stale(conn, fid):
                 await conn.execute("UPDATE files SET stale = 0 WHERE id = ?", (fid,))
                 await conn.commit()

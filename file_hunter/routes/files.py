@@ -18,14 +18,23 @@ from file_hunter.services.delete import (
     delete_folder,
 )
 from file_hunter.extensions import get_content_proxy
-from file_hunter.hashes_db import get_file_hashes, hashes_writer, read_hashes, update_file_hash
+from file_hunter.hashes_db import (
+    get_file_hashes,
+    hashes_writer,
+    read_hashes,
+    update_file_hash,
+)
 from file_hunter.services import fs
 from file_hunter.services.agent_ops import hash_partial_batch
 from file_hunter.services.batch import build_streaming_zip
 from file_hunter.services.content_proxy import fetch_agent_byte_range
 from file_hunter.services.deferred_ops import cancel_pending_op, queue_deferred_op
 from file_hunter.services.dup_counts import batch_dup_counts
-from file_hunter.services.dup_exclude import get_progress, is_running, toggle_dup_exclude
+from file_hunter.services.dup_exclude import (
+    get_progress,
+    is_running,
+    toggle_dup_exclude,
+)
 from file_hunter.services.settings import set_setting
 from file_hunter.ws.scan import broadcast
 

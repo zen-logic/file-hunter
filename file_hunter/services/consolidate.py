@@ -254,9 +254,7 @@ async def run_consolidation(
                 canonical_path = existing_at_dest["full_path"]
                 canonical_id = existing_at_dest["id"]
             else:
-                canonical_path = await fs.unique_dest_path(
-                    dest_file_path, dest_loc_id
-                )
+                canonical_path = await fs.unique_dest_path(dest_file_path, dest_loc_id)
                 # Update filename if collision rename happened
                 actual_filename = os.path.basename(canonical_path)
                 if actual_filename != filename:

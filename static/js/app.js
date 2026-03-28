@@ -20,6 +20,7 @@ import Treemap from './components/treemap.js';
 import Login from './components/login.js';
 import Settings from './components/settings.js';
 import About from './components/about.js';
+import Activity from './components/activity.js';
 import ActivityLog from './components/activitylog.js';
 import Toast from './components/toast.js';
 import Upload from './components/upload.js';
@@ -1072,64 +1073,70 @@ WS.on('activity', (msg) => {
 });
 
 WS.on('scan_started', (msg) => {
-    StatusBar.renderActivity('scanning', `${msg.location} — starting...`, msg.locationId);
-    ActivityLog.add(`Scan started: <b>${msg.location}</b>`);
+    Activity.started('scan-' + msg.locationId, {
+        label: `Scanning: ${msg.location}`,
+        detail: 'starting...',
+        locationId: msg.locationId,
+        log: `Scan started: <b>${msg.location}</b>`,
+    });
     updateLocationOnline(msg.locationId, true);
     Tree.setScanningLocation(msg.locationId);
 });
 
 WS.on('scan_progress', (msg) => {
-    let statusText;
+    let statusDetail;
     let logText;
     if (msg.phase === 'scanning') {
-        statusText = `${msg.location} — Scanning: ${(msg.filesFound || 0).toLocaleString()} files, ${(msg.dirsFound || 0).toLocaleString()} dirs`;
+        statusDetail = `${(msg.filesFound || 0).toLocaleString()} files, ${(msg.dirsFound || 0).toLocaleString()} dirs`;
         logText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} files found`;
     } else if (msg.phase === 'hashing') {
         const total = msg.hashesTotal || 0;
         const done = msg.hashesDone || 0;
         const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
-        statusText = `${msg.location} — Hashing: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        statusDetail = `Hashing: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
         logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} hashed`;
     } else if (msg.phase === 'comparing') {
         const step = msg.compareStep || '';
-        statusText = `${msg.location} — Comparing: ${step || 'starting...'}`;
+        statusDetail = `Comparing: ${step || 'starting...'}`;
         logText = `${msg.location} — comparing: ${step || 'starting'}`;
     } else if (msg.phase === 'cataloging') {
         const total = msg.catalogTotal || 0;
         const done = msg.catalogDone || 0;
         const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
-        statusText = `${msg.location} — Cataloging: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        statusDetail = `Cataloging: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
         logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} cataloged`;
     } else if (msg.phase === 'cataloging_hashes') {
         const total = msg.catalogTotal || 0;
         const done = msg.catalogDone || 0;
         const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
-        statusText = `${msg.location} — Saving hashes: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        statusDetail = `Saving hashes: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
         logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} hashes saved`;
     } else if (msg.phase === 'checking_duplicates') {
         const total = msg.checksTotal || 0;
         const done = msg.checksDone || 0;
         const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
         const progress = total > 0 ? `: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}` : '...';
-        statusText = `${msg.location} — Confirming duplicates${progress}`;
+        statusDetail = `Confirming duplicates${progress}`;
         logText = `${msg.location} — confirming duplicates${progress}`;
     } else if (msg.phase === 'recounting') {
         const total = msg.checksTotal || 0;
         const done = msg.checksDone || 0;
         const progress = total > 0 ? `: ${done.toLocaleString()} / ${total.toLocaleString()}` : '';
-        statusText = `${msg.location} — Counting duplicates${progress}`;
+        statusDetail = `Counting duplicates${progress}`;
         logText = `${msg.location} — counting duplicates${progress}`;
     } else if (msg.phase === 'rebuilding') {
-        statusText = `${msg.location} — Rebuilding statistics...`;
+        statusDetail = 'Rebuilding statistics...';
         logText = `${msg.location} — rebuilding statistics`;
     } else {
-        statusText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} files`;
+        statusDetail = `${(msg.filesFound || 0).toLocaleString()} files`;
         logText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} files`;
     }
-    StatusBar.renderActivity('scanning', statusText, msg.locationId);
+    Activity.progress('scan-' + msg.locationId, {
+        detail: statusDetail,
+        log: logText,
+    });
     StatusBar.updateStatsFromProgress(msg);
     Detail.updateFromScanProgress(msg);
-    ActivityLog.add(logText);
     updateLocationOnline(msg.locationId, true);
     if (msg.totalSize !== undefined) Tree.updateLocationSize(msg.locationId, msg.totalSize);
     Tree.setScanningLocation(msg.locationId, msg.phase);
@@ -1144,12 +1151,7 @@ WS.on('location_children', async (msg) => {
 });
 
 WS.on('scan_completed', async (msg) => {
-    const queuePending = StatusBar.getQueue().length > 0;
-    if (queuePending) {
-        StatusBar.renderActivity('scanning', 'Starting next scan...', null);
-    } else {
-        StatusBar.renderActivity('idle');
-    }
+    let logText;
     if (msg.quickScan) {
         const parts = [];
         if (msg.newFiles) parts.push(`${msg.newFiles} new`);
@@ -1157,37 +1159,35 @@ WS.on('scan_completed', async (msg) => {
         if (msg.newFolders) parts.push(`${msg.newFolders} new folders`);
         if (msg.recoveredFiles) parts.push(`${msg.recoveredFiles} recovered`);
         const detail = parts.length ? parts.join(', ') : 'no changes';
-        ActivityLog.add(`Quick scan completed: <b>${msg.location}</b> — ${detail}`);
+        logText = `Quick scan completed: <b>${msg.location}</b> — ${detail}`;
         Toast.success(`Quick scan completed: ${msg.location}`);
     } else {
         const skippedPart = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
         const stalePart = msg.staleFiles ? `, ${msg.staleFiles.toLocaleString()} stale` : '';
-        ActivityLog.add(`Scan completed: <b>${msg.location}</b> — ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedPart}, ${(msg.duplicatesFound || 0).toLocaleString()} duplicates${stalePart}`);
+        logText = `Scan completed: <b>${msg.location}</b> — ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedPart}, ${(msg.duplicatesFound || 0).toLocaleString()} duplicates${stalePart}`;
         Toast.success(`Scan completed: ${msg.location}`);
     }
+    Activity.completed('scan-' + msg.locationId, { log: logText });
     Tree.clearScanningLocation(msg.locationId);
     if (msg.totalSize !== undefined) Tree.updateLocationSize(msg.locationId, msg.totalSize);
-    // Refresh current view without full tree reload (avoids disk-stats flood)
     if (selectedNode) await FileList.showFolder(selectedNode.id);
     await StatusBar.loadStats();
     await Detail.refreshStats();
 });
 
 WS.on('scan_finalizing', (msg) => {
-    StatusBar.renderActivity('scanning', `${msg.location} — finalizing...`, msg.locationId);
-    ActivityLog.add(`Scan finalizing: <b>${msg.location}</b> — marking stale files`);
+    Activity.progress('scan-' + msg.locationId, {
+        detail: 'finalizing...',
+        log: `Scan finalizing: <b>${msg.location}</b> — marking stale files`,
+    });
     Tree.clearScanningLocation(msg.locationId);
 });
 
 WS.on('scan_cancelled', async (msg) => {
-    const queuePending = StatusBar.getQueue().length > 0;
-    if (queuePending) {
-        StatusBar.renderActivity('scanning', 'Starting next scan...', null);
-    } else {
-        StatusBar.renderActivity('idle');
-    }
     const skippedPart = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
-    ActivityLog.add(`Scan cancelled: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} hashed${skippedPart} before cancel`);
+    Activity.completed('scan-' + msg.locationId, {
+        log: `Scan cancelled: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} hashed${skippedPart} before cancel`,
+    });
     Toast.info(`Scan cancelled: ${msg.location}`);
     Tree.clearScanningLocation(msg.locationId);
     await StatusBar.loadStats();
@@ -1195,21 +1195,18 @@ WS.on('scan_cancelled', async (msg) => {
 });
 
 WS.on('scan_interrupted', async (msg) => {
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Scan interrupted: <b>${msg.location}</b> — agent disconnected, will resume automatically`);
+    Activity.error('scan-' + msg.locationId, {
+        log: `Scan interrupted: <b>${msg.location}</b> — agent disconnected, will resume automatically`,
+    });
     Toast.info(`Scan interrupted: ${msg.location} — will resume when agent reconnects`);
     Tree.clearScanningLocation(msg.locationId);
 });
 
 WS.on('scan_error', (msg) => {
-    const queuePending = StatusBar.getQueue().length > 0;
-    if (queuePending) {
-        StatusBar.renderActivity('scanning', 'Starting next scan...', null);
-    } else {
-        StatusBar.renderActivity('idle');
-    }
+    Activity.error('scan-' + msg.locationId, {
+        log: `Scan error: <b>${msg.location}</b> — ${msg.error}`,
+    });
     Tree.clearScanningLocation(msg.locationId);
-    ActivityLog.add(`Scan error: <b>${msg.location}</b> — ${msg.error}`);
     Toast.error(`Scan error: ${msg.error}`);
 });
 
@@ -1285,9 +1282,6 @@ WS.on('scan_queued', (msg) => {
         reason = ' (waiting for current operation to finish)';
     }
     ActivityLog.add(`Scan queued: <b>${msg.entry.name}</b>${reason}`);
-    if (reason) {
-        StatusBar.renderActivity('scanning', `Queued: ${msg.entry.name}${reason}`, null);
-    }
 });
 
 WS.on('scan_dequeued', (msg) => {
@@ -1298,11 +1292,6 @@ WS.on('scan_dequeued', (msg) => {
 
 WS.on('scan_queue_updated', (msg) => {
     syncQueuedLocations(msg.queue);
-    // If nothing is running, go idle (e.g. remaining queued items are on offline agents)
-    const hasRunning = msg.queue && msg.queue.running_location_ids && msg.queue.running_location_ids.length > 0;
-    if (!hasRunning) {
-        StatusBar.renderActivity('idle');
-    }
 });
 
 WS.on('scan_queue_skipped', (msg) => {
@@ -1331,14 +1320,18 @@ WS.on('queue_resumed', () => {
 });
 
 WS.on('backfill_started', (msg) => {
-    const detail = msg.totalFiles
-        ? `${msg.location} — backfilling hashes (0/${msg.totalFiles.toLocaleString()})`
-        : `${msg.location} — preparing backfill...`;
-    StatusBar.renderActivity('scanning', detail, msg.locationId);
+    const statusDetail = msg.totalFiles
+        ? `0/${msg.totalFiles.toLocaleString()}`
+        : 'preparing...';
     const logDetail = msg.totalFiles
         ? `${msg.totalFiles.toLocaleString()} files`
         : 'finding candidates...';
-    ActivityLog.add(`Hash backfill started: <b>${msg.location}</b> — ${logDetail}`);
+    Activity.started('backfill-' + msg.locationId, {
+        label: `Hashing: ${msg.location}`,
+        detail: statusDetail,
+        locationId: msg.locationId,
+        log: `Hash backfill started: <b>${msg.location}</b> — ${logDetail}`,
+    });
     Tree.setBackfillingLocation(msg.locationId);
 });
 
@@ -1346,32 +1339,33 @@ WS.on('backfill_progress', (msg) => {
     let detail;
     if (msg.phase === 'cross_location') {
         detail = msg.filesHashed != null && msg.totalFiles
-            ? `${msg.location} — comparing across locations (${msg.filesHashed.toLocaleString()}/${msg.totalFiles.toLocaleString()})`
-            : `${msg.location} — comparing across locations...`;
+            ? `comparing across locations (${msg.filesHashed.toLocaleString()}/${msg.totalFiles.toLocaleString()})`
+            : 'comparing across locations...';
     } else if (msg.phase === 'local') {
-        detail = `${msg.location} — hashing local matches`;
+        detail = 'hashing local matches';
     } else if (msg.phase === 'dup_counts') {
-        detail = `${msg.location} — updating duplicate counts`;
+        detail = 'updating duplicate counts';
     } else {
-        detail = `${msg.location} — backfilling hashes (${msg.filesHashed.toLocaleString()}/${msg.totalFiles.toLocaleString()})`;
+        detail = `${msg.filesHashed.toLocaleString()}/${msg.totalFiles.toLocaleString()}`;
     }
-    StatusBar.renderActivity('scanning', detail);
-    if (!msg.phase) {
-        ActivityLog.add(`Hash backfill: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} / ${msg.totalFiles.toLocaleString()} files`);
-    }
+    const log = !msg.phase
+        ? `Hash backfill: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} / ${msg.totalFiles.toLocaleString()} files`
+        : undefined;
+    Activity.progress('backfill-' + msg.locationId, { detail, log });
     Tree.setBackfillingLocation(msg.locationId);
     FileList.refreshDupCounts();
     StatusBar.loadStats();
 });
 
 WS.on('backfill_completed', async (msg) => {
-    Tree.clearBackfillingLocation(msg.locationId);
-    StatusBar.renderActivity('idle');
     const summary = msg.agentFilesHashed
         ? `${msg.agentFilesHashed.toLocaleString()} files hashed`
         : 'no matches found';
     const label = msg.cancelled ? 'Hash backfill cancelled' : 'Hash backfill completed';
-    ActivityLog.add(`${label}: <b>${msg.location}</b> — ${summary}`);
+    Activity.completed('backfill-' + msg.locationId, {
+        log: `${label}: <b>${msg.location}</b> — ${summary}`,
+    });
+    Tree.clearBackfillingLocation(msg.locationId);
     await StatusBar.loadStats();
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await Detail.refreshStats();
@@ -1401,7 +1395,7 @@ WS.on('recalc_progress', msg => {
     ActivityLog.add(`Recalculating: ${msg.location} (${msg.done}/${msg.total})`);
 });
 WS.on('server_activity', (msg) => {
-    StatusBar.updateServerActivity(msg);
+    Activity.sync(msg);
 });
 
 WS.on('size_recalc_completed', async msg => {
@@ -1416,11 +1410,19 @@ WS.on('dup_recalc_started', (msg) => {
         for (const id of msg.locationIds) Detail._dupRecalcLocations.add(id);
         Detail._applyDupRecalcOverride();
     }
+    Activity.started('dup-recalc', {
+        label: 'Recalculating duplicates',
+        log: 'Recalculating duplicate counts...',
+    });
 });
 WS.on('dup_recalc_completed', async (msg) => {
     if (msg.locationIds) {
         for (const id of msg.locationIds) Detail._dupRecalcLocations.delete(id);
     }
+    const count = msg.hashCount ? msg.hashCount.toLocaleString() : '0';
+    Activity.completed('dup-recalc', {
+        log: `Duplicate recalculation complete — ${count} hashes processed`,
+    });
     await StatusBar.loadStats();
     await Detail.refreshStats();
     FileList.refreshDupCounts();
@@ -1430,26 +1432,26 @@ WS.on('dup_recalc_completed', async (msg) => {
 let _dupExcludePollTimer = null;
 function _startDupExcludePoll() {
     if (_dupExcludePollTimer) return;
+    Activity.started('dup-exclude', { label: 'Updating exclusions', log: false });
     _dupExcludePollTimer = setInterval(async () => {
         const res = await API.get('/api/dup-exclude/progress');
         if (!res.ok) return;
         const p = res.data;
         if (p.status === 'flagging') {
             const pct = p.files_total > 0 ? Math.round((p.files_done / p.files_total) * 100) : 0;
-            StatusBar.renderActivity('scanning', `Flagging files... ${p.files_done.toLocaleString()} / ${p.files_total.toLocaleString()} (${pct}%)`);
+            Activity.progress('dup-exclude', { detail: `Flagging files... ${p.files_done.toLocaleString()} / ${p.files_total.toLocaleString()} (${pct}%)` });
         } else if (p.status === 'recounting') {
             const pct = p.hashes_total > 0 ? Math.round((p.hashes_done / p.hashes_total) * 100) : 0;
-            StatusBar.renderActivity('scanning', `Recounting duplicates... ${p.hashes_done.toLocaleString()} / ${p.hashes_total.toLocaleString()} (${pct}%)`);
+            Activity.progress('dup-exclude', { detail: `Recounting duplicates... ${p.hashes_done.toLocaleString()} / ${p.hashes_total.toLocaleString()} (${pct}%)` });
         } else if (p.status === 'zeroing') {
-            StatusBar.renderActivity('scanning', 'Zeroing excluded file counts...');
+            Activity.progress('dup-exclude', { detail: 'Zeroing excluded file counts...' });
         } else if (p.status === 'rebuilding') {
-            StatusBar.renderActivity('scanning', 'Rebuilding location sizes...');
+            Activity.progress('dup-exclude', { detail: 'Rebuilding location sizes...' });
         } else if (p.status === 'pausing') {
-            StatusBar.renderActivity('scanning', 'Pausing operations...');
+            Activity.progress('dup-exclude', { detail: 'Pausing operations...' });
         } else if (p.status === 'complete' || p.status === 'error' || p.status === 'idle') {
             _stopDupExcludePoll();
         }
-        // Refresh stats on every poll for real-time UI
         await StatusBar.loadStats();
     }, 500);
 }
@@ -1457,7 +1459,7 @@ function _stopDupExcludePoll() {
     if (_dupExcludePollTimer) {
         clearInterval(_dupExcludePollTimer);
         _dupExcludePollTimer = null;
-        StatusBar.renderActivity('idle');
+        Activity.completed('dup-exclude');
     }
 }
 
@@ -1484,8 +1486,9 @@ WS.on('location_changed', async (msg) => {
 
 WS.on('import_completed', async (msg) => {
     Tree.clearScanningLocation(msg.locationId);
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Location imported: <b>${msg.location}</b>`);
+    Activity.completed('import-' + msg.locationId, {
+        log: `Location imported: <b>${msg.location}</b>`,
+    });
     Toast.success(`Import completed: ${msg.location}`);
     await Tree.reload();
     if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
@@ -1610,31 +1613,34 @@ WS.on('deferred_ops_drained', async (msg) => {
 });
 
 WS.on('batch_delete_progress', (msg) => {
-    const label = msg.name
-        ? `Deleting: ${msg.name} (${msg.done}/${msg.total})`
-        : `Deleting files: ${msg.done}/${msg.total}`;
-    StatusBar.renderActivity('scanning', label);
+    const detail = msg.name
+        ? `${msg.name} (${msg.done}/${msg.total})`
+        : `${msg.done}/${msg.total}`;
+    Activity.progress('batch-delete', { label: 'Deleting', detail });
 });
 
 WS.on('batch_deleted', async (msg) => {
+    Activity.completed('batch-delete');
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
 
 WS.on('batch_move_progress', (msg) => {
-    const label = msg.name
-        ? `Moving: ${msg.name} (${msg.done}/${msg.total})`
-        : `Moving files: ${msg.done}/${msg.total}`;
-    StatusBar.renderActivity('scanning', label);
+    const detail = msg.name
+        ? `${msg.name} (${msg.done}/${msg.total})`
+        : `${msg.done}/${msg.total}`;
+    Activity.progress('batch-move', { label: 'Moving', detail });
 });
 
 WS.on('status_bar_idle', () => {
-    StatusBar.renderActivity('idle');
+    // Server explicitly requests idle — clear all ops
+    Activity._ops.clear();
+    Activity._render();
 });
 
 WS.on('batch_moved', async (msg) => {
-    StatusBar.renderActivity('idle');
+    Activity.completed('batch-move');
     selectedFile = null;
     selectedFileDups = [];
     await reloadTreeAndFileList();
@@ -1649,27 +1655,31 @@ WS.on('folder_deleted', async (msg) => {
 });
 
 WS.on('consolidate_started', (msg) => {
-    StatusBar.renderActivity('consolidating', msg.filename);
-    ActivityLog.add(`Consolidation started: <b>${msg.filename}</b>`);
+    Activity.started('consolidate', {
+        label: 'Consolidating',
+        detail: msg.filename,
+        log: `Consolidation started: <b>${msg.filename}</b>`,
+    });
 });
 
 WS.on('consolidate_progress', (msg) => {
+    let detail;
     if (msg.phase === 'copying') {
-        const detail = StatusBar.formatCopyProgress(msg.filename, msg.bytesSent, msg.bytesTotal);
-        StatusBar.renderActivity('consolidating', detail);
+        detail = StatusBar.formatCopyProgress(msg.filename, msg.bytesSent, msg.bytesTotal);
     } else if (msg.phase === 'verifying') {
-        StatusBar.renderActivity('consolidating', `${msg.filename} — Verifying hashes`);
+        detail = `${msg.filename} — Verifying hashes`;
     } else if (msg.phase === 'stubs') {
-        StatusBar.renderActivity('consolidating', `${msg.filename} — Writing stubs ${msg.current}/${msg.total}`);
+        detail = `${msg.filename} — Writing stubs ${msg.current}/${msg.total}`;
     }
+    if (detail) Activity.progress('consolidate', { detail });
 });
 
 WS.on('consolidate_completed', async (msg) => {
     if (msg.batch) return; // batch_consolidate_completed handles UI
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Consolidation completed: <b>${msg.filename}</b> — ${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued`);
+    Activity.completed('consolidate', {
+        log: `Consolidation completed: <b>${msg.filename}</b> — ${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued`,
+    });
     Toast.success(`Consolidation completed: ${msg.filename}`);
-    // Clear selected file — it may have been deleted or replaced
     selectedFile = null;
     selectedFileDups = [];
     consolidateBtn.disabled = true;
@@ -1679,12 +1689,13 @@ WS.on('consolidate_completed', async (msg) => {
 });
 
 WS.on('consolidate_error', (msg) => {
-    StatusBar.renderActivity('idle');
     let detail = msg.error;
     if (msg.stubsWritten > 0 || msg.stubsQueued > 0) {
         detail += ` (${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued before error)`;
     }
-    ActivityLog.add(`Consolidation error: <b>${msg.filename}</b> — ${detail}`);
+    Activity.error('consolidate', {
+        log: `Consolidation error: <b>${msg.filename}</b> — ${detail}`,
+    });
     Toast.error(`Consolidation error: ${msg.error}`);
 });
 
@@ -1694,8 +1705,9 @@ WS.on('consolidate_queue_drained', (msg) => {
 });
 
 WS.on('batch_consolidate_completed', async (msg) => {
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Batch consolidation completed: ${msg.completed} of ${msg.total} files`);
+    Activity.completed('consolidate', {
+        log: `Batch consolidation completed: ${msg.completed} of ${msg.total} files`,
+    });
     Toast.success(`Batch consolidation completed: ${msg.completed} of ${msg.total} files`);
     await StatusBar.loadStats();
     await reloadTreeAndFileList();
@@ -1703,11 +1715,16 @@ WS.on('batch_consolidate_completed', async (msg) => {
 });
 
 WS.on('rehash_progress', (msg) => {
-    StatusBar.renderActivity('rehashing', `Re-hashing ${msg.processed}/${msg.total} — ${msg.filename}`);
+    Activity.progress('rehash', {
+        label: 'Re-hashing',
+        detail: `${msg.processed}/${msg.total} — ${msg.filename}`,
+    });
 });
 
 WS.on('rehash_completed', async (msg) => {
-    StatusBar.renderActivity('idle');
+    Activity.completed('rehash', {
+        log: `Re-hash completed: ${msg.total} file${msg.total !== 1 ? 's' : ''}`,
+    });
     Toast.success(`Re-hash completed: ${msg.total} file${msg.total !== 1 ? 's' : ''}`);
     if (selectedNode) {
         await FileList.showFolder(selectedNode.id);
@@ -1716,14 +1733,19 @@ WS.on('rehash_completed', async (msg) => {
 });
 
 WS.on('verify_progress', (msg) => {
-    StatusBar.renderActivity('rehashing', `Verifying ${msg.verified}/${msg.total} — ${msg.filename}`);
+    Activity.progress('verify', {
+        label: 'Verifying',
+        detail: `${msg.verified}/${msg.total} — ${msg.filename}`,
+    });
 });
 
 WS.on('verify_completed', async (msg) => {
-    StatusBar.renderActivity('idle');
     const parts = [`${msg.verified} verified`];
     if (msg.deferred > 0) parts.push(`${msg.deferred} queued`);
     if (msg.skipped > 0) parts.push(`${msg.skipped} skipped`);
+    Activity.completed('verify', {
+        log: `Verification complete: ${parts.join(', ')}`,
+    });
     Toast.success(`Verification complete: ${parts.join(', ')}`);
     if (selectedNode) {
         await FileList.showFolder(selectedNode.id);
@@ -1734,16 +1756,19 @@ WS.on('verify_completed', async (msg) => {
 WS.on('upload_transfer', (msg) => {
     const filePart = `${msg.current}/${msg.total} ${msg.filename}`;
     const sizePart = msg.totalMB > 1 ? ` — ${msg.sentMB}/${msg.totalMB} MB (${msg.pct}%)` : '';
-    StatusBar.renderActivity('uploading', `${msg.location} — sending to agent ${filePart}${sizePart}`);
+    Activity.progress('upload', { detail: `sending to agent ${filePart}${sizePart}` });
 });
 
 WS.on('upload_started', (msg) => {
-    StatusBar.renderActivity('uploading', `${msg.location} — ${msg.fileCount} file(s)...`);
-    ActivityLog.add(`Upload started: <b>${msg.location}</b> — ${msg.fileCount} file(s)`);
+    Activity.started('upload', {
+        label: `Uploading: ${msg.location}`,
+        detail: `${msg.fileCount} file(s)...`,
+        log: `Upload started: <b>${msg.location}</b> — ${msg.fileCount} file(s)`,
+    });
 });
 
 WS.on('upload_progress', (msg) => {
-    StatusBar.renderActivity('uploading', `${msg.location} — ${msg.processed}/${msg.total} (${msg.currentFile})`);
+    Activity.progress('upload', { detail: `${msg.processed}/${msg.total} (${msg.currentFile})` });
 });
 
 WS.on('upload_duplicate', (msg) => {
@@ -1772,8 +1797,9 @@ WS.on('file_added', (msg) => {
 });
 
 WS.on('upload_completed', async (msg) => {
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Upload completed: <b>${msg.location}</b> — ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`);
+    Activity.completed('upload', {
+        log: `Upload completed: <b>${msg.location}</b> — ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`,
+    });
     Toast.success(`Upload completed: ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`);
     await StatusBar.loadStats();
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
@@ -1781,18 +1807,24 @@ WS.on('upload_completed', async (msg) => {
 });
 
 WS.on('merge_started', (msg) => {
-    StatusBar.renderActivity('merging', `${msg.source} → ${msg.destination} — starting...`);
-    ActivityLog.add(`Merge started: <b>${msg.source}</b> → <b>${msg.destination}</b>`);
+    Activity.started('merge', {
+        label: `Merging: ${msg.source} → ${msg.destination}`,
+        detail: 'starting...',
+        log: `Merge started: <b>${msg.source}</b> → <b>${msg.destination}</b>`,
+    });
 });
 
 WS.on('merge_progress', (msg) => {
-    StatusBar.renderActivity('merging', `${msg.source} → ${msg.destination} — ${msg.processed}/${msg.total} files (${msg.copied} copied, ${msg.stubbed} stubbed)`);
-    ActivityLog.add(`Merging: ${msg.source} → ${msg.destination} — ${msg.processed}/${msg.total} files`);
+    Activity.progress('merge', {
+        detail: `${msg.processed}/${msg.total} files (${msg.copied} copied, ${msg.stubbed} stubbed)`,
+        log: `Merging: ${msg.source} → ${msg.destination} — ${msg.processed}/${msg.total} files`,
+    });
 });
 
 WS.on('merge_completed', async (msg) => {
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Merge completed: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.filesCopied} copied, ${msg.filesStubbed} stubbed, ${msg.filesSkipped} skipped`);
+    Activity.completed('merge', {
+        log: `Merge completed: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.filesCopied} copied, ${msg.filesStubbed} stubbed, ${msg.filesSkipped} skipped`,
+    });
     Toast.success(`Merge completed: ${msg.filesCopied} copied, ${msg.filesStubbed} stubbed`);
     await StatusBar.loadStats();
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
@@ -1800,8 +1832,9 @@ WS.on('merge_completed', async (msg) => {
 });
 
 WS.on('merge_cancelled', async (msg) => {
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Merge cancelled: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.copied} copied, ${msg.stubbed} stubbed before cancel`);
+    Activity.completed('merge', {
+        log: `Merge cancelled: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.copied} copied, ${msg.stubbed} stubbed before cancel`,
+    });
     Toast.info(`Merge cancelled: ${msg.source} → ${msg.destination}`);
     await StatusBar.loadStats();
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
@@ -1809,8 +1842,9 @@ WS.on('merge_cancelled', async (msg) => {
 });
 
 WS.on('merge_error', (msg) => {
-    StatusBar.renderActivity('idle');
-    ActivityLog.add(`Merge error: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.error}`);
+    Activity.error('merge', {
+        log: `Merge error: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.error}`,
+    });
     Toast.error(`Merge error: ${msg.error}`);
 });
 

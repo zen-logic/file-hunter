@@ -6,7 +6,12 @@ import os
 from datetime import datetime
 
 from file_hunter.extensions import get_agent_location_ids, get_agent_label_prefixes
-from file_hunter.helpers import parse_folder_id, parse_location_id, parse_mtime, post_op_stats
+from file_hunter.helpers import (
+    parse_folder_id,
+    parse_location_id,
+    parse_mtime,
+    post_op_stats,
+)
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.online_check import (

@@ -99,40 +99,12 @@ const StatusBar = {
     },
 
     renderActivity(state, detail, locationId) {
-        if (state === 'scanning') {
-            this._scanningLocationId = locationId || this._scanningLocationId;
+        if (state === 'active') {
+            this._scanningLocationId = locationId || null;
             this.activityEl.innerHTML = `
                 <span class="status-activity-text scanning">
-                    Scanning: ${detail || '...'}
-                    ${this._renderQueueBadge()}
-                </span>
-            `;
-        } else if (state === 'consolidating') {
-            this._scanningLocationId = null;
-            this.activityEl.innerHTML = `
-                <span class="status-activity-text scanning">
-                    Consolidating: ${detail || '...'}
-                </span>
-            `;
-        } else if (state === 'uploading') {
-            this._scanningLocationId = null;
-            this.activityEl.innerHTML = `
-                <span class="status-activity-text scanning">
-                    Uploading: ${detail || '...'}
-                </span>
-            `;
-        } else if (state === 'merging') {
-            this._scanningLocationId = null;
-            this.activityEl.innerHTML = `
-                <span class="status-activity-text scanning">
-                    Merging: ${detail || '...'}
-                </span>
-            `;
-        } else if (state === 'rehashing') {
-            this._scanningLocationId = null;
-            this.activityEl.innerHTML = `
-                <span class="status-activity-text scanning">
-                    ${detail || 'Re-hashing...'}
+                    ${detail || '...'}
+                    ${locationId ? this._renderQueueBadge() : ''}
                 </span>
             `;
         } else {

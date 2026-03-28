@@ -72,19 +72,22 @@ async def start_scan(request: Request):
             scan_path = os.path.join(root_path, folder["rel_path"])
             folder_name = folder["name"]
 
+    label = f"{location_name} / {folder_name}" if folder_name else location_name
+
+    payload = {
+        "location_id": loc_id,
+        "location_name": label,
+        "path": scan_path,
+        "root_path": root_path,
+    }
+    if raw_folder_id:
+        payload["folder_id"] = int(str(raw_folder_id).replace("fld-", ""))
+
     op_id = await enqueue(
         "scan_dir",
         agent_id,
-        {
-            "location_id": loc_id,
-            "location_name": location_name,
-            "path": scan_path,
-            "root_path": root_path,
-        },
+        payload,
     )
-
-    # Broadcast scan_queued for activity log (queue state already broadcast by enqueue)
-    label = f"{location_name} / {folder_name}" if folder_name else location_name
     await broadcast(
         {
             "type": "scan_queued",

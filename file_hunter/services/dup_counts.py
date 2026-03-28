@@ -663,19 +663,27 @@ async def _dup_recalc_writer():
 
 async def find_dup_candidates(
     location_id: int | None = None,
+    file_ids: list[int] | None = None,
 ) -> list[dict]:
     """Find files needing hash_fast that are in duplicate (hash_partial, file_size) groups.
 
     Reads from hashes.db to find dup groups, then fetches file info
     (full_path, inode) from catalog for the candidate files.
 
-    location_id: when set, only returns candidates from dup groups that
-    involve at least one file in this location.  None = all dup groups
-    globally (for repair).
+    file_ids: when set, only looks at dup groups involving these specific
+    files. Used by rescan/quick scan to scope to new/changed files.
+    location_id: when set (and file_ids is None), scans dup groups for the
+    entire location. Used by first scan and housekeeping.
+    Neither: all dup groups globally (for repair).
 
     Returns [{id, full_path, location_id, file_size, hash_partial, inode}, ...]
     """
-    scope = f"location {location_id}" if location_id else "global"
+    if file_ids is not None:
+        scope = f"{len(file_ids)} files"
+    elif location_id is not None:
+        scope = f"location {location_id}"
+    else:
+        scope = "global"
 
     log.info("find_dup_candidates: starting (scope=%s)", scope)
     t0 = time.monotonic()
@@ -684,7 +692,35 @@ async def find_dup_candidates(
     conn = await open_hashes_connection()
     try:
         t1 = time.monotonic()
-        if location_id is not None:
+        if file_ids is not None:
+            # Scoped to specific files — look up their pairs only
+            await conn.execute("CREATE TEMP TABLE _seed_ids (file_id INTEGER)")
+            await conn.executemany(
+                "INSERT INTO _seed_ids VALUES (?)",
+                [(fid,) for fid in file_ids],
+            )
+            await conn.execute(
+                "CREATE TEMP TABLE _dup_pairs (hash_partial TEXT, file_size INTEGER)"
+            )
+            await conn.execute(
+                "INSERT INTO _dup_pairs "
+                "SELECT DISTINCT f.hash_partial, f.file_size FROM active_hashes f "
+                "INNER JOIN _seed_ids s ON f.file_id = s.file_id "
+                "WHERE f.hash_partial IS NOT NULL AND f.file_size > 0"
+            )
+            await conn.execute(
+                "CREATE INDEX _dup_pairs_idx ON _dup_pairs(hash_partial, file_size)"
+            )
+            await conn.commit()
+
+            rows = await conn.execute_fetchall(
+                "SELECT f.hash_partial, f.file_size FROM active_hashes f "
+                "INNER JOIN _dup_pairs p "
+                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size"
+            )
+            await conn.execute("DROP TABLE IF EXISTS _seed_ids")
+            await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
+        elif location_id is not None:
             await conn.execute(
                 "CREATE TEMP TABLE _dup_pairs (hash_partial TEXT, file_size INTEGER)"
             )
@@ -763,6 +799,7 @@ async def find_dup_candidates(
         )
     finally:
         try:
+            await conn.execute("DROP TABLE IF EXISTS _seed_ids")
             await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
             await conn.execute("DROP TABLE IF EXISTS _dup_groups")
         except Exception:
@@ -1110,6 +1147,7 @@ RETRY_DELAY = 5
 async def hash_candidates_for_location(
     location_id: int,
     agent_id: int,
+    file_ids: list[int] | None = None,
 ) -> tuple[int, int, int]:
     """Find dup candidates for a location, handle small files, queue large.
 
@@ -1118,9 +1156,13 @@ async def hash_candidates_for_location(
     to coalesced dup writer.  Large files: insert into pending_hashes for
     the hash drainer to process.
 
+    file_ids: when set, scopes candidate search to dup groups involving
+    these specific files (rescan/quick scan). None = full location scan
+    (first scan, housekeeping).
+
     Returns (total_candidates, small_handled, large_queued).
     """
-    candidates = await find_dup_candidates(location_id=location_id)
+    candidates = await find_dup_candidates(location_id=location_id, file_ids=file_ids)
 
     log.info(
         "hash_candidates_for_location: %d raw candidates for location %d",
@@ -1227,8 +1269,9 @@ async def post_ingest_dup_processing(
     location_name: str,
     on_progress=None,
     broadcast_scan_progress: bool = True,
+    file_ids: list[int] | None = None,
 ):
-    """Shared post-ingest dup processing for scan, rescan, and import.
+    """Shared post-ingest dup processing for scan, rescan, quick scan, and import.
 
     1. Find dup candidates (files sharing hash_partial that need hash_fast)
     2. Handle small files (copy hash_partial → hash_fast)
@@ -1236,6 +1279,9 @@ async def post_ingest_dup_processing(
     4. Recount dup_count for affected hashes
 
     Called after files + hashes are in the catalog and hashes.db.
+    file_ids: when set, scopes candidate search to dup groups involving
+    these specific files (rescan/quick scan). None = full location scan
+    (first scan, housekeeping).
     broadcast_scan_progress: False when called from housekeeping (not a scan).
     """
     log.info("Post-ingest dup processing for %s", location_name)
@@ -1253,6 +1299,7 @@ async def post_ingest_dup_processing(
     candidates_total, small_handled, large_queued = await hash_candidates_for_location(
         location_id=location_id,
         agent_id=agent_id,
+        file_ids=file_ids,
     )
 
     log.info(

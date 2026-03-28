@@ -15,7 +15,10 @@ from file_hunter.db import db_writer, read_db, open_connection, execute_write
 from file_hunter.hashes_db import hashes_writer, open_hashes_connection
 from file_hunter.helpers import post_op_stats
 from file_hunter.services.agent_ops import dispatch as _agent_dispatch
-from file_hunter.services.dup_counts import find_dup_candidates, submit_hashes_for_recalc
+from file_hunter.services.dup_counts import (
+    find_dup_candidates,
+    submit_hashes_for_recalc,
+)
 from file_hunter.services.online_check import agent_online_check
 from file_hunter.services.queue_manager import wait_if_paused
 from file_hunter.ws.scan import broadcast
@@ -244,7 +247,9 @@ async def run_backfill(
                 if _active_backfills.get(agent_id):
                     return
                 try:
-                    result = await _agent_dispatch("file_hash", location_id, path=full_path)
+                    result = await _agent_dispatch(
+                        "file_hash", location_id, path=full_path
+                    )
                     pending_writes.append((file_id, result["hash_fast"]))
                     affected_hashes.add(result["hash_fast"])
                     agent_hashed += 1

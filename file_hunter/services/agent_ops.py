@@ -20,7 +20,11 @@ _loc_agent_cache: dict[int, int] = {}
 
 def _resolve_agent(agent_id: int):
     """Return (host, port, token) for an online agent, or None."""
-    from file_hunter.ws.agent import get_agent_info, get_agent_token, get_online_agent_ids
+    from file_hunter.ws.agent import (
+        get_agent_info,
+        get_agent_token,
+        get_online_agent_ids,
+    )
 
     if agent_id not in get_online_agent_ids():
         return None
