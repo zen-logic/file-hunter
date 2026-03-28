@@ -84,8 +84,7 @@ async function refreshDetailPanel() {
             wireMergeBtn();
             wireTreemapBtn();
             if (result && result.online !== undefined && result.online !== selectedNode.online) {
-                selectedNode.online = result.online;
-                Tree.render();
+                Tree.updateOnlineStatus([selectedNode.id], result.online);
             }
         } else {
             const result = await Detail.renderFolder(selectedNode);
@@ -104,11 +103,8 @@ async function refreshDetailPanel() {
 
 function updateLocationOnline(locationId, online) {
     if (!locationId || online === undefined) return;
-    const locNode = Tree.getLocation(locationId);
-    if (locNode && !!locNode.online !== !!online) {
-        locNode.online = online;
-        Tree.render();
-    }
+    const locId = String(locationId).startsWith('loc-') ? locationId : 'loc-' + locationId;
+    Tree.updateOnlineStatus([locId], online);
 }
 
 function wireDeleteLocationBtn() {
@@ -807,8 +803,7 @@ Tree.init(async (node) => {
         wireMergeBtn();
         wireTreemapBtn();
         if (result && result.online !== undefined && result.online !== node.online) {
-            node.online = result.online;
-            Tree.render();
+            Tree.updateOnlineStatus([node.id], result.online);
         }
     } else {
         wireNewFolderBtn();
@@ -904,8 +899,7 @@ FileList.init(async (file) => {
             wireMergeBtn();
             wireTreemapBtn();
             if (result && result.online !== undefined && result.online !== selectedNode.online) {
-                selectedNode.online = result.online;
-                Tree.render();
+                Tree.updateOnlineStatus([selectedNode.id], result.online);
             }
         } else {
             const result = await Detail.renderFolder(selectedNode);
@@ -1221,41 +1215,63 @@ WS.on('scan_error', (msg) => {
 
 function syncQueuedLocations(queue) {
     StatusBar.updateQueue(queue);
+
+    // Collect all locations that currently have badges
+    const affected = new Set([
+        ...Tree._scanningLocations,
+        ...Tree._backfillingLocations,
+        ...Tree._deletingLocations,
+        ...Tree._queuedLocations.keys(),
+    ]);
+
     // Rebuild all badge sets from queue state (single source of truth)
     Tree._scanningLocations.clear();
     Tree._backfillingLocations.clear();
     Tree._deletingLocations.clear();
     Tree._queuedLocations.clear();
     if (queue) {
-        // Typed running sets (preferred)
         if (queue.scanning_location_ids) {
             for (const locId of queue.scanning_location_ids) {
-                Tree._scanningLocations.add('loc-' + locId);
+                const key = 'loc-' + locId;
+                Tree._scanningLocations.add(key);
+                affected.add(key);
             }
         }
         if (queue.backfilling_location_ids) {
             for (const locId of queue.backfilling_location_ids) {
-                Tree._backfillingLocations.add('loc-' + locId);
+                const key = 'loc-' + locId;
+                Tree._backfillingLocations.add(key);
+                affected.add(key);
             }
         }
         if (queue.deleting_location_ids) {
             for (const locId of queue.deleting_location_ids) {
-                Tree._deletingLocations.add('loc-' + locId);
+                const key = 'loc-' + locId;
+                Tree._deletingLocations.add(key);
+                affected.add(key);
             }
         }
         // Fallback for old server without typed ids
         if (!queue.scanning_location_ids && queue.running_location_ids) {
             for (const locId of queue.running_location_ids) {
-                Tree._scanningLocations.add('loc-' + locId);
+                const key = 'loc-' + locId;
+                Tree._scanningLocations.add(key);
+                affected.add(key);
             }
         }
         if (queue.pending) {
             for (const entry of queue.pending) {
-                Tree._queuedLocations.set('loc-' + entry.location_id, entry.queue_id);
+                const key = 'loc-' + entry.location_id;
+                Tree._queuedLocations.set(key, entry.queue_id);
+                affected.add(key);
             }
         }
     }
-    Tree.render();
+
+    // Targeted badge update for each affected location
+    for (const nodeId of affected) {
+        Tree._updateLocationBadges(nodeId);
+    }
     Detail.updateActivity();
 }
 
@@ -1297,7 +1313,7 @@ WS.on('scan_queue_skipped', (msg) => {
 
 WS.on('queue_paused', (msg) => {
     Tree._paused = true;
-    Tree.render();
+    for (const loc of Tree.treeData) Tree._updateLocationBadges(loc.id);
     if (msg.reason === 'dup_exclude') {
         const verb = msg.direction === 'exclude' ? 'Excluding' : 'Including';
         const prep = msg.direction === 'exclude' ? 'from' : 'in';
@@ -1310,7 +1326,7 @@ WS.on('queue_paused', (msg) => {
 
 WS.on('queue_resumed', () => {
     Tree._paused = false;
-    Tree.render();
+    for (const loc of Tree.treeData) Tree._updateLocationBadges(loc.id);
     ActivityLog.add('Operations resumed');
 });
 

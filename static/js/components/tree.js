@@ -49,8 +49,7 @@ const Tree = {
 
         this.el.addEventListener('click', () => {
             if (this.selected) {
-                this.selected = null;
-                this.render();
+                this._updateSelection(null);
                 if (this.onDeselect) this.onDeselect();
             }
         });
@@ -184,13 +183,15 @@ const Tree = {
         this._scanningLocations.add(key);
         const oldPhase = this._scanningPhases.get(key);
         if (phase) this._scanningPhases.set(key, phase);
-        if (isNew || oldPhase !== phase) this.render();
+        if (isNew || oldPhase !== phase) this._updateLocationBadges(key);
     },
 
     clearScanningLocation(locationId) {
         const key = 'loc-' + locationId;
+        if (!this._scanningLocations.has(key)) return;
         this._scanningLocations.delete(key);
         this._scanningPhases.delete(key);
+        this._updateLocationBadges(key);
     },
 
     setLocationChildren(locationId, children) {
@@ -202,26 +203,86 @@ const Tree = {
     },
 
     updateOnlineStatus(locationIds, online, diskStats) {
-        let changed = false;
         for (const id of locationIds) {
             const node = this._findNode(id);
-            if (node && node.online !== online) {
-                node.online = online;
-                changed = true;
+            if (!node) continue;
+            const changed = node.online !== online;
+            node.online = online;
+            if (diskStats && diskStats[id]) node.diskStats = diskStats[id];
+            if (!changed && !(diskStats && diskStats[id])) continue;
+
+            const el = this._findItemEl(id);
+            if (!el) continue;
+
+            // Toggle offline class
+            el.classList.toggle('offline', online === false);
+
+            // Update offline badge in meta-row
+            const badges = el.querySelector('.tree-badges');
+            if (badges) {
+                const existing = badges.querySelector('.tree-badge.offline');
+                if (online === false && !existing) {
+                    const b = document.createElement('span');
+                    b.className = 'tree-badge offline';
+                    b.textContent = 'offline';
+                    badges.appendChild(b);
+                } else if (online !== false && existing) {
+                    existing.remove();
+                }
             }
-            if (node && diskStats && diskStats[id]) {
-                node.diskStats = diskStats[id];
-                changed = true;
+
+            // Update capacity bar if disk stats changed
+            if (diskStats && diskStats[id] && node.diskStats) {
+                this._updateCapacityBar(el, node);
             }
         }
-        if (changed) this.render();
+    },
+
+    _updateCapacityBar(el, node) {
+        const meta = el.querySelector('.tree-location-meta');
+        if (!meta) return;
+
+        // Remove existing capacity bar
+        const oldBar = meta.querySelector('.tree-capacity-bar');
+        const oldRo = meta.querySelector('.tree-badge.readonly');
+        if (oldBar) oldBar.remove();
+        if (oldRo) oldRo.remove();
+
+        if (node.diskStats && node.diskStats.mount) {
+            const pct = ((node.diskStats.total - node.diskStats.free) / node.diskStats.total * 100).toFixed(1);
+            const bar = document.createElement('span');
+            bar.className = 'tree-capacity-bar';
+            bar.title = `${formatSize(node.diskStats.free)} free of ${formatSize(node.diskStats.total)}`;
+            const fill = document.createElement('span');
+            fill.className = 'tree-capacity-fill';
+            fill.style.width = pct + '%';
+            bar.appendChild(fill);
+            // Insert before .tree-badges
+            const badges = meta.querySelector('.tree-badges');
+            meta.insertBefore(bar, badges);
+            if (node.diskStats.readonly) {
+                const ro = document.createElement('span');
+                ro.className = 'tree-badge readonly';
+                ro.textContent = 'RO';
+                meta.insertBefore(ro, badges);
+            }
+        }
     },
 
     updateLocationSize(locationId, totalSize) {
-        const node = this._findNode('loc-' + locationId);
-        if (node) {
-            node.totalSize = totalSize;
-            this.render();
+        const key = 'loc-' + locationId;
+        const node = this._findNode(key);
+        if (!node) return;
+        node.totalSize = totalSize;
+
+        const el = this._findItemEl(key);
+        if (!el) return;
+        const sizeSpan = el.querySelector('.tree-size');
+        if (sizeSpan) {
+            // If scanning with no totalSize, phase text is shown instead — handled by _updateLocationBadges
+            if (this._scanningLocations.has(key) && !totalSize) return;
+            sizeSpan.textContent = totalSize != null ? formatSize(totalSize) : '';
+            sizeSpan.classList.remove('tree-size-scanning');
         }
     },
 
@@ -229,34 +290,42 @@ const Tree = {
         const key = 'loc-' + locationId;
         if (this._queuedLocations.has(key)) return;
         this._queuedLocations.set(key, queueId);
-        this.render();
+        this._updateLocationBadges(key);
     },
 
     clearQueuedLocation(locationId) {
-        this._queuedLocations.delete('loc-' + locationId);
+        const key = 'loc-' + locationId;
+        if (!this._queuedLocations.has(key)) return;
+        this._queuedLocations.delete(key);
+        this._updateLocationBadges(key);
     },
 
     setBackfillingLocation(locationId) {
         const key = 'loc-' + locationId;
         if (this._backfillingLocations.has(key)) return;
         this._backfillingLocations.add(key);
-        this.render();
+        this._updateLocationBadges(key);
     },
 
     clearBackfillingLocation(locationId) {
-        this._backfillingLocations.delete('loc-' + locationId);
+        const key = 'loc-' + locationId;
+        if (!this._backfillingLocations.has(key)) return;
+        this._backfillingLocations.delete(key);
+        this._updateLocationBadges(key);
     },
 
     setDeletingLocation(locationId) {
         const key = typeof locationId === 'string' && locationId.startsWith('loc-') ? locationId : 'loc-' + locationId;
         if (this._deletingLocations.has(key)) return;
         this._deletingLocations.add(key);
-        this.render();
+        this._updateLocationBadges(key);
     },
 
     clearDeletingLocation(locationId) {
         const key = typeof locationId === 'string' && locationId.startsWith('loc-') ? locationId : 'loc-' + locationId;
+        if (!this._deletingLocations.has(key)) return;
         this._deletingLocations.delete(key);
+        this._updateLocationBadges(key);
     },
 
     async reload() {
@@ -371,6 +440,138 @@ const Tree = {
         return null;
     },
 
+    _findItemEl(nodeId) {
+        return this.el.querySelector(`[data-node-id="${nodeId}"]`);
+    },
+
+    _updateSelection(newId) {
+        const oldEl = this.el.querySelector('.tree-item.selected');
+        if (oldEl) oldEl.classList.remove('selected');
+        this.selected = newId;
+        if (newId) {
+            const newEl = this._findItemEl(newId);
+            if (newEl) {
+                newEl.classList.add('selected');
+                newEl.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+            }
+        }
+    },
+
+    // Rebuild operational badges (scanning/queued/backfilling/deleting/paused)
+    // and meta-row phase text on a single location's DOM element in-place.
+    _updateLocationBadges(nodeId) {
+        const el = this._findItemEl(nodeId);
+        if (!el) return;
+        const node = this._findNode(nodeId);
+        if (!node || node.type !== 'location') return;
+
+        // Remove existing operational badges and cancel buttons
+        el.querySelectorAll('.tree-badge.scanning, .tree-badge.queued, .tree-badge.backfilling, .tree-badge.deleting, .tree-badge.cancel').forEach(b => b.remove());
+
+        // Re-add the appropriate badge
+        // Insert point: after the .tree-label, before .tree-location-meta
+        const meta = el.querySelector('.tree-location-meta');
+        const insertBefore = meta || null;
+
+        if (this._scanningLocations.has(nodeId)) {
+            const sb = document.createElement('span');
+            sb.className = 'tree-badge scanning';
+            sb.textContent = 'scanning';
+            el.insertBefore(sb, insertBefore);
+            const cb = document.createElement('span');
+            cb.className = 'tree-badge cancel tree-badge-clickable';
+            cb.textContent = 'cancel';
+            cb.title = 'Cancel scan';
+            cb.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const ok = await ConfirmModal.open({
+                    title: 'Cancel Scan',
+                    message: `Stop scanning "${node.label}"? Files already cataloged will be kept.`,
+                    confirmLabel: 'Cancel Scan',
+                });
+                if (!ok) return;
+                await API.post('/api/scan/cancel', { location_id: nodeId });
+            });
+            el.insertBefore(cb, insertBefore);
+        } else if (this._queuedLocations.has(nodeId)) {
+            const qb = document.createElement('span');
+            qb.className = 'tree-badge queued';
+            qb.textContent = 'queued';
+            el.insertBefore(qb, insertBefore);
+            const cb = document.createElement('span');
+            cb.className = 'tree-badge cancel tree-badge-clickable';
+            cb.textContent = 'cancel';
+            cb.title = 'Remove from queue';
+            const queueId = this._queuedLocations.get(nodeId);
+            cb.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const ok = await ConfirmModal.open({
+                    title: 'Remove from Queue',
+                    message: `Remove "${node.label}" from the scan queue?`,
+                    confirmLabel: 'Remove',
+                });
+                if (!ok) return;
+                await API.post('/api/scan/cancel', { queue_id: queueId });
+            });
+            el.insertBefore(cb, insertBefore);
+        } else if (this._backfillingLocations.has(nodeId)) {
+            const bb = document.createElement('span');
+            bb.className = 'tree-badge backfilling';
+            bb.textContent = 'backfilling';
+            el.insertBefore(bb, insertBefore);
+            const cb = document.createElement('span');
+            cb.className = 'tree-badge cancel tree-badge-clickable';
+            cb.textContent = 'cancel';
+            cb.title = 'Cancel backfill';
+            cb.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const ok = await ConfirmModal.open({
+                    title: 'Cancel Backfill',
+                    message: `Stop backfilling hashes on "${node.label}"? Hashes already computed will be kept.`,
+                    confirmLabel: 'Cancel Backfill',
+                });
+                if (!ok) return;
+                await API.post('/api/scan/cancel', { location_id: nodeId, type: 'backfill' });
+            });
+            el.insertBefore(cb, insertBefore);
+        } else if (this._deletingLocations.has(nodeId)) {
+            const db = document.createElement('span');
+            db.className = 'tree-badge deleting';
+            db.textContent = 'deleting';
+            el.insertBefore(db, insertBefore);
+        }
+
+        if (this._paused && !this._scanningLocations.has(nodeId) && !this._deletingLocations.has(nodeId)) {
+            const pb = document.createElement('span');
+            pb.className = 'tree-badge queued';
+            pb.textContent = 'paused';
+            el.insertBefore(pb, insertBefore);
+        }
+
+        // Update meta-row size/phase text
+        const sizeSpan = el.querySelector('.tree-size');
+        if (sizeSpan) {
+            if (this._scanningLocations.has(nodeId) && !node.totalSize) {
+                const phaseLabels = {
+                    scanning: 'metadata...',
+                    comparing: 'comparing...',
+                    hashing: 'partials...',
+                    cataloging: 'ingest...',
+                    cataloging_hashes: 'hashing...',
+                    checking_duplicates: 'hashing...',
+                    recounting: 'finalizing...',
+                    rebuilding: 'finalizing...',
+                };
+                const phase = this._scanningPhases.get(nodeId);
+                sizeSpan.textContent = phaseLabels[phase] || 'scanning...';
+                sizeSpan.classList.add('tree-size-scanning');
+            } else {
+                sizeSpan.textContent = node.totalSize != null ? formatSize(node.totalSize) : '';
+                sizeSpan.classList.remove('tree-size-scanning');
+            }
+        }
+    },
+
     _findParent(nodeId, nodes, parent) {
         nodes = nodes || this.treeData;
         for (const node of nodes) {
@@ -395,23 +596,15 @@ const Tree = {
             case 'ArrowDown': {
                 e.preventDefault();
                 const newIdx = curIdx < visible.length - 1 ? curIdx + 1 : curIdx;
-                if (curIdx === -1 && visible.length > 0) {
-                    this.selected = visible[0].id;
-                } else {
-                    this.selected = visible[newIdx].id;
-                }
-                this.render();
+                const newId = (curIdx === -1 && visible.length > 0) ? visible[0].id : visible[newIdx].id;
+                this._updateSelection(newId);
                 break;
             }
             case 'ArrowUp': {
                 e.preventDefault();
                 const newIdx = curIdx > 0 ? curIdx - 1 : 0;
-                if (curIdx === -1 && visible.length > 0) {
-                    this.selected = visible[0].id;
-                } else {
-                    this.selected = visible[newIdx].id;
-                }
-                this.render();
+                const newId = (curIdx === -1 && visible.length > 0) ? visible[0].id : visible[newIdx].id;
+                this._updateSelection(newId);
                 break;
             }
             case 'ArrowRight': {
@@ -424,17 +617,14 @@ const Tree = {
                     node.expanded = true;
                     this._expandedIds.add(node.id);
                     if (node.children === null) {
-                        // Lazy load children then re-render
                         this._loadChildren(node.id).then(() => this.render());
                     } else {
                         this.render();
                     }
                 } else {
-                    // Move to first child
                     const firstChild = node.children && node.children[0];
                     if (firstChild) {
-                        this.selected = firstChild.id;
-                        this.render();
+                        this._updateSelection(firstChild.id);
                     }
                 }
                 break;
@@ -449,24 +639,20 @@ const Tree = {
                     this._expandedIds.delete(node.id);
                     this.render();
                 } else {
-                    // Move to parent
                     const parent = this._findParent(node.id);
                     if (parent) {
-                        this.selected = parent.id;
-                        this.render();
+                        this._updateSelection(parent.id);
                     }
                 }
                 break;
             }
             case 'Home':
                 e.preventDefault();
-                this.selected = visible[0].id;
-                this.render();
+                this._updateSelection(visible[0].id);
                 break;
             case 'End':
                 e.preventDefault();
-                this.selected = visible[visible.length - 1].id;
-                this.render();
+                this._updateSelection(visible[visible.length - 1].id);
                 break;
             case 'Enter': {
                 e.preventDefault();
@@ -502,6 +688,7 @@ const Tree = {
         if (this.filterText && !this._nodeMatches(node)) return;
 
         const item = document.createElement('div');
+        item.dataset.nodeId = node.id;
         item.className = 'tree-item' + (node.online === false ? ' offline' : '');
         if (this.selected === node.id) item.classList.add('selected');
         if (node.hidden) item.classList.add('hidden-item');
@@ -691,21 +878,27 @@ const Tree = {
             e.stopPropagation();
             // Block interaction with deleting locations
             if (node.type === 'location' && this._deletingLocations.has(node.id)) return;
+            let structural = false;
             if (hasChildren) {
                 if (node.expanded) {
                     node.expanded = false;
                     this._expandedIds.delete(node.id);
+                    structural = true;
                 } else {
                     node.expanded = true;
                     this._expandedIds.add(node.id);
-                    // Lazy-load children if not yet fetched
                     if (node.children === null) {
                         await this._loadChildren(node.id);
                     }
+                    structural = true;
                 }
             }
-            this.selected = node.id;
-            this.render();
+            if (structural) {
+                this.selected = node.id;
+                this.render();
+            } else {
+                this._updateSelection(node.id);
+            }
             if (this.onSelect) this.onSelect(node);
         });
 
