@@ -107,6 +107,11 @@ async def file_content(request: Request):
             file_id, full_path, filename, request_headers=dict(request.headers)
         )
         if response is not None:
+            if request.query_params.get("download"):
+                safe_name = filename.replace('"', '\\"')
+                response.headers["content-disposition"] = (
+                    f'attachment; filename="{safe_name}"'
+                )
             return response
     return json_error("File not available (agent offline).", 404)
 

@@ -345,25 +345,15 @@ const Detail = {
         m.overlay.classList.remove('hidden');
     },
 
-    async _downloadPreviewFile() {
+    _downloadPreviewFile() {
         const m = this._previewModal;
         if (!m._fileId) return;
-        m.downloadBtn.disabled = true;
-        try {
-            const resp = await fetch(_authUrl(`/api/files/${m._fileId}/content`), { headers: _authHeaders() });
-            if (resp.ok) {
-                const blob = await resp.blob();
-                const blobUrl = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = blobUrl;
-                a.download = m._fileName || '';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(blobUrl);
-            }
-        } catch { /* ignore */ }
-        m.downloadBtn.disabled = false;
+        const a = document.createElement('a');
+        a.href = _authUrl(`/api/files/${m._fileId}/content?download=1`);
+        a.download = m._fileName || '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
     },
 
     _toggleFullscreen() {
@@ -1463,23 +1453,13 @@ const Detail = {
         // Download
         const dlBtn = document.getElementById('detail-download');
         if (dlBtn && detail.id) {
-            dlBtn.addEventListener('click', async () => {
-                dlBtn.disabled = true;
-                try {
-                    const resp = await fetch(_authUrl(`/api/files/${detail.id}/content`), { headers: _authHeaders() });
-                    if (resp.ok) {
-                        const blob = await resp.blob();
-                        const blobUrl = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = blobUrl;
-                        a.download = detail.name || '';
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        URL.revokeObjectURL(blobUrl);
-                    }
-                } catch { /* ignore */ }
-                dlBtn.disabled = false;
+            dlBtn.addEventListener('click', () => {
+                const a = document.createElement('a');
+                a.href = _authUrl(`/api/files/${detail.id}/content?download=1`);
+                a.download = detail.name || '';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
             });
         }
     },
