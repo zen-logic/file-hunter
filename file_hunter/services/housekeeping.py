@@ -347,8 +347,31 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
         )
         return
 
+    # Fetch the specific unprocessed file IDs rather than scanning the whole location
+    hconn = await open_hashes_connection()
+    try:
+        rows = await hconn.execute_fetchall(
+            "SELECT file_id FROM active_hashes "
+            "WHERE location_id = ? AND hash_fast IS NULL AND hash_partial IS NOT NULL",
+            (location_id,),
+        )
+    finally:
+        await hconn.close()
+
+    if not rows:
+        logger.info("Housekeeping dup candidates: no unprocessed files for %s", location_name)
+        return
+
+    file_ids = [r["file_id"] for r in rows]
+    logger.info(
+        "Housekeeping dup candidates: %d unprocessed files for %s",
+        len(file_ids),
+        location_name,
+    )
+
     await post_ingest_dup_processing(
-        location_id, agent_id, location_name, broadcast_scan_progress=False
+        location_id, agent_id, location_name,
+        file_ids=file_ids, broadcast_scan_progress=False,
     )
 
 

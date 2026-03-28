@@ -249,6 +249,8 @@ async def get_children(db, folder_ids: list[int]):
             child_node["hidden"] = True
         if r["dup_exclude"]:
             child_node["dupExcluded"] = True
+        if r["stale"]:
+            child_node["stale"] = True
         result[key].append(child_node)
 
     # Ensure every requested ID has an entry (empty list if no children)
@@ -343,6 +345,8 @@ async def get_expand_path(db, target_id: int):
                 child_node["hidden"] = True
             if r["dup_exclude"]:
                 child_node["dupExcluded"] = True
+            if r["stale"]:
+                child_node["stale"] = True
             children_by_parent[key].append(child_node)
 
     # Also fetch root-level siblings (children of the location)
@@ -383,6 +387,8 @@ async def get_expand_path(db, target_id: int):
             child_node["hidden"] = True
         if r["dup_exclude"]:
             child_node["dupExcluded"] = True
+        if r["stale"]:
+            child_node["stale"] = True
         children_by_parent[loc_key].append(child_node)
 
     return {

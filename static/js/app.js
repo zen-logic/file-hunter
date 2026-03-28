@@ -1132,6 +1132,7 @@ WS.on('scan_progress', (msg) => {
         logText = `${msg.location} — ${(msg.filesFound || 0).toLocaleString()} files`;
     }
     Activity.progress('scan-' + msg.locationId, {
+        label: `Scanning: ${msg.location}`,
         detail: statusDetail,
         log: logText,
     });
