@@ -13,9 +13,11 @@ import logging
 from pathlib import Path
 
 from file_hunter.config import load_config
+from file_hunter.db import open_connection
 from file_hunter.hashes_db import get_file_hashes, read_hashes
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.settings import get_setting
+from file_hunter.stats_db import _stats_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,8 @@ CREATE TABLE results (
     location_name TEXT,
     hash_strong TEXT,
     hash_fast TEXT,
-    dup_count INTEGER NOT NULL DEFAULT 0
+    dup_count INTEGER NOT NULL DEFAULT 0,
+    file_count INTEGER
 );
 CREATE INDEX idx_results_name ON results(filename);
 CREATE INDEX idx_results_size ON results(file_size);
@@ -139,6 +142,7 @@ async def _do_populate_search_db(db, where, params, search_path):
                 hs,
                 hf,
                 dc,
+                None,
             )
         )
 
@@ -155,8 +159,29 @@ def _write_search_db(search_path: str, insert_data: list):
     sdb.executescript(_SEARCH_SCHEMA)
     for i in range(0, len(insert_data), 5000):
         sdb.executemany(
-            "INSERT INTO results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             insert_data[i : i + 5000],
+        )
+        sdb.commit()
+    sdb.close()
+
+
+def _create_empty_search_db(search_path: str):
+    """Create an empty search results DB (for folder-only searches)."""
+    if os.path.exists(search_path):
+        os.unlink(search_path)
+    sdb = sqlite3.connect(search_path)
+    sdb.executescript(_SEARCH_SCHEMA)
+    sdb.close()
+
+
+def _append_folder_results(search_path: str, folder_data: list):
+    """Append folder results to an existing search DB."""
+    sdb = sqlite3.connect(search_path)
+    for i in range(0, len(folder_data), 5000):
+        sdb.executemany(
+            "INSERT OR IGNORE INTO results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            folder_data[i : i + 5000],
         )
         sdb.commit()
     sdb.close()
@@ -174,6 +199,11 @@ def _read_search_page(search_path, sort, sort_dir, page):
     total_row = sdb.execute("SELECT COUNT(*) as c FROM results").fetchone()
     total = total_row["c"]
 
+    folder_row = sdb.execute(
+        "SELECT COUNT(*) as c FROM results WHERE file_type_high = 'folder'"
+    ).fetchone()
+    folder_total = folder_row["c"]
+
     rows = sdb.execute(
         f"SELECT * FROM results ORDER BY {col} {direction} LIMIT ? OFFSET ?",
         (PAGE_SIZE, offset),
@@ -183,26 +213,41 @@ def _read_search_page(search_path, sort, sort_dir, page):
 
     items = []
     for r in rows:
-        items.append(
-            {
-                "id": r["file_id"],
-                "name": r["filename"],
-                "typeHigh": r["file_type_high"],
-                "typeLow": r["file_type_low"],
-                "size": r["file_size"],
-                "date": r["modified_date"],
-                "dups": r["dup_count"],
-                "hashStrong": r["hash_strong"],
-                "hashFast": r["hash_fast"],
-                "stale": bool(r["stale"]),
-                "missing": False,
-                "hidden": bool(r["hidden"]),
-                "location": r["location_name"],
-                "locationId": r["location_id"],
-            }
-        )
+        if r["file_type_high"] == "folder":
+            items.append(
+                {
+                    "id": f"fld-{abs(r['file_id'])}",
+                    "name": r["filename"],
+                    "type": "folder",
+                    "size": r["file_size"],
+                    "fileCount": r["file_count"],
+                    "dups": r["dup_count"],
+                    "date": None,
+                    "location": r["location_name"],
+                    "locationId": r["location_id"],
+                }
+            )
+        else:
+            items.append(
+                {
+                    "id": r["file_id"],
+                    "name": r["filename"],
+                    "typeHigh": r["file_type_high"],
+                    "typeLow": r["file_type_low"],
+                    "size": r["file_size"],
+                    "date": r["modified_date"],
+                    "dups": r["dup_count"],
+                    "hashStrong": r["hash_strong"],
+                    "hashFast": r["hash_fast"],
+                    "stale": bool(r["stale"]),
+                    "missing": False,
+                    "hidden": bool(r["hidden"]),
+                    "location": r["location_name"],
+                    "locationId": r["location_id"],
+                }
+            )
 
-    return items, total
+    return items, total, folder_total
 
 
 def _escape_like(value: str) -> str:
@@ -273,6 +318,122 @@ def parse_size(value: str) -> int | None:
     return int(num * multipliers[unit])
 
 
+async def _build_folder_insert_data(
+    *,
+    show_hidden,
+    scope_frag,
+    scope_params,
+    name=None,
+    name_match="anywhere",
+    size_min_bytes=None,
+    size_max_bytes=None,
+    min_dups_val=None,
+    max_dups_val=None,
+    min_files_val=None,
+    max_files_val=None,
+):
+    """Query folders matching filters and return insert tuples for the search DB.
+
+    Uses a dedicated connection with stats.db attached so folder stats
+    (file_count, total_size, duplicate_count) come from the stats database,
+    not the catalog's unpopulated columns.
+    """
+    folder_conds = []
+    folder_params = list(scope_params) if scope_frag else []
+    if scope_frag:
+        folder_conds.append(scope_frag)
+    if not show_hidden:
+        folder_conds.append("fld.hidden = 0")
+
+    if name:
+        if name_match == "wildcard":
+            escaped = _escape_like(name)
+            folder_pattern = escaped.replace("*", "%").replace("?", "_")
+            folder_conds.append("fld.name LIKE ? ESCAPE '\\'")
+        elif name_match == "exact":
+            folder_pattern = name
+            folder_conds.append("fld.name = ?")
+        else:
+            escaped = _escape_like(name)
+            folder_match_map = {
+                "starts": f"{escaped}%",
+                "ends": f"%{escaped}",
+            }
+            folder_pattern = folder_match_map.get(name_match, f"%{escaped}%")
+            folder_conds.append("fld.name LIKE ? ESCAPE '\\'")
+        folder_params.append(folder_pattern)
+
+    if size_min_bytes is not None:
+        folder_conds.append("COALESCE(fs.total_size, 0) >= ?")
+        folder_params.append(size_min_bytes)
+    if size_max_bytes is not None:
+        folder_conds.append("COALESCE(fs.total_size, 0) <= ?")
+        folder_params.append(size_max_bytes)
+    if min_dups_val is not None:
+        folder_conds.append("COALESCE(fs.duplicate_count, 0) >= ?")
+        folder_params.append(min_dups_val)
+    if max_dups_val is not None:
+        folder_conds.append("COALESCE(fs.duplicate_count, 0) <= ?")
+        folder_params.append(max_dups_val)
+    if min_files_val is not None:
+        folder_conds.append("COALESCE(fs.file_count, 0) >= ?")
+        folder_params.append(min_files_val)
+    if max_files_val is not None:
+        folder_conds.append("COALESCE(fs.file_count, 0) <= ?")
+        folder_params.append(max_files_val)
+
+    has_filter = (
+        name
+        or size_min_bytes is not None
+        or size_max_bytes is not None
+        or min_dups_val is not None
+        or max_dups_val is not None
+        or min_files_val is not None
+        or max_files_val is not None
+    )
+    if not has_filter:
+        return []
+
+    folder_where = " AND ".join(folder_conds) if folder_conds else "1=1"
+    conn = await open_connection()
+    try:
+        await conn.execute("ATTACH DATABASE ? AS stats", (str(_stats_db_path()),))
+        folder_rows = await conn.execute_fetchall(
+            f"""SELECT fld.id, fld.name, fld.location_id, l.name as location_name,
+                       COALESCE(fs.total_size, 0) as total_size,
+                       COALESCE(fs.file_count, 0) as file_count,
+                       COALESCE(fs.duplicate_count, 0) as duplicate_count,
+                       fld.hidden
+               FROM folders fld
+               JOIN locations l ON l.id = fld.location_id
+               LEFT JOIN stats.folder_stats fs ON fs.folder_id = fld.id
+               WHERE {folder_where}""",
+            folder_params,
+        )
+    finally:
+        await conn.close()
+
+    return [
+        (
+            -r["id"],
+            r["name"],
+            "folder",
+            None,
+            r["total_size"],
+            None,
+            0,
+            r["hidden"],
+            r["location_id"],
+            r["location_name"],
+            None,
+            None,
+            r["duplicate_count"],
+            r["file_count"],
+        )
+        for r in folder_rows
+    ]
+
+
 async def search_files(
     db,
     *,
@@ -289,6 +450,8 @@ async def search_files(
     dupes_only=False,
     min_dups=None,
     max_dups=None,
+    min_files=None,
+    max_files=None,
     hash_strong=None,
     include_folders=False,
     location_id=None,
@@ -373,21 +536,41 @@ async def search_files(
     if dupes_only:
         conditions.append("f.dup_count > 0")
 
+    min_dups_val = None
     if min_dups is not None:
         try:
-            min_dups_val = int(min_dups)
-            if min_dups_val > 0:
-                conditions.append("f.dup_count >= ?")
-                params.append(min_dups_val)
+            v = int(min_dups)
+            if v > 0:
+                min_dups_val = v
         except (ValueError, TypeError):
             pass
+    if min_dups_val is not None:
+        conditions.append("f.dup_count >= ?")
+        params.append(min_dups_val)
 
+    max_dups_val = None
     if max_dups is not None:
         try:
-            max_dups_val = int(max_dups)
-            if max_dups_val > 0:
-                conditions.append("f.dup_count <= ?")
-                params.append(max_dups_val)
+            v = int(max_dups)
+            if v > 0:
+                max_dups_val = v
+        except (ValueError, TypeError):
+            pass
+    if max_dups_val is not None:
+        conditions.append("f.dup_count <= ?")
+        params.append(max_dups_val)
+
+    # Parse file count values (folder-only filter)
+    min_files_val = None
+    if min_files is not None:
+        try:
+            min_files_val = int(min_files)
+        except (ValueError, TypeError):
+            pass
+    max_files_val = None
+    if max_files is not None:
+        try:
+            max_files_val = int(max_files)
         except (ValueError, TypeError):
             pass
 
@@ -412,92 +595,72 @@ async def search_files(
     global _search_id, _search_db_path
 
     total = 0
+    folder_total = 0
     items = []
-    if include_files:
-        # Check if we have a cached search DB
-        if (
-            search_id
-            and _search_id == search_id
-            and _search_db_path
-            and os.path.exists(_search_db_path)
-        ):
-            # Cache hit — page from existing search DB
-            items, total = await asyncio.to_thread(
-                _read_search_page, _search_db_path, sort, sort_dir, page
-            )
-        else:
-            # New search — kill any running search first
-            _cancel_active_search()
 
-            # Populate search DB
-            search_dir = _search_db_dir()
-            search_dir.mkdir(parents=True, exist_ok=True)
-            new_id = secrets.token_hex(8)
-            search_path = search_dir / f"search-{new_id}.db"
-
-            # Clean up old search DB
-            if _search_db_path and os.path.exists(_search_db_path):
-                try:
-                    os.unlink(_search_db_path)
-                except OSError:
-                    pass
-
-            total = await _populate_search_db(db, where, params, search_path)
-            _search_id = new_id
-            _search_db_path = search_path
-
-            # Read first page
-            items, total = await asyncio.to_thread(
-                _read_search_page, search_path, sort, sort_dir, page
-            )
-            search_id = new_id
-
-    # Folder search (name filter only)
-    folders = []
-    if include_folders and name:
-        if name_match == "wildcard":
-            escaped = _escape_like(name)
-            folder_pattern = escaped.replace("*", "%").replace("?", "_")
-            folder_cond = "fld.name LIKE ? ESCAPE '\\'"
-        elif name_match == "exact":
-            folder_pattern = name
-            folder_cond = "fld.name = ?"
-        else:
-            escaped = _escape_like(name)
-            folder_match = {
-                "starts": f"{escaped}%",
-                "ends": f"%{escaped}",
-            }
-            folder_pattern = folder_match.get(name_match, f"%{escaped}%")
-            folder_cond = "fld.name LIKE ? ESCAPE '\\'"
-        folder_hidden_filter = "" if show_hidden else " AND fld.hidden = 0"
-        folder_scope_prefix = f"{scope_folder_frag} AND " if scope_folder_frag else ""
-        folder_scope_params = list(scope_params) if scope_folder_frag else []
-        folder_rows = await db.execute_fetchall(
-            f"""SELECT fld.id, fld.name, fld.location_id, l.name as location_name
-               FROM folders fld
-               JOIN locations l ON l.id = fld.location_id
-               WHERE {folder_scope_prefix}{folder_cond}{folder_hidden_filter}
-               ORDER BY fld.name
-               LIMIT ?""",
-            folder_scope_params + [folder_pattern, PAGE_SIZE],
+    # Cache check — files + folders are both in the cached DB
+    if (
+        search_id
+        and _search_id == search_id
+        and _search_db_path
+        and os.path.exists(_search_db_path)
+    ):
+        items, total, folder_total = await asyncio.to_thread(
+            _read_search_page, _search_db_path, sort, sort_dir, page
         )
-        folders = [
-            {
-                "id": f"fld-{r['id']}",
-                "name": r["name"],
-                "type": "folder",
-                "size": None,
-                "date": None,
-                "location": r["location_name"],
-            }
-            for r in folder_rows
-        ]
+    elif include_files or include_folders:
+        _cancel_active_search()
+
+        search_dir = _search_db_dir()
+        search_dir.mkdir(parents=True, exist_ok=True)
+        new_id = secrets.token_hex(8)
+        search_path = search_dir / f"search-{new_id}.db"
+
+        if _search_db_path and os.path.exists(_search_db_path):
+            try:
+                os.unlink(_search_db_path)
+            except OSError:
+                pass
+
+        # Populate with file results
+        if include_files:
+            await _populate_search_db(db, where, params, search_path)
+        else:
+            await asyncio.to_thread(_create_empty_search_db, str(search_path))
+
+        # Append folder results to the same search DB
+        if include_folders:
+            folder_insert = await _build_folder_insert_data(
+                show_hidden=show_hidden,
+                scope_frag=scope_folder_frag,
+                scope_params=scope_params,
+                name=name,
+                name_match=name_match,
+                size_min_bytes=size_min_bytes,
+                size_max_bytes=size_max_bytes,
+                min_dups_val=min_dups_val,
+                max_dups_val=max_dups_val,
+                min_files_val=min_files_val,
+                max_files_val=max_files_val,
+            )
+            if folder_insert:
+                await asyncio.to_thread(
+                    _append_folder_results, str(search_path), folder_insert
+                )
+
+        _search_id = new_id
+        _search_db_path = search_path
+        search_id = new_id
+
+        items, total, folder_total = await asyncio.to_thread(
+            _read_search_page, search_path, sort, sort_dir, page
+        )
 
     return {
         "items": items,
-        "folders": folders,
+        "folders": [],
         "total": total,
+        "folderTotal": folder_total,
         "page": page,
         "pageSize": PAGE_SIZE,
         "searchId": search_id,
@@ -522,7 +685,7 @@ def parse_conditions_from_params(params) -> list[dict]:
         if field in ("size",):
             cond["min"] = params.get(f"c{i}_min", "")
             cond["max"] = params.get(f"c{i}_max", "")
-        elif field in ("date", "duplicates"):
+        elif field in ("date", "duplicates", "files"):
             cond["from"] = params.get(f"c{i}_from", "")
             cond["to"] = params.get(f"c{i}_to", "")
         else:
@@ -657,7 +820,161 @@ def build_condition_sql(cond):
             return " AND ".join(frags), params
         return None, []
 
+    elif field == "files":
+        # File count — applies to folder queries only, not file queries
+        return None, []
+
     return None, []
+
+
+async def _build_adv_folder_insert_data(
+    *,
+    conditions,
+    show_hidden,
+    scope_frag,
+    scope_params,
+):
+    """Build folder insert data from advanced search conditions.
+
+    Uses a dedicated connection with stats.db attached for real folder stats.
+    """
+    folder_where_parts = []
+    folder_params = list(scope_params) if scope_frag else []
+    if scope_frag:
+        folder_where_parts.append(scope_frag)
+    if not show_hidden:
+        folder_where_parts.append("fld.hidden = 0")
+    has_folder_cond = False
+
+    for cond in conditions:
+        field = cond["field"]
+        op = cond["op"]
+
+        if field == "name":
+            value = cond.get("value", "")
+            if not value:
+                continue
+            has_folder_cond = True
+            match_mode = cond.get("match", "wildcard")
+            frag, cparams = _build_name_like(value, match_mode, "fld.name")
+            if op == "exclude":
+                folder_where_parts.append(f"NOT ({frag})")
+            else:
+                folder_where_parts.append(f"({frag})")
+            folder_params.extend(cparams)
+
+        elif field == "size":
+            min_val = cond.get("min", "")
+            max_val = cond.get("max", "")
+            min_bytes = parse_size(min_val) if min_val else None
+            max_bytes = parse_size(max_val) if max_val else None
+            if min_bytes is None and max_bytes is None:
+                continue
+            has_folder_cond = True
+            frags = []
+            if min_bytes is not None:
+                frags.append("COALESCE(fs.total_size, 0) >= ?")
+                folder_params.append(min_bytes)
+            if max_bytes is not None:
+                frags.append("COALESCE(fs.total_size, 0) <= ?")
+                folder_params.append(max_bytes)
+            combined = "(" + " AND ".join(frags) + ")"
+            if op == "exclude":
+                folder_where_parts.append(f"NOT {combined}")
+            else:
+                folder_where_parts.append(combined)
+
+        elif field == "duplicates":
+            frags = []
+            if cond.get("from"):
+                try:
+                    v = int(cond["from"])
+                    if v > 0:
+                        frags.append("COALESCE(fs.duplicate_count, 0) >= ?")
+                        folder_params.append(v)
+                except (ValueError, TypeError):
+                    pass
+            if cond.get("to"):
+                try:
+                    v = int(cond["to"])
+                    if v > 0:
+                        frags.append("COALESCE(fs.duplicate_count, 0) <= ?")
+                        folder_params.append(v)
+                except (ValueError, TypeError):
+                    pass
+            if not frags:
+                continue
+            has_folder_cond = True
+            combined = "(" + " AND ".join(frags) + ")"
+            if op == "exclude":
+                folder_where_parts.append(f"NOT {combined}")
+            else:
+                folder_where_parts.append(combined)
+
+        elif field == "files":
+            frags = []
+            if cond.get("from"):
+                try:
+                    frags.append("COALESCE(fs.file_count, 0) >= ?")
+                    folder_params.append(int(cond["from"]))
+                except (ValueError, TypeError):
+                    pass
+            if cond.get("to"):
+                try:
+                    frags.append("COALESCE(fs.file_count, 0) <= ?")
+                    folder_params.append(int(cond["to"]))
+                except (ValueError, TypeError):
+                    pass
+            if not frags:
+                continue
+            has_folder_cond = True
+            combined = "(" + " AND ".join(frags) + ")"
+            if op == "exclude":
+                folder_where_parts.append(f"NOT {combined}")
+            else:
+                folder_where_parts.append(combined)
+
+    if not has_folder_cond:
+        return []
+
+    folder_where = " AND ".join(folder_where_parts)
+    conn = await open_connection()
+    try:
+        await conn.execute("ATTACH DATABASE ? AS stats", (str(_stats_db_path()),))
+        folder_rows = await conn.execute_fetchall(
+            f"""SELECT fld.id, fld.name, fld.location_id, l.name as location_name,
+                       COALESCE(fs.total_size, 0) as total_size,
+                       COALESCE(fs.file_count, 0) as file_count,
+                       COALESCE(fs.duplicate_count, 0) as duplicate_count,
+                       fld.hidden
+               FROM folders fld
+               JOIN locations l ON l.id = fld.location_id
+               LEFT JOIN stats.folder_stats fs ON fs.folder_id = fld.id
+               WHERE {folder_where}""",
+            folder_params,
+        )
+    finally:
+        await conn.close()
+
+    return [
+        (
+            -r["id"],
+            r["name"],
+            "folder",
+            None,
+            r["total_size"],
+            None,
+            0,
+            r["hidden"],
+            r["location_id"],
+            r["location_name"],
+            None,
+            None,
+            r["duplicate_count"],
+            r["file_count"],
+        )
+        for r in folder_rows
+    ]
 
 
 async def search_files_advanced(
@@ -704,92 +1021,65 @@ async def search_files_advanced(
     global _search_id, _search_db_path
 
     total = 0
+    folder_total = 0
     items = []
-    if include_files:
-        if (
-            search_id
-            and _search_id == search_id
-            and _search_db_path
-            and os.path.exists(_search_db_path)
-        ):
-            items, total = await asyncio.to_thread(
-                _read_search_page, _search_db_path, sort, sort_dir, page
-            )
+
+    # Cache check — files + folders are both in the cached DB
+    if (
+        search_id
+        and _search_id == search_id
+        and _search_db_path
+        and os.path.exists(_search_db_path)
+    ):
+        items, total, folder_total = await asyncio.to_thread(
+            _read_search_page, _search_db_path, sort, sort_dir, page
+        )
+    elif include_files or include_folders:
+        _cancel_active_search()
+
+        search_dir = _search_db_dir()
+        search_dir.mkdir(parents=True, exist_ok=True)
+        new_id = secrets.token_hex(8)
+        search_path = search_dir / f"search-{new_id}.db"
+
+        if _search_db_path and os.path.exists(_search_db_path):
+            try:
+                os.unlink(_search_db_path)
+            except OSError:
+                pass
+
+        # Populate with file results
+        if include_files:
+            await _populate_search_db(db, where, where_params, search_path)
         else:
-            # Kill any running search first
-            _cancel_active_search()
+            await asyncio.to_thread(_create_empty_search_db, str(search_path))
 
-            search_dir = _search_db_dir()
-            search_dir.mkdir(parents=True, exist_ok=True)
-            new_id = secrets.token_hex(8)
-            search_path = search_dir / f"search-{new_id}.db"
-
-            if _search_db_path and os.path.exists(_search_db_path):
-                try:
-                    os.unlink(_search_db_path)
-                except OSError:
-                    pass
-
-            total = await _populate_search_db(db, where, where_params, search_path)
-            _search_id = new_id
-            _search_db_path = search_path
-            items, total = await asyncio.to_thread(
-                _read_search_page, search_path, sort, sort_dir, page
+        # Append folder results — build WHERE from applicable conditions
+        if include_folders:
+            folder_insert = await _build_adv_folder_insert_data(
+                conditions=conditions,
+                show_hidden=show_hidden,
+                scope_frag=scope_folder_frag,
+                scope_params=scope_params,
             )
-            search_id = new_id
+            if folder_insert:
+                await asyncio.to_thread(
+                    _append_folder_results, str(search_path), folder_insert
+                )
 
-    # Folder search — apply name conditions to folder name
-    folders = []
-    if include_folders:
-        folder_where_parts = []
-        folder_params = list(scope_params) if scope_folder_frag else []
-        if scope_folder_frag:
-            folder_where_parts.append(scope_folder_frag)
-        if not show_hidden:
-            folder_where_parts.append("fld.hidden = 0")
-        has_name_cond = False
-        for cond in conditions:
-            if cond["field"] != "name":
-                continue
-            value = cond.get("value", "")
-            if not value:
-                continue
-            has_name_cond = True
-            match_mode = cond.get("match", "wildcard")
-            frag, params = _build_name_like(value, match_mode, "fld.name")
-            if cond["op"] == "exclude":
-                folder_where_parts.append(f"NOT ({frag})")
-            else:
-                folder_where_parts.append(f"({frag})")
-            folder_params.extend(params)
+        _search_id = new_id
+        _search_db_path = search_path
+        search_id = new_id
 
-        if has_name_cond and folder_where_parts:
-            folder_where = " AND ".join(folder_where_parts)
-            folder_rows = await db.execute_fetchall(
-                f"""SELECT fld.id, fld.name, fld.location_id, l.name as location_name
-                   FROM folders fld
-                   JOIN locations l ON l.id = fld.location_id
-                   WHERE {folder_where}
-                   ORDER BY fld.name
-                   LIMIT ?""",
-                folder_params + [PAGE_SIZE],
-            )
-            folders = [
-                {
-                    "id": f"fld-{r['id']}",
-                    "name": r["name"],
-                    "type": "folder",
-                    "size": None,
-                    "date": None,
-                    "location": r["location_name"],
-                }
-                for r in folder_rows
-            ]
+        items, total, folder_total = await asyncio.to_thread(
+            _read_search_page, search_path, sort, sort_dir, page
+        )
 
     return {
         "items": items,
-        "folders": folders,
+        "folders": [],
         "total": total,
+        "folderTotal": folder_total,
         "page": page,
         "pageSize": PAGE_SIZE,
         "searchId": search_id,

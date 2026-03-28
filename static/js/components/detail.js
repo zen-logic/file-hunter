@@ -1862,7 +1862,8 @@ const Detail = {
     renderSearchResults(data, searchParams) {
         this._renderGen++;
         this._lastDetail = null;
-        const folderCount = (data.folders || []).length;
+        const folderCount = data.folderTotal || 0;
+        const fileCount = data.total - folderCount;
         const folderField = folderCount > 0 ? `
                 <div class="detail-field">
                     <span class="label">Folders</span>
@@ -1885,7 +1886,7 @@ const Detail = {
                 <h3>Summary</h3>
                 <div class="detail-field">
                     <span class="label">Files</span>
-                    <span class="value">${data.total.toLocaleString()}</span>
+                    <span class="value">${fileCount.toLocaleString()}</span>
                 </div>${folderField}
             </div>
             ${mediaBtns}

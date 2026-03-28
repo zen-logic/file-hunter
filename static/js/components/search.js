@@ -12,6 +12,7 @@ const FIELD_OPTIONS = [
     { value: 'date', label: 'Date' },
     { value: 'folder', label: 'Folder name' },
     { value: 'duplicates', label: 'Duplicates' },
+    { value: 'files', label: 'File count' },
 ];
 
 const MATCH_OPTIONS = [
@@ -68,6 +69,11 @@ const Search = {
             });
         });
 
+        // Show/hide file count row when Include folders is toggled
+        document.getElementById('search-folders').addEventListener('change', (e) => {
+            document.getElementById('search-files-row').classList.toggle('hidden', !e.target.checked);
+        });
+
         this._updateSearchBtn();
         this._initAdvanced();
         this._initSavedSearches();
@@ -94,6 +100,7 @@ const Search = {
         document.getElementById('search-basic').querySelectorAll('select').forEach(el => el.selectedIndex = 0);
         document.getElementById('search-files').checked = true;
         document.getElementById('search-folders').checked = false;
+        document.getElementById('search-files-row').classList.add('hidden');
         document.getElementById('search-dupes').checked = false;
         // Clear advanced
         this._clearAdvanced();
@@ -135,6 +142,8 @@ const Search = {
             sizeMax: document.getElementById('search-size-max').value.trim(),
             minDups: document.getElementById('search-min-dups').value.trim(),
             maxDups: document.getElementById('search-max-dups').value.trim(),
+            minFiles: document.getElementById('search-min-files').value.trim(),
+            maxFiles: document.getElementById('search-max-files').value.trim(),
             dateFrom: document.getElementById('search-date-from').value,
             dateTo: document.getElementById('search-date-to').value,
             files: document.getElementById('search-files').checked,
@@ -152,7 +161,8 @@ const Search = {
         if (this.mode === 'advanced') return this._hasAdvancedFilters();
         const v = this._getValues();
         return v.name || v.type || v.description || v.tags ||
-               v.sizeMin || v.sizeMax || v.minDups || v.maxDups || v.dateFrom || v.dateTo || v.dupes || v.folders;
+               v.sizeMin || v.sizeMax || v.minDups || v.maxDups ||
+               v.minFiles || v.maxFiles || v.dateFrom || v.dateTo || v.dupes || v.folders;
     },
 
     _updateSearchBtn() {
@@ -181,6 +191,7 @@ const Search = {
         document.getElementById('search-basic').querySelectorAll('select').forEach(el => el.selectedIndex = 0);
         document.getElementById('search-files').checked = true;
         document.getElementById('search-folders').checked = false;
+        document.getElementById('search-files-row').classList.add('hidden');
         document.getElementById('search-dupes').checked = false;
         document.getElementById('search-scope-check').checked = false;
         this._updateSearchBtn();
@@ -420,12 +431,13 @@ const Search = {
                 from.focus();
                 break;
             }
-            case 'duplicates': {
+            case 'duplicates':
+            case 'files': {
                 const from = document.createElement('input');
                 from.type = 'number';
                 from.className = 'search-input search-input-sm';
                 from.placeholder = 'Min';
-                from.min = '1';
+                from.min = field === 'files' ? '0' : '1';
                 from.dataset.role = 'from';
                 container.appendChild(from);
                 const sep = document.createElement('span');
@@ -436,7 +448,7 @@ const Search = {
                 to.type = 'number';
                 to.className = 'search-input search-input-sm';
                 to.placeholder = 'Max';
-                to.min = '1';
+                to.min = field === 'files' ? '0' : '1';
                 to.dataset.role = 'to';
                 container.appendChild(to);
                 bind();
@@ -467,7 +479,8 @@ const Search = {
                     if (matchEl) entry.match = matchEl.value;
                     break;
                 }
-                case 'duplicates': {
+                case 'duplicates':
+                case 'files': {
                     entry.from = (inputs.querySelector('[data-role="from"]')?.value || '').trim();
                     entry.to = (inputs.querySelector('[data-role="to"]')?.value || '').trim();
                     break;
@@ -511,7 +524,7 @@ const Search = {
         const conds = this._readConditionValues();
         return conds.some(c => {
             if (c.field === 'size') return c.min || c.max;
-            if (c.field === 'date') return c.from || c.to;
+            if (c.field === 'date' || c.field === 'duplicates' || c.field === 'files') return c.from || c.to;
             return c.value;
         });
     },
@@ -617,7 +630,9 @@ const Search = {
                             if (maxEl && c.max) maxEl.value = c.max;
                             break;
                         }
-                        case 'date': {
+                        case 'date':
+                        case 'duplicates':
+                        case 'files': {
                             const fromEl = inputsDiv.querySelector('[data-role="from"]');
                             const toEl = inputsDiv.querySelector('[data-role="to"]');
                             if (fromEl && c.from) fromEl.value = c.from;
@@ -657,8 +672,13 @@ const Search = {
             if (params.maxDups) document.getElementById('search-max-dups').value = params.maxDups;
             if (params.dateFrom) document.getElementById('search-date-from').value = params.dateFrom;
             if (params.dateTo) document.getElementById('search-date-to').value = params.dateTo;
+            if (params.minFiles) document.getElementById('search-min-files').value = params.minFiles;
+            if (params.maxFiles) document.getElementById('search-max-files').value = params.maxFiles;
             if (params.files === false) document.getElementById('search-files').checked = false;
-            if (params.folders) document.getElementById('search-folders').checked = true;
+            if (params.folders) {
+                document.getElementById('search-folders').checked = true;
+                document.getElementById('search-files-row').classList.remove('hidden');
+            }
             if (params.dupes) document.getElementById('search-dupes').checked = true;
         }
 

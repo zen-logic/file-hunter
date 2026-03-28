@@ -171,6 +171,19 @@ body::after {
     flex: 0 1 8rem;
 }
 
+.search-range {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.search-range .search-input {
+    flex: 1;
+    min-width: 0;
+}
+
 .search-select {
     min-width: 8rem;
 }

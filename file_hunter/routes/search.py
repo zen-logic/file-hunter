@@ -84,6 +84,8 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
                 dupes_only=bool(request.query_params.get("dupes")),
                 min_dups=request.query_params.get("minDups"),
                 max_dups=request.query_params.get("maxDups"),
+                min_files=request.query_params.get("minFiles"),
+                max_files=request.query_params.get("maxFiles"),
                 include_folders=request.query_params.get("folders") == "true",
                 hash_strong=request.query_params.get("hash"),
                 location_id=location_id,

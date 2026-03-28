@@ -80,13 +80,27 @@
                 </div>
                 <div class="search-row">
                     <label class="search-label">Size</label>
-                    <input type="text" class="search-input search-input-sm" id="search-size-min" placeholder="e.g. 5MB">
-                    <span class="search-separator">&ndash;</span>
-                    <input type="text" class="search-input search-input-sm" id="search-size-max" placeholder="e.g. 1GB">
+                    <div class="search-range">
+                        <input type="text" class="search-input" id="search-size-min" placeholder="e.g. 5MB">
+                        <span class="search-separator">&ndash;</span>
+                        <input type="text" class="search-input" id="search-size-max" placeholder="e.g. 1GB">
+                    </div>
                     <label class="search-label">Dups</label>
-                    <input type="number" class="search-input search-input-sm" id="search-min-dups" placeholder="Min" min="1">
-                    <span class="search-separator">&ndash;</span>
-                    <input type="number" class="search-input search-input-sm" id="search-max-dups" placeholder="Max" min="1">
+                    <div class="search-range">
+                        <input type="number" class="search-input" id="search-min-dups" placeholder="Min" min="1">
+                        <span class="search-separator">&ndash;</span>
+                        <input type="number" class="search-input" id="search-max-dups" placeholder="Max" min="1">
+                    </div>
+                </div>
+                <div class="search-row hidden" id="search-files-row">
+                    <label class="search-label">Files</label>
+                    <div class="search-range">
+                        <input type="number" class="search-input" id="search-min-files" placeholder="Min" min="0">
+                        <span class="search-separator">&ndash;</span>
+                        <input type="number" class="search-input" id="search-max-files" placeholder="Max" min="0">
+                    </div>
+                    <label class="search-label"></label>
+                    <div class="search-range"></div>
                 </div>
                 <div class="search-row">
                     <label class="search-label">Date</label>
