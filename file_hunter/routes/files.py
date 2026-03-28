@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from starlette.requests import Request
+from starlette.responses import Response, StreamingResponse
 
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import read_db, db_writer, execute_write
@@ -26,7 +27,7 @@ from file_hunter.hashes_db import (
 )
 from file_hunter.services import fs
 from file_hunter.services.agent_ops import hash_partial_batch
-from file_hunter.services.batch import build_streaming_zip
+from file_hunter.services.zip_download import start_build, get_job, cleanup_job
 from file_hunter.services.content_proxy import fetch_agent_byte_range
 from file_hunter.services.deferred_ops import cancel_pending_op, queue_deferred_op
 from file_hunter.services.dup_counts import batch_dup_counts
@@ -118,8 +119,6 @@ async def file_content(request: Request):
 
 async def file_bytes(request: Request):
     """Return a slice of raw bytes from a file. For hex viewer paging."""
-    from starlette.responses import Response
-
     file_id = int(request.path_params["id"])
     async with read_db() as db:
         row = await db.execute(
@@ -547,7 +546,7 @@ async def _run_batch_rehash(file_ids: list[int]):
 
 
 async def folder_download(request: Request):
-    """GET /api/folders/{id:int}/download — download folder as ZIP."""
+    """POST /api/folders/{id:int}/download — start async ZIP build for a folder."""
     folder_id = int(request.path_params["id"])
 
     async with read_db() as db:
@@ -586,11 +585,15 @@ async def folder_download(request: Request):
             arc_name = arc_name[len(prefix) :]
         zip_files.append((f["full_path"], arc_name, location_id))
 
-    return await build_streaming_zip(zip_files, f"{folder_name}.zip")
+    if not zip_files:
+        return json_error("No files to download.")
+
+    job_id = await start_build(zip_files, f"{folder_name}.zip")
+    return json_ok({"jobId": job_id, "total": len(zip_files)})
 
 
 async def location_download(request: Request):
-    """GET /api/locations/{id:int}/download — download entire location as ZIP."""
+    """POST /api/locations/{id:int}/download — start async ZIP build for a location."""
     loc_id = int(request.path_params["id"])
 
     async with read_db() as db:
@@ -606,7 +609,48 @@ async def location_download(request: Request):
         )
 
     zip_files = [(f["full_path"], f["rel_path"], loc_id) for f in files]
-    return await build_streaming_zip(zip_files, f"{loc_name}.zip")
+
+    if not zip_files:
+        return json_error("No files to download.")
+
+    job_id = await start_build(zip_files, f"{loc_name}.zip")
+    return json_ok({"jobId": job_id, "total": len(zip_files)})
+
+
+async def zip_serve(request: Request):
+    """GET /api/zip/{job_id}/download — stream a built ZIP file to the browser."""
+    job_id = request.path_params["job_id"]
+    job = get_job(job_id)
+
+    if not job:
+        return json_error("Download not found or expired.", 404)
+    if job["status"] != "ready":
+        return json_error("ZIP is still building.", 409)
+
+    tmp_path = job["tmp_path"]
+    file_size = job["file_size"]
+    filename = job["filename"]
+    safe_name = filename.replace('"', '\\"')
+
+    async def _stream_and_cleanup():
+        try:
+            with open(tmp_path, "rb") as f:
+                while True:
+                    chunk = f.read(1048576)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            cleanup_job(job_id)
+
+    return StreamingResponse(
+        _stream_and_cleanup(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "Content-Length": str(file_size),
+        },
+    )
 
 
 async def file_move(request: Request):

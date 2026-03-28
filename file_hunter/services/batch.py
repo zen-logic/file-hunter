@@ -1,16 +1,9 @@
 """Batch operations — delete, move, tag, and download multiple items."""
 
-import os
-import tempfile
-import zipfile
-
-from starlette.responses import StreamingResponse
-
 from file_hunter.hashes_db import get_file_hashes, read_hashes, remove_file_hashes
 from file_hunter.helpers import parse_prefixed_id, post_op_stats
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
-from file_hunter.services.content_proxy import stream_agent_file
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.delete import delete_folder
 from file_hunter.services.files import move_file, update_file
@@ -472,49 +465,3 @@ async def batch_collect_files(
             all_files.append((f["full_path"], arc_name, folder_loc_id))
 
     return all_files
-
-
-async def build_streaming_zip(files, zip_name):
-    """Build a ZIP from [(full_path, arc_name, location_id)] and return a StreamingResponse.
-
-    Each file is streamed from its agent in chunks and written to the ZIP entry
-    incrementally. The ZIP is built in a temp file to avoid accumulating the
-    entire archive in memory.
-    """
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip")
-    os.close(tmp_fd)
-
-    try:
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
-            for full_path, arc_name, loc_id in files:
-                async with stream_agent_file(full_path, loc_id) as chunks:
-                    if chunks is None:
-                        continue
-                    with zf.open(arc_name, "w", force_zip64=True) as entry:
-                        async for chunk in chunks:
-                            entry.write(chunk)
-    except Exception:
-        os.unlink(tmp_path)
-        raise
-
-    file_size = os.path.getsize(tmp_path)
-
-    async def _stream_and_cleanup():
-        try:
-            with open(tmp_path, "rb") as f:
-                while True:
-                    chunk = f.read(1048576)
-                    if not chunk:
-                        break
-                    yield chunk
-        finally:
-            os.unlink(tmp_path)
-
-    return StreamingResponse(
-        _stream_and_cleanup(),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{zip_name}"',
-            "Content-Length": str(file_size),
-        },
-    )

@@ -146,34 +146,24 @@ function wireDownloadZipBtn(node) {
             const isLoc = String(target.id).startsWith('loc-');
             const numId = String(target.id).replace(/^(loc-|fld-)/, '');
             const url = isLoc ? `/api/locations/${numId}/download` : `/api/folders/${numId}/download`;
-            const dlHeaders = {};
-            const dlToken = localStorage.getItem('fh-token');
-            if (dlToken) dlHeaders['Authorization'] = `Bearer ${dlToken}`;
             btn.disabled = true;
-            const origText = btn.textContent;
-            btn.textContent = 'Downloading\u2026';
-            try {
-                const resp = await fetch(url, { headers: dlHeaders });
-                if (resp.ok) {
-                    const blob = await resp.blob();
-                    const blobUrl = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = blobUrl;
-                    // Extract filename from Content-Disposition header
-                    const cd = resp.headers.get('Content-Disposition') || '';
-                    const m = cd.match(/filename="(.+?)"/);
-                    a.download = m ? m[1] : 'download.zip';
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(blobUrl);
-                }
-            } catch { /* ignore */ }
-            btn.disabled = false;
-            btn.textContent = origText;
+            btn.textContent = 'Building ZIP\u2026';
+            const resp = await API.post(url);
+            if (resp.ok) {
+                _pendingZipBtn = btn;
+                _pendingZipOrigText = 'Download ZIP';
+                Toast.info(`Building ZIP: ${target.label || 'download'}`);
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Download ZIP';
+                Toast.error(resp.data?.detail || 'Download failed.');
+            }
         });
     }
 }
+
+let _pendingZipBtn = null;
+let _pendingZipOrigText = 'Download ZIP';
 
 function wireRenameFileBtn() {
     const btn = document.getElementById('detail-rename-file');
@@ -306,34 +296,17 @@ function wireBatchActions(items) {
     if (downloadBtn) {
         downloadBtn.addEventListener('click', async () => {
             downloadBtn.disabled = true;
-            downloadBtn.textContent = 'Downloading\u2026';
-            try {
-                const batchHeaders = { 'Content-Type': 'application/json' };
-                const batchToken = localStorage.getItem('fh-token');
-                if (batchToken) batchHeaders['Authorization'] = `Bearer ${batchToken}`;
-                const resp = await fetch('/api/batch/download', {
-                    method: 'POST',
-                    headers: batchHeaders,
-                    body: JSON.stringify({ file_ids: fileIds, folder_ids: folderIds }),
-                });
-                if (resp.ok) {
-                    const blob = await resp.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = FileList._searchMode ? 'file-hunter-search.zip' : 'file-hunter-selection.zip';
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(url);
-                } else {
-                    Toast.error('Download failed.');
-                }
-            } catch {
-                Toast.error('Download failed.');
+            downloadBtn.textContent = 'Building ZIP\u2026';
+            const resp = await API.post('/api/batch/download', { file_ids: fileIds, folder_ids: folderIds });
+            if (resp.ok) {
+                _pendingZipBtn = downloadBtn;
+                _pendingZipOrigText = 'Download ZIP';
+                Toast.info('Building ZIP...');
+            } else {
+                downloadBtn.disabled = false;
+                downloadBtn.textContent = 'Download ZIP';
+                Toast.error(resp.data?.detail || 'Download failed.');
             }
-            downloadBtn.disabled = false;
-            downloadBtn.textContent = 'Download ZIP';
         });
     }
 
@@ -1638,6 +1611,52 @@ WS.on('status_bar_idle', () => {
     // Server explicitly requests idle — clear all ops
     Activity._ops.clear();
     Activity._render();
+});
+
+// --- ZIP download (async build) ---
+
+WS.on('zip_progress', (msg) => {
+    Activity.progress('zip-' + msg.jobId, {
+        label: `Building ZIP: ${msg.filename}`,
+        detail: `${msg.done}/${msg.total} files`,
+    });
+    if (_pendingZipBtn) {
+        _pendingZipBtn.textContent = `Building ZIP\u2026 ${msg.done}/${msg.total}`;
+    }
+});
+
+WS.on('zip_ready', (msg) => {
+    Activity.completed('zip-' + msg.jobId, {
+        log: `ZIP ready: <b>${msg.filename}</b>`,
+    });
+    Toast.success(`ZIP ready: ${msg.filename}`);
+    // Trigger download via direct link
+    const token = localStorage.getItem('fh-token');
+    let url = `/api/zip/${msg.jobId}/download`;
+    if (token) url += `?token=${encodeURIComponent(token)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = msg.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    if (_pendingZipBtn) {
+        _pendingZipBtn.disabled = false;
+        _pendingZipBtn.textContent = _pendingZipOrigText;
+        _pendingZipBtn = null;
+    }
+});
+
+WS.on('zip_error', (msg) => {
+    Activity.error('zip-' + msg.jobId, {
+        log: `ZIP build failed: <b>${msg.filename}</b>`,
+    });
+    Toast.error(`ZIP build failed: ${msg.filename}`);
+    if (_pendingZipBtn) {
+        _pendingZipBtn.disabled = false;
+        _pendingZipBtn.textContent = _pendingZipOrigText;
+        _pendingZipBtn = null;
+    }
 });
 
 WS.on('batch_moved', async (msg) => {

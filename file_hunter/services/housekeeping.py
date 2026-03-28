@@ -359,7 +359,9 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
         await hconn.close()
 
     if not rows:
-        logger.info("Housekeeping dup candidates: no unprocessed files for %s", location_name)
+        logger.info(
+            "Housekeeping dup candidates: no unprocessed files for %s", location_name
+        )
         return
 
     file_ids = [r["file_id"] for r in rows]
@@ -370,8 +372,11 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
     )
 
     await post_ingest_dup_processing(
-        location_id, agent_id, location_name,
-        file_ids=file_ids, broadcast_scan_progress=False,
+        location_id,
+        agent_id,
+        location_name,
+        file_ids=file_ids,
+        broadcast_scan_progress=False,
     )
 
 

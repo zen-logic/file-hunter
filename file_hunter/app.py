@@ -38,6 +38,7 @@ from file_hunter.routes.files import (
     file_cancel_pending,
     folder_download,
     location_download,
+    zip_serve,
     folder_delete,
     folder_dup_exclude,
     dup_exclude_progress,
@@ -280,7 +281,7 @@ app = Starlette(
         Route("/api/restart", restart_server, methods=["POST"]),
         Route("/api/locations", list_locations, methods=["GET"]),
         Route("/api/locations", add_location, methods=["POST"]),
-        Route("/api/locations/{id:int}/download", location_download, methods=["GET"]),
+        Route("/api/locations/{id:int}/download", location_download, methods=["POST"]),
         Route("/api/locations/{id}", update_location, methods=["PATCH"]),
         Route("/api/locations/{id}", remove_location, methods=["DELETE"]),
         Route("/api/treemap/{id:int}", treemap_data, methods=["GET"]),
@@ -301,7 +302,7 @@ app = Starlette(
         ),
         Route("/api/files/{id:int}", file_delete, methods=["DELETE"]),
         Route("/api/folders", create_new_folder, methods=["POST"]),
-        Route("/api/folders/{id:int}/download", folder_download, methods=["GET"]),
+        Route("/api/folders/{id:int}/download", folder_download, methods=["POST"]),
         Route("/api/folders/{id:int}/move", folder_move, methods=["POST"]),
         Route(
             "/api/folders/{id:int}/dup-exclude", folder_dup_exclude, methods=["POST"]
@@ -329,6 +330,7 @@ app = Starlette(
         Route("/api/batch/move", batch_move_route, methods=["POST"]),
         Route("/api/batch/tag", batch_tag_route, methods=["POST"]),
         Route("/api/batch/download", batch_download_route, methods=["POST"]),
+        Route("/api/zip/{job_id}/download", zip_serve, methods=["GET"]),
         Route("/api/ignore", list_ignore_rules, methods=["GET"]),
         Route("/api/ignore", create_ignore_rule, methods=["POST"]),
         Route("/api/ignore/check", check_ignore, methods=["GET"]),

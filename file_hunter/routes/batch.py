@@ -8,8 +8,8 @@ from file_hunter.services.batch import (
     batch_move,
     batch_tag,
     batch_collect_files,
-    build_streaming_zip,
 )
+from file_hunter.services.zip_download import start_build
 from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
 
@@ -84,7 +84,7 @@ async def batch_tag_route(request: Request):
 
 
 async def batch_download_route(request: Request):
-    """POST /api/batch/download — download selected items as ZIP."""
+    """POST /api/batch/download — start async ZIP build for selected items."""
     body = await request.json()
     file_ids = body.get("file_ids", [])
     folder_ids = body.get("folder_ids", [])
@@ -94,4 +94,9 @@ async def batch_download_route(request: Request):
 
     async with read_db() as db:
         files = await batch_collect_files(db, file_ids, folder_ids)
-    return await build_streaming_zip(files, "file-hunter-selection.zip")
+
+    if not files:
+        return json_error("No files to download.")
+
+    job_id = await start_build(files, "file-hunter-selection.zip")
+    return json_ok({"jobId": job_id, "total": len(files)})
