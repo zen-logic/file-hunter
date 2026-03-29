@@ -9,6 +9,7 @@ from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import hashes_writer, read_hashes, remove_file_hashes
 from file_hunter.helpers import (
     get_effective_hash,
+    get_effective_hashes,
     parse_folder_id,
     parse_mtime,
     parse_prefixed_id,
@@ -191,10 +192,35 @@ async def run_consolidation(
 
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+        # Merge tags and find earliest modified_date across all copies
+        all_tags: set[str] = set()
+        earliest_modified = None
+        for copy in all_copies:
+            raw = copy.get("tags") or ""
+            for t in raw.split(","):
+                t = t.strip()
+                if t:
+                    all_tags.add(t)
+            md = copy.get("modified_date")
+            if md and (earliest_modified is None or md < earliest_modified):
+                earliest_modified = md
+        merged_tags = ",".join(sorted(all_tags))
+
         if mode == "keep_here":
             canonical_path = selected["full_path"]
             canonical_id = file_id
             dest_loc_id = selected_loc_id
+
+            # Apply merged tags and earliest modified_date to canonical
+            async with db_writer() as wdb:
+                await wdb.execute(
+                    "UPDATE files SET tags = ?, modified_date = ? WHERE id = ?",
+                    (
+                        merged_tags,
+                        earliest_modified or selected["modified_date"],
+                        canonical_id,
+                    ),
+                )
 
             # Verify canonical exists
             if not await fs.file_exists(canonical_path, selected_loc_id):
@@ -253,6 +279,17 @@ async def run_consolidation(
                 # A copy already exists at the destination — promote it
                 canonical_path = existing_at_dest["full_path"]
                 canonical_id = existing_at_dest["id"]
+
+                # Apply merged tags and earliest modified_date
+                async with db_writer() as wdb:
+                    await wdb.execute(
+                        "UPDATE files SET tags = ?, modified_date = ? WHERE id = ?",
+                        (
+                            merged_tags,
+                            earliest_modified or existing_at_dest["modified_date"],
+                            canonical_id,
+                        ),
+                    )
             else:
                 canonical_path = await fs.unique_dest_path(dest_file_path, dest_loc_id)
                 # Update filename if collision rename happened
@@ -302,7 +339,9 @@ async def run_consolidation(
                         canonical_path,
                         dest_loc_id,
                         on_progress=_copy_progress,
-                        mtime=parse_mtime(selected["modified_date"]),
+                        mtime=parse_mtime(
+                            earliest_modified or selected["modified_date"]
+                        ),
                     )
                 except Exception as copy_exc:
                     # Clean up partial file at destination
@@ -336,6 +375,10 @@ async def run_consolidation(
                     return
 
                 selected["hash_fast"] = source_hash_fast
+                selected["tags"] = merged_tags
+                selected["modified_date"] = (
+                    earliest_modified or selected["modified_date"]
+                )
 
                 # Create DB record for the canonical copy at destination
                 canonical_id = await _ensure_canonical_record(
@@ -694,10 +737,24 @@ async def run_batch_consolidation(
 
     csv_path = await create_log(dest_dir, dest_loc_id, "consolidate")
 
+    # Deduplicate by effective hash — multiple IDs sharing a hash are the
+    # same file; consolidating the first one stubs the rest.
+    hash_map = await get_effective_hashes(file_ids)
+    seen_hashes: set[str] = set()
+    unique_ids: list[int] = []
+    for fid in file_ids:
+        eff_hash, _ = hash_map.get(fid, (None, None))
+        if eff_hash and eff_hash not in seen_hashes:
+            seen_hashes.add(eff_hash)
+            unique_ids.append(fid)
+        elif not eff_hash:
+            unique_ids.append(fid)
+
+    skipped = len(file_ids) - len(unique_ids)
     completed = 0
     errors = 0
 
-    for file_id in file_ids:
+    for file_id in unique_ids:
         try:
             await run_consolidation(
                 file_id,
@@ -725,6 +782,7 @@ async def run_batch_consolidation(
         {
             "type": "batch_consolidate_completed",
             "completed": completed,
+            "skipped": skipped,
             "errors": errors,
             "total": len(file_ids),
         }

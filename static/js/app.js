@@ -1728,10 +1728,13 @@ WS.on('consolidate_queue_drained', (msg) => {
 });
 
 WS.on('batch_consolidate_completed', async (msg) => {
+    const parts = [`${msg.completed} of ${msg.total} files`];
+    if (msg.skipped) parts.push(`${msg.skipped} duplicates skipped`);
+    const summary = parts.join(', ');
     Activity.completed('consolidate', {
-        log: `Batch consolidation completed: ${msg.completed} of ${msg.total} files`,
+        log: `Batch consolidation completed: ${summary}`,
     });
-    Toast.success(`Batch consolidation completed: ${msg.completed} of ${msg.total} files`);
+    Toast.success(`Batch consolidation completed: ${summary}`);
     await StatusBar.loadStats();
     await reloadTreeAndFileList();
     await refreshDetailPanel();
