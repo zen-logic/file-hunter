@@ -1,6 +1,7 @@
 import API from '../api.js';
 import ConfirmModal from './confirm.js';
 import Tree from './tree.js';
+import icons from '../icons.js';
 
 function _isScanning(locId) {
     return Tree._scanningLocations.has('loc-' + locId);
@@ -1681,6 +1682,7 @@ const Detail = {
             ${typeHtml ? `<div class="detail-section" data-stat="typeBreakdown"><h3>File Types</h3>${typeHtml}</div>` : ''}
             <div class="detail-section">
                 <div class="detail-btn-group">
+                    <button class="btn" id="detail-favourite" title="Toggle favourite"><span class="fav-icon">${s.favourite ? icons.heart : icons.heartOutline}</span></button>
                     <span id="detail-slideshow-slot"></span>
                     <button class="btn" id="detail-new-folder"${_disabledIf(!s.online, _isScanning(locId))}>New Folder</button>
                     <button class="btn" id="detail-download-zip"${s.online ? '' : ' disabled title="Location is offline"'}>Download ZIP</button>
@@ -1761,6 +1763,7 @@ const Detail = {
             <div class="detail-section">
                 <div class="detail-btn-group">
                     ${(() => { const loc = String(s.locationId).replace('loc-',''); const sc = _isScanning(loc); const off = s.locationOnline === false; const miss = s.online === false; return `
+                    <button class="btn" id="detail-favourite" title="Toggle favourite"><span class="fav-icon">${s.favourite ? icons.heart : icons.heartOutline}</span></button>
                     <span id="detail-slideshow-slot"></span>
                     <button class="btn" id="detail-new-folder"${_disabledIf(off, sc, miss)}>New Folder</button>
                     <button class="btn" id="detail-download-zip"${_disabledIf(off, false, miss)}>Download ZIP</button>

@@ -297,3 +297,90 @@ async def folder_move(request: Request):
     )
 
     return json_ok(result)
+
+
+async def toggle_favourite(request: Request):
+    """POST /api/favourite/toggle — toggle is_favourite on a location or folder."""
+    body = await request.json()
+    prefixed_id = body.get("id", "")
+    if not prefixed_id:
+        return json_error("id is required.", 400)
+
+    if prefixed_id.startswith("loc-"):
+        table = "locations"
+        row_id = int(prefixed_id.replace("loc-", ""))
+    elif prefixed_id.startswith("fld-"):
+        table = "folders"
+        row_id = int(prefixed_id.replace("fld-", ""))
+    else:
+        return json_error("id must be loc-N or fld-N.", 400)
+
+    async with db_writer() as wdb:
+        rows = await wdb.execute_fetchall(
+            f"SELECT is_favourite FROM {table} WHERE id = ?", (row_id,)
+        )
+        if not rows:
+            return json_error("Not found.", 404)
+        new_val = 0 if rows[0]["is_favourite"] else 1
+        await wdb.execute(
+            f"UPDATE {table} SET is_favourite = ? WHERE id = ?", (new_val, row_id)
+        )
+
+    await broadcast(
+        {"type": "favourite_changed", "id": prefixed_id, "favourite": bool(new_val)}
+    )
+    return json_ok({"id": prefixed_id, "favourite": bool(new_val)})
+
+
+async def list_favourites(request: Request):
+    """GET /api/favourites — list all favourited locations and folders."""
+    from file_hunter.extensions import get_agent_label_prefixes
+
+    agent_prefixes = get_agent_label_prefixes()
+
+    async with read_db() as db:
+        locs = await db.execute_fetchall(
+            "SELECT id, name FROM locations WHERE is_favourite = 1 "
+            "ORDER BY name COLLATE NOCASE"
+        )
+        folders = await db.execute_fetchall(
+            """SELECT f.id, f.name, f.rel_path, f.location_id, l.name as location_name
+               FROM folders f
+               JOIN locations l ON l.id = f.location_id
+               WHERE f.is_favourite = 1
+               ORDER BY f.name COLLATE NOCASE"""
+        )
+
+    items = []
+    for loc in locs:
+        label = loc["name"]
+        agent_name = agent_prefixes.get(loc["id"])
+        if agent_name:
+            label = f"{agent_name} / {loc['name']}"
+        items.append(
+            {
+                "id": f"loc-{loc['id']}",
+                "name": loc["name"],
+                "type": "location",
+                "path": label,
+                "locationId": f"loc-{loc['id']}",
+            }
+        )
+    for f in folders:
+        loc_id = f["location_id"]
+        agent_name = agent_prefixes.get(loc_id)
+        parts = []
+        if agent_name:
+            parts.append(agent_name)
+        parts.append(f["location_name"])
+        parts.append(f["rel_path"])
+        items.append(
+            {
+                "id": f"fld-{f['id']}",
+                "name": f["name"],
+                "type": "folder",
+                "path": " / ".join(parts),
+                "locationId": f"loc-{loc_id}",
+            }
+        )
+    return json_ok(items)

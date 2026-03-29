@@ -572,6 +572,34 @@ body::after {
     color: var(--color-text-muted);
 }
 
+.tree-fav {
+    display: inline-block;
+    width: 0.75em;
+    height: 0.75em;
+    margin-left: 0.3rem;
+    vertical-align: -0.1em;
+    color: var(--color-status-error);
+}
+
+.tree-fav svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.fav-icon {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.15em;
+}
+
+.fav-icon svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
 .tree-capacity-bar {
     width: 3rem;
     height: 0.5rem;

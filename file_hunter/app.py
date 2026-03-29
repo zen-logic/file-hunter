@@ -22,6 +22,8 @@ from file_hunter.routes.locations import (
     tree_children,
     tree_expand,
     treemap_data,
+    toggle_favourite,
+    list_favourites,
 )
 from file_hunter.routes.files import (
     files_list,
@@ -287,6 +289,8 @@ app = Starlette(
         Route("/api/treemap/{id:int}", treemap_data, methods=["GET"]),
         Route("/api/tree/children", tree_children, methods=["GET"]),
         Route("/api/tree/expand", tree_expand, methods=["GET"]),
+        Route("/api/favourite/toggle", toggle_favourite, methods=["POST"]),
+        Route("/api/favourites", list_favourites, methods=["GET"]),
         Route("/api/files/dup-counts", file_dup_counts, methods=["POST"]),
         Route("/api/files", files_list, methods=["GET"]),
         Route("/api/files/{id:int}/content", file_content, methods=["GET"]),

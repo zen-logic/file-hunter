@@ -238,6 +238,27 @@ const Tree = {
         }
     },
 
+    setFavourite(nodeId, favourite) {
+        const node = this._findNode(nodeId);
+        if (node) node.favourite = favourite;
+
+        const el = this._findItemEl(nodeId);
+        if (!el) return;
+
+        // Update or add/remove the favourite badge
+        const label = el.querySelector('.tree-label');
+        if (!label) return;
+        const existing = label.querySelector('.tree-fav');
+        if (favourite && !existing) {
+            const fav = document.createElement('span');
+            fav.className = 'tree-fav';
+            fav.innerHTML = icons.heart;
+            label.appendChild(fav);
+        } else if (!favourite && existing) {
+            existing.remove();
+        }
+    },
+
     _updateCapacityBar(el, node) {
         const meta = el.querySelector('.tree-location-meta');
         if (!meta) return;
@@ -721,6 +742,12 @@ const Tree = {
         const label = document.createElement('span');
         label.className = 'tree-label';
         label.textContent = node.label;
+        if (node.favourite) {
+            const fav = document.createElement('span');
+            fav.className = 'tree-fav';
+            fav.innerHTML = icons.heart;
+            label.appendChild(fav);
+        }
         item.appendChild(label);
 
         // scanning/queued badge on the name line

@@ -71,6 +71,7 @@ const FileList = {
     _searchMode: false,
     _searchParams: null,
     _dupGroupMode: false,
+    _favouritesMode: false,
     _searchId: null,
     _ac: null,
     pendingFocusFile: null,
@@ -109,7 +110,7 @@ const FileList = {
         // Mount triage bar between breadcrumb and file content
         Triage.mount(this.el.parentElement, this.el);
 
-        this.renderEmpty();
+        this.renderFavourites();
     },
 
     // ── Selection helpers ──
@@ -418,9 +419,47 @@ const FileList = {
         this._searchMode = false;
         this._searchParams = null;
         this._dupGroupMode = false;
+        this._favouritesMode = false;
         this._clearSelection();
         this.breadcrumbEl.innerHTML = '';
         this.el.innerHTML = '<div class="panel-body" style="padding: 1rem; color: var(--color-text-placeholder);">Select a folder to view files.</div>';
+    },
+
+    async renderFavourites() {
+        this.currentItems = null;
+        this.currentFolder = null;
+        this.currentBreadcrumb = null;
+        this.totalFiles = 0;
+        this.currentPage = 0;
+        this._searchMode = false;
+        this._searchParams = null;
+        this._dupGroupMode = false;
+        this._clearSelection();
+        this.breadcrumbEl.innerHTML = '';
+
+        let res;
+        try {
+            res = await API.get('/api/favourites');
+        } catch (_) {
+            this.renderEmpty();
+            return;
+        }
+
+        const items = res.ok ? res.data : [];
+        if (items.length === 0) {
+            this.renderEmpty();
+            return;
+        }
+
+        this._favouritesMode = true;
+        this.currentFolders = items.map(item => ({
+            id: item.id,
+            name: item.name,
+            type: 'folder',
+            location: item.path,
+            locationId: item.locationId,
+        }));
+        this._renderContent();
     },
 
     showLoading() {
@@ -580,6 +619,7 @@ const FileList = {
         this._searchMode = false;
         this._searchParams = null;
         this._dupGroupMode = false;
+        this._favouritesMode = false;
 
         await this._fetchFolder(focusFileId);
     },
@@ -815,7 +855,9 @@ const FileList = {
             const pendingHtml = file.pendingOp
                 ? `<span class="pending-indicator">pending ${file.pendingOp}</span>`
                 : '';
-            const locLabel = (file.locationId && Tree.getLocationLabel(file.locationId)) || file.location;
+            const locLabel = this._favouritesMode
+                ? file.location
+                : (file.locationId && Tree.getLocationLabel(file.locationId)) || file.location;
             const locHtml = locLabel
                 ? `<span class="file-location-label">${locLabel}</span>`
                 : '';

@@ -332,7 +332,7 @@ async def get_location_stats(db, location_id: int):
         # dateLastScanned and schedule fields change after scans without affecting stats
         live_row = await db.execute_fetchall(
             "SELECT date_last_scanned, scan_schedule_enabled, scan_schedule_days, "
-            "scan_schedule_time, scan_schedule_last_run "
+            "scan_schedule_time, scan_schedule_last_run, is_favourite "
             "FROM locations WHERE id = ?",
             (location_id,),
         )
@@ -350,6 +350,7 @@ async def get_location_stats(db, location_id: int):
                 "scheduleDays": sched_days,
                 "scheduleTime": lr["scan_schedule_time"] or "03:00",
                 "scheduleLastRun": lr["scan_schedule_last_run"],
+                "favourite": bool(lr["is_favourite"]),
             }
             if not lr["date_last_scanned"]:
                 last_scan = await db.execute_fetchall(
@@ -375,7 +376,7 @@ async def get_location_stats(db, location_id: int):
     loc_row = await db.execute_fetchall(
         "SELECT id, name, root_path, date_added, date_last_scanned, "
         "scan_schedule_enabled, scan_schedule_days, scan_schedule_time, "
-        "scan_schedule_last_run FROM locations WHERE id = ?",
+        "scan_schedule_last_run, is_favourite FROM locations WHERE id = ?",
         (location_id,),
     )
     if not loc_row:
@@ -433,6 +434,7 @@ async def get_location_stats(db, location_id: int):
         "diskStats": disk_stats,
         "dateLastScanned": loc["date_last_scanned"],
         "lastScanStatus": None,
+        "favourite": bool(loc["is_favourite"]),
     }
 
     # If date_last_scanned is NULL, check the scans table for the most recent attempt
@@ -473,7 +475,7 @@ async def get_folder_stats(db, folder_id: int):
     # Folder metadata from catalog (structural), counters from stats.db
     folder_row = await db.execute_fetchall(
         """SELECT f.id, f.name, f.rel_path, f.location_id,
-                  f.dup_exclude,
+                  f.dup_exclude, f.is_favourite,
                   l.name as location_name, l.root_path as location_root_path
            FROM folders f JOIN locations l ON l.id = f.location_id
            WHERE f.id = ?""",
@@ -548,6 +550,7 @@ async def get_folder_stats(db, folder_id: int):
         "hiddenFiles": hidden_count,
         "subfolderCount": subfolder_count,
         "dupExcluded": bool(fld["dup_exclude"]),
+        "favourite": bool(fld["is_favourite"]),
         "breadcrumb": breadcrumb,
         "_root_path": fld["location_root_path"],
         "_location_id": fld["location_id"],

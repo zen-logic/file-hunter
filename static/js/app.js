@@ -1,4 +1,5 @@
 import API from './api.js';
+import icons from './icons.js';
 import Tree from './components/tree.js';
 import FileList from './components/filelist.js';
 import Detail from './components/detail.js';
@@ -85,6 +86,7 @@ async function refreshDetailPanel() {
             wireDownloadZipBtn();
             wireMergeBtn();
             wireTreemapBtn();
+            wireFavouriteBtn();
             if (result && result.online !== undefined && result.online !== selectedNode.online) {
                 Tree.updateOnlineStatus([selectedNode.id], result.online);
             }
@@ -96,6 +98,7 @@ async function refreshDetailPanel() {
             wireRenameFolderBtn();
             wireMoveFolder();
             wireDeleteFolderBtn();
+            wireFavouriteBtn();
             if (result) updateLocationOnline(result.locationId, result.locationOnline);
         }
     } else {
@@ -256,6 +259,20 @@ function wireTreemapBtn() {
     const btn = document.getElementById('detail-treemap-btn');
     if (btn && selectedNode) {
         btn.addEventListener('click', () => Treemap.open(selectedNode.id));
+    }
+}
+
+function wireFavouriteBtn() {
+    const btn = document.getElementById('detail-favourite');
+    if (btn && selectedNode) {
+        btn.addEventListener('click', async () => {
+            const res = await API.post('/api/favourite/toggle', { id: selectedNode.id });
+            if (res.ok) {
+                const icon = btn.querySelector('.fav-icon');
+                if (icon) icon.innerHTML = res.data.favourite ? icons.heart : icons.heartOutline;
+                Tree.setFavourite(selectedNode.id, res.data.favourite);
+            }
+        });
     }
 }
 
@@ -604,6 +621,7 @@ RenameLocationModal.init(async (node, newName) => {
         wireDownloadZipBtn();
         wireMergeBtn();
         wireTreemapBtn();
+        wireFavouriteBtn();
     }
     return { ok: true };
 });
@@ -781,6 +799,7 @@ Tree.init(async (node) => {
         wireDownloadZipBtn();
         wireMergeBtn();
         wireTreemapBtn();
+        wireFavouriteBtn();
         if (result && result.online !== undefined && result.online !== node.online) {
             Tree.updateOnlineStatus([node.id], result.online);
         }
@@ -791,6 +810,7 @@ Tree.init(async (node) => {
         wireRenameFolderBtn();
         wireMoveFolder();
         wireDeleteFolderBtn();
+        wireFavouriteBtn();
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
     }
     wireSlideshowBtn();
@@ -802,7 +822,7 @@ Tree.init(async (node) => {
     consolidateBtn.disabled = true;
     Upload.updateState(null);
     Search.setScopeContext(null);
-    FileList.renderEmpty();
+    FileList.renderFavourites();
     Detail.renderDashboard();
 });
 
@@ -813,6 +833,21 @@ document.getElementById('tree-header-label').addEventListener('click', () => {
 });
 
 FileList.init(async (file) => {
+    // Favourite items are folder/location nodes — select in tree and show detail panel
+    if (file.type === 'folder' && (String(file.id).startsWith('fld-') || String(file.id).startsWith('loc-'))) {
+        selectedFile = null;
+        selectedFileDups = [];
+        consolidateBtn.disabled = true;
+        const node = await Tree.revealNode(file.id);
+        if (node) {
+            selectedNode = node;
+            scanBtn.disabled = false;
+            Upload.updateState(node);
+            await refreshDetailPanel();
+        }
+        return;
+    }
+
     selectedFile = file;
     const result = await Detail.renderFile(file);
     selectedFileDups = Detail.getFileDups();
@@ -862,6 +897,7 @@ FileList.init(async (file) => {
     wireRenameFolderBtn();
     wireMoveFolder();
     wireDeleteFolderBtn();
+    wireFavouriteBtn();
     if (result) updateLocationOnline(result.locationId, result.locationOnline);
     wireSlideshowBtn();
 }, async () => {
@@ -877,6 +913,7 @@ FileList.init(async (file) => {
             wireDownloadZipBtn();
             wireMergeBtn();
             wireTreemapBtn();
+            wireFavouriteBtn();
             if (result && result.online !== undefined && result.online !== selectedNode.online) {
                 Tree.updateOnlineStatus([selectedNode.id], result.online);
             }
@@ -888,6 +925,7 @@ FileList.init(async (file) => {
             wireRenameFolderBtn();
             wireMoveFolder();
             wireDeleteFolderBtn();
+            wireFavouriteBtn();
             if (result) updateLocationOnline(result.locationId, result.locationOnline);
         }
     } else {
