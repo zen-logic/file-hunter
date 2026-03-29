@@ -270,13 +270,14 @@ const SlideshowTriage = {
     },
 
     _doTag() {
-        const tag = this._tagInput.value.trim();
-        if (!tag) return;
+        const tags = this._tagInput.value.split(',').map(t => t.trim()).filter(Boolean);
+        if (tags.length === 0) return;
         const fileIds = this._tagItems.map(item => item.id);
         const n = fileIds.length;
+        const label = tags.length === 1 ? `"${tags[0]}"` : `${tags.length} tags`;
 
-        API.post('/api/batch/tag', { file_ids: fileIds, add_tags: [tag] });
-        Toast.info(`Tagging ${n} image${n !== 1 ? 's' : ''} with "${tag}"`);
+        API.post('/api/batch/tag', { file_ids: fileIds, add_tags: tags });
+        Toast.info(`Tagging ${n} image${n !== 1 ? 's' : ''} with ${label}`);
 
         this._tagOverlay.classList.add('hidden');
         this._tagItems = [];

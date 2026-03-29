@@ -1435,9 +1435,9 @@ const Detail = {
         const tagInput = document.getElementById('detail-tag-input');
         if (addBtn && tagInput && detail.id) {
             const addTag = async () => {
-                const newTag = tagInput.value.trim();
-                if (!newTag) return;
-                const newTags = [...(detail.tags || []), newTag];
+                const parsed = tagInput.value.split(',').map(t => t.trim()).filter(Boolean);
+                if (parsed.length === 0) return;
+                const newTags = [...(detail.tags || []), ...parsed];
                 const res = await API.patch(`/api/files/${detail.id}`, { tags: newTags });
                 if (res.ok) {
                     detail.tags = res.data.tags;

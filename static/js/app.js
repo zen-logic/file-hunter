@@ -350,15 +350,16 @@ function wireBatchActions(items) {
     const tagInput = document.getElementById('batch-tag-input');
     if (tagAddBtn && tagInput) {
         const addTag = async () => {
-            const tag = tagInput.value.trim();
-            if (!tag || fileIds.length === 0) return;
+            const tags = tagInput.value.split(',').map(t => t.trim()).filter(Boolean);
+            if (tags.length === 0 || fileIds.length === 0) return;
             const res = await API.post('/api/batch/tag', {
                 file_ids: fileIds,
-                add_tags: [tag],
+                add_tags: tags,
                 remove_tags: [],
             });
             if (res.ok) {
-                Toast.success(`Tag "${tag}" added to ${res.data.updated} file${res.data.updated !== 1 ? 's' : ''}`);
+                const label = tags.length === 1 ? `Tag "${tags[0]}"` : `${tags.length} tags`;
+                Toast.success(`${label} added to ${res.data.updated} file${res.data.updated !== 1 ? 's' : ''}`);
                 tagInput.value = '';
             } else {
                 Toast.error(res.error || 'Failed to add tag.');
