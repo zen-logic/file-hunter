@@ -1,0 +1,86 @@
+:root {
+    /* Orange Neon — vivid orange on dark blue-black */
+    --font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+
+    --color-bg: #000000;
+    --color-surface: #0c1018;
+    --color-surface-raised: #10181e;
+    --color-surface-hover: #131b23;
+    --color-surface-active: #510c00;
+
+    --color-border: #1e2834;
+    --color-border-subtle: #1e2b34;
+    --color-border-hover: #ff6a00;
+    --color-border-card: #1e3234;
+
+    --color-text: #9fc5e8;
+    --color-text-muted: #d45800;
+    --color-text-secondary: #80a8a4;
+    --color-text-dim: #a0acc4;
+    --color-text-bright: #ffffff;
+    --color-text-placeholder: #34404c;
+
+    --color-selected: #993f00;
+    --color-selected-contrast: #000000;
+
+    /* Primary — vivid orange */
+    --color-primary: #ff6a00;
+    --color-primary-hover: #ff8c33;
+    --color-btn-active: #d45800;
+
+    --color-offline-bg: #1e0c0c;
+    --color-offline-text: #ff4060;
+    --opacity-offline: 0;
+
+    --color-stale-bg: #0c1a1a;
+    --color-stale-text: #60c0c0;
+    --opacity-stale: 0.55;
+    --opacity-pending: 0;
+
+    /* Duplicates — electric yellow */
+    --color-dup-bg: #1a1c08;
+    --color-dup-text: #ffe040;
+
+    /* Tags — electric blue */
+    --color-tag-bg: #081820;
+    --color-tag-text: #00c8ff;
+
+    --color-scan-bg: #0a1612;
+    --color-scan-border: #183028;
+    --color-scan-text: #00e8a0;
+    --color-progress-track: #101c1e;
+    --color-progress-fill: #ff6a00;
+
+    --color-overlay: rgba(6, 6, 12, 0.85);
+
+    --color-statusbar-bg: #060a0c;
+    --color-status-ok: #00e8a0;
+    --color-status-warn: #ffe040;
+    --color-status-error: #ff4060;
+
+    /* Effects */
+    --text-glow: none;
+    --scanline-opacity: 0;
+    --title-letter-spacing: 0.08em;
+    --title-text-transform: uppercase;
+    --title-glow: 0 0 10px #ff6a00, 0 0 30px rgba(255, 106, 0, 0.4);
+    --glow-primary: 0 0 8px rgba(255, 106, 0, 0.4), inset 0 0 8px rgba(255, 106, 0, 0.1);
+    --glow-primary-hover: 0 0 16px rgba(255, 140, 51, 0.5), inset 0 0 12px rgba(255, 140, 51, 0.15);
+    --glow-focus: 0 0 8px rgba(255, 106, 0, 0.4);
+    --glow-modal: 0 0 40px rgba(255, 106, 0, 0.15), 0 0 80px rgba(0, 200, 255, 0.05);
+    --glow-stat: 0 0 10px rgba(0, 200, 255, 0.08);
+    --glow-status-dot: 0 0 6px var(--color-status-ok), 0 0 14px var(--color-status-ok);
+    --glow-dup: 0 0 6px rgba(255, 224, 64, 0.5);
+    --btn-primary-bg: transparent;
+    --btn-primary-bg-hover: rgba(255, 106, 0, 0.1);
+    --btn-primary-text: #ff6a00;
+
+    --treemap-color-1: #ff6a00;
+    --treemap-color-2: #00c8ff;
+    --treemap-color-3: #00e8a0;
+    --treemap-color-4: #ffe040;
+    --treemap-color-5: #9040ff;
+    --treemap-color-6: #ff2d95;
+    --treemap-color-7: #40e0d0;
+    --treemap-color-8: #ff8c33;
+}

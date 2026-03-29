@@ -9,6 +9,7 @@
                 {"var": "--color-surface-hover", "label": "Surface hover", "type": "color"},
                 {"var": "--color-surface-active", "label": "Surface active", "type": "color"},
                 {"var": "--color-selected", "label": "Selected row", "type": "color"},
+                {"var": "--color-selected-contrast", "label": "Selected row text", "type": "color"},
                 {"var": "--color-overlay", "label": "Modal overlay", "type": "text"}
             ]
         },

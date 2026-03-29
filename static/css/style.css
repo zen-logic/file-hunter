@@ -504,6 +504,9 @@ body::after {
     color: var(--color-text-muted);
     white-space: nowrap;
 }
+.tree-item.selected .tree-size {
+    color: var(--color-selected-contrast, var(--color-text-muted));
+}
 .tree-size-scanning {
     color: var(--color-scan-text);
 }
