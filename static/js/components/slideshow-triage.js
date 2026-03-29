@@ -43,6 +43,7 @@ const SlideshowTriage = {
     _tagItems: [],
     _moveItems: [],
     _treeData: null,
+    _favourites: [],
     _expandedNodes: new Set(),
     _selectedDest: null,
 
@@ -211,8 +212,12 @@ const SlideshowTriage = {
         this._conSubmit.textContent = 'Consolidate';
         this._conSubmit.disabled = false;
 
-        const res = await API.get('/api/locations');
+        const [res, favRes] = await Promise.all([
+            API.get('/api/locations'),
+            API.get('/api/favourites'),
+        ]);
         this._treeData = res.ok ? res.data : [];
+        this._favourites = favRes.ok ? favRes.data : [];
         this._renderTree();
 
         this._conOverlay.classList.remove('hidden');
@@ -300,8 +305,12 @@ const SlideshowTriage = {
         this._movSubmit.textContent = 'Move';
         this._movSubmit.disabled = false;
 
-        const res = await API.get('/api/locations');
+        const [res, favRes] = await Promise.all([
+            API.get('/api/locations'),
+            API.get('/api/favourites'),
+        ]);
         this._treeData = res.ok ? res.data : [];
+        this._favourites = favRes.ok ? favRes.data : [];
         this._renderTree();
 
         this._movOverlay.classList.remove('hidden');
@@ -335,9 +344,49 @@ const SlideshowTriage = {
         const treeEl = this._activeTree || this._conTree;
         treeEl.innerHTML = '';
         if (!this._treeData) return;
+        this._renderFavourites(treeEl);
         this._treeData.forEach(loc => {
             this._renderTreeNode(treeEl, loc, 0);
         });
+    },
+
+    _renderFavourites(container) {
+        if (!this._favourites || this._favourites.length === 0) return;
+        const destEl = this._activeDest || this._conDest;
+
+        const header = document.createElement('div');
+        header.className = 'ct-section-header';
+        header.textContent = 'Favourites';
+        container.appendChild(header);
+
+        for (const fav of this._favourites) {
+            const div = document.createElement('div');
+            div.className = 'ct-node';
+            if (this._selectedDest === fav.id) div.classList.add('ct-selected');
+
+            const heartIcon = document.createElement('span');
+            heartIcon.className = 'ct-icon';
+            heartIcon.innerHTML = icons.heart;
+            div.appendChild(heartIcon);
+
+            const label = document.createElement('span');
+            label.className = 'ct-label';
+            label.textContent = fav.path;
+            div.appendChild(label);
+
+            div.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._selectedDest = fav.id;
+                destEl.textContent = fav.path;
+                this._renderTree();
+            });
+
+            container.appendChild(div);
+        }
+
+        const divider = document.createElement('div');
+        divider.className = 'ct-divider';
+        container.appendChild(divider);
     },
 
     _renderTreeNode(container, node, depth) {

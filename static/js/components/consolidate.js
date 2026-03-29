@@ -20,6 +20,7 @@ const Consolidate = {
     _selectedMode: 'keep_here',
     _selectedDest: null,
     _treeData: null,
+    _favourites: [],
     _expandedNodes: new Set(),
 
     init(onConsolidate) {
@@ -121,13 +122,13 @@ const Consolidate = {
             if (input && input.value === this._selectedMode) o.classList.add('selected');
         });
 
-        // Fetch tree data before rendering mode UI
-        const res = await API.get('/api/locations');
-        if (res.ok) {
-            this._treeData = res.data;
-        } else {
-            this._treeData = [];
-        }
+        // Fetch tree data and favourites before rendering mode UI
+        const [res, favRes] = await Promise.all([
+            API.get('/api/locations'),
+            API.get('/api/favourites'),
+        ]);
+        this._treeData = res.ok ? res.data : [];
+        this._favourites = favRes.ok ? favRes.data : [];
 
         this._updateModeUI();
         this.overlay.classList.remove('hidden');
@@ -169,9 +170,48 @@ const Consolidate = {
     _renderTree() {
         this.treePicker.innerHTML = '';
         if (!this._treeData) return;
+        this._renderFavourites(this.treePicker);
         this._treeData.forEach(loc => {
             this._renderTreeNode(this.treePicker, loc, 0);
         });
+    },
+
+    _renderFavourites(container) {
+        if (!this._favourites || this._favourites.length === 0) return;
+
+        const header = document.createElement('div');
+        header.className = 'ct-section-header';
+        header.textContent = 'Favourites';
+        container.appendChild(header);
+
+        for (const fav of this._favourites) {
+            const div = document.createElement('div');
+            div.className = 'ct-node';
+            if (this._selectedDest === fav.id) div.classList.add('ct-selected');
+
+            const heartIcon = document.createElement('span');
+            heartIcon.className = 'ct-icon';
+            heartIcon.innerHTML = icons.heart;
+            div.appendChild(heartIcon);
+
+            const label = document.createElement('span');
+            label.className = 'ct-label';
+            label.textContent = fav.path;
+            div.appendChild(label);
+
+            div.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._selectedDest = fav.id;
+                this._updateDestDisplay();
+                this._renderTree();
+            });
+
+            container.appendChild(div);
+        }
+
+        const divider = document.createElement('div');
+        divider.className = 'ct-divider';
+        container.appendChild(divider);
     },
 
     _renderTreeNode(container, node, depth) {
@@ -255,6 +295,11 @@ const Consolidate = {
                 const found = this._findNode(n.children, id);
                 if (found) return found;
             }
+        }
+        // Fall back to favourites (deep folders may not be loaded in tree)
+        if (nodes === this._treeData && this._favourites) {
+            const fav = this._favourites.find(f => f.id === id);
+            if (fav) return { id: fav.id, label: fav.path, type: fav.type };
         }
         return null;
     },

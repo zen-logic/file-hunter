@@ -92,7 +92,11 @@ const FileList = {
                 this.filterText = this.filterEl.value;
                 this.currentPage = 0;
                 this._clearSelection();
-                this._fetchFolder();
+                if (this._favouritesMode) {
+                    this._applyFavouritesFilter();
+                } else {
+                    this._fetchFolder();
+                }
             }, 300);
         });
 
@@ -452,13 +456,14 @@ const FileList = {
         }
 
         this._favouritesMode = true;
-        this.currentFolders = items.map(item => ({
+        this._allFavourites = items.map(item => ({
             id: item.id,
             name: item.name,
             type: 'folder',
             location: item.path,
             locationId: item.locationId,
         }));
+        this.currentFolders = this._allFavourites;
         this._renderContent();
     },
 
@@ -480,6 +485,16 @@ const FileList = {
 
     _sortDirStr() {
         return this.sortDir === 1 ? 'asc' : 'desc';
+    },
+
+    _applyFavouritesFilter() {
+        if (!this._allFavourites) return;
+        const q = this.filterText.toLowerCase();
+        this.currentFolders = q
+            ? this._allFavourites.filter(f =>
+                f.name.toLowerCase().includes(q) || f.location.toLowerCase().includes(q))
+            : this._allFavourites;
+        this._renderContent();
     },
 
     async _fetchFolder(focusFileId) {

@@ -880,6 +880,7 @@ FileList.init(async (file) => {
     selectedFile = null;
     selectedFileDups = [];
     consolidateBtn.disabled = true;
+    const isLocation = String(folder.id).startsWith('loc-');
     const node = await Tree.revealNode(folder.id);
     if (node) {
         selectedNode = node;
@@ -887,19 +888,37 @@ FileList.init(async (file) => {
         Upload.updateState(node);
         Search.setScopeContext(node);
     }
-    const [, result] = await Promise.all([
-        FileList.showFolder(folder.id),
-        Detail.renderFolder(folder),
-    ]);
-    wireNewFolderBtn();
-    wireDownloadZipBtn();
-    wireMergeBtn();
-    wireRenameFolderBtn();
-    wireMoveFolder();
-    wireDeleteFolderBtn();
-    wireFavouriteBtn();
-    if (result) updateLocationOnline(result.locationId, result.locationOnline);
-    wireSlideshowBtn();
+    if (isLocation) {
+        const [, result] = await Promise.all([
+            FileList.showFolder(folder.id),
+            Detail.renderLocation(node || folder),
+        ]);
+        wireDeleteLocationBtn();
+        wireRenameLocationBtn();
+        wireNewFolderBtn();
+        wireDownloadZipBtn();
+        wireMergeBtn();
+        wireTreemapBtn();
+        wireFavouriteBtn();
+        if (result && result.online !== undefined && node && result.online !== node.online) {
+            Tree.updateOnlineStatus([node.id], result.online);
+        }
+        wireSlideshowBtn();
+    } else {
+        const [, result] = await Promise.all([
+            FileList.showFolder(folder.id),
+            Detail.renderFolder(folder),
+        ]);
+        wireNewFolderBtn();
+        wireDownloadZipBtn();
+        wireMergeBtn();
+        wireRenameFolderBtn();
+        wireMoveFolder();
+        wireDeleteFolderBtn();
+        wireFavouriteBtn();
+        if (result) updateLocationOnline(result.locationId, result.locationOnline);
+        wireSlideshowBtn();
+    }
 }, async () => {
     selectedFile = null;
     selectedFileDups = [];

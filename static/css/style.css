@@ -1875,6 +1875,19 @@ select.modal-input {
     white-space: nowrap;
 }
 
+.ct-section-header {
+    padding: 0.25rem 0.5rem;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    font-weight: 600;
+    user-select: none;
+}
+
+.ct-divider {
+    border-top: 1px solid var(--color-border);
+    margin: 0.2rem 0;
+}
+
 /* ── Merge modal ── */
 
 .merge-source-name { font-weight: var(--font-weight-semibold); margin-bottom: 0.25rem; }
