@@ -834,6 +834,80 @@ body::after {
     margin-left: 0.35rem;
 }
 
+/* ── Triage bar and badges ── */
+
+.triage-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    background: var(--color-bg-elevated, var(--color-bg));
+    border-bottom: 1px solid var(--color-border);
+}
+
+.triage-bar.hidden {
+    display: none;
+}
+
+.triage-btn {
+    font-size: var(--font-size-xs);
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--color-bg);
+}
+
+.triage-btn.triage-delete {
+    background: var(--color-status-error);
+}
+
+.triage-btn.triage-consolidate {
+    background: var(--color-primary);
+}
+
+.triage-btn.triage-tag {
+    background: var(--color-status-warn);
+}
+
+.triage-btn.triage-move {
+    background: var(--color-progress-fill);
+}
+
+.triage-btn.triage-clear {
+    background: transparent;
+    color: var(--color-text-muted);
+    margin-left: auto;
+}
+
+.triage-btn.triage-clear:hover {
+    color: var(--color-text);
+}
+
+.triage-mark {
+    font-size: var(--font-size-xs);
+    padding: 0.05rem 0.25rem;
+    border-radius: 3px;
+    margin-left: 0.25rem;
+    color: var(--color-bg);
+    font-weight: 600;
+}
+
+.triage-mark-delete {
+    background: var(--color-status-error);
+}
+
+.triage-mark-consolidate {
+    background: var(--color-primary);
+}
+
+.triage-mark-tag {
+    background: var(--color-status-warn);
+}
+
+.triage-mark-move {
+    background: var(--color-progress-fill);
+}
+
 .detail-pending-banner {
     background: var(--color-pending-bg);
     color: var(--color-pending-text);

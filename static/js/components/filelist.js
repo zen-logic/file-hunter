@@ -2,6 +2,7 @@ import API from '../api.js';
 import icons from '../icons.js';
 import Keyboard from '../keyboard.js';
 import Tree from './tree.js';
+import Triage from './triage.js';
 
 const PAGE_SIZE = 120;
 
@@ -104,6 +105,9 @@ const FileList = {
         });
 
         Keyboard.registerPanel('filelist', (e) => this.handleKey(e));
+
+        // Mount triage bar between breadcrumb and file content
+        Triage.mount(this.el.parentElement, this.el);
 
         this.renderEmpty();
     },
@@ -382,6 +386,14 @@ const FileList = {
                 }
                 return;
             default:
+                // Triage keys: d, c, t, m
+                if ('dctm'.includes(e.key)) {
+                    e.preventDefault();
+                    const targets = this.selectedItems.size > 1
+                        ? this.getSelection()
+                        : (curIdx >= 0 ? [items[curIdx]] : []);
+                    Triage.handleKey(e.key, targets);
+                }
                 return;
         }
 
@@ -808,11 +820,15 @@ const FileList = {
                 ? `<span class="file-location-label">${locLabel}</span>`
                 : '';
 
+            // Triage badges
+            const marks = Triage.getMarks(file.id);
+            const triageHtml = marks.map(op => `<span class="triage-mark triage-mark-${op}">${op[0].toUpperCase()}</span>`).join('');
+
             // Remaining cells via innerHTML on a temp fragment
             const tempRow = document.createElement('tr');
             tempRow.innerHTML = `
                 <td class="col-icon">${fileIcon(file)}</td>
-                <td><span class="file-name">${file.name}${dupHtml}${staleHtml}${missingHtml}${pendingHtml}</span>${locHtml}</td>
+                <td><span class="file-name">${file.name}${dupHtml}${staleHtml}${missingHtml}${pendingHtml}${triageHtml}</span>${locHtml}</td>
                 <td class="col-type">${file.typeLow || ''}</td>
                 <td class="col-size">${formatSize(file.size)}</td>
                 <td class="col-date">${formatDate(file.date)}</td>
