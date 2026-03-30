@@ -32,7 +32,7 @@ from file_hunter.services.activity import (
     update as _act_upd,
 )
 from file_hunter.services.agent_ops import dispatch, hash_fast_batch
-from file_hunter.services.sizes import recalculate_location_sizes
+from file_hunter.services.sizes import recalculate_folder_dup_counts
 from file_hunter.stats_db import stats_writer
 from file_hunter.ws.scan import broadcast
 
@@ -646,7 +646,7 @@ async def _dup_recalc_writer():
 
             # Rebuild folder-level dup counts now that hashes.db is up to date
             for lid in affected:
-                await recalculate_location_sizes(lid)
+                await recalculate_folder_dup_counts(lid)
 
             total_hashes = len(merged_strong) + len(merged_fast)
             _active_recalc_locations.difference_update(affected)

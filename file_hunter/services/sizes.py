@@ -269,6 +269,94 @@ async def recalculate_location_sizes(location_id: int):
     patch_cache_dup_counts(location_id, loc_dup_count, cum_dup)
 
 
+async def recalculate_folder_dup_counts(location_id: int):
+    """Recompute only the duplicate_count rollup for every folder in a location.
+
+    Same tree-walk strategy as recalculate_location_sizes but only touches
+    duplicate_count — skips sizes, file counts, hidden counts, and type counts.
+    Used after dup recalc to update affected locations without a full rebuild.
+    """
+    async with read_db() as db:
+        hconn = await open_hashes_connection()
+        try:
+            dup_file_rows = await hconn.execute_fetchall(
+                "SELECT file_id FROM active_hashes "
+                "WHERE location_id = ? AND dup_count > 0",
+                (location_id,),
+            )
+        finally:
+            await hconn.close()
+
+        dup_rows = []
+        if dup_file_rows:
+            dup_ids = [r["file_id"] for r in dup_file_rows]
+            for i in range(0, len(dup_ids), 500):
+                batch = dup_ids[i : i + 500]
+                ph = ",".join("?" for _ in batch)
+                folder_rows_batch = await db.execute_fetchall(
+                    f"SELECT folder_id FROM files WHERE id IN ({ph})",
+                    batch,
+                )
+                dup_rows.extend(folder_rows_batch)
+
+        _dup_folder_counts = Counter(r["folder_id"] for r in dup_rows)
+
+        folder_rows = await db.execute_fetchall(
+            "SELECT id, parent_id FROM folders WHERE location_id = ?",
+            (location_id,),
+        )
+
+    direct_dup: dict[int, int] = {}
+    root_dup_count = 0
+    for fid, cnt in _dup_folder_counts.items():
+        if fid is None:
+            root_dup_count = cnt
+        else:
+            direct_dup[fid] = cnt
+
+    children_of: dict[int | None, list[int]] = {}
+    all_folder_ids: list[int] = []
+    for f in folder_rows:
+        fid = f["id"]
+        pid = f["parent_id"]
+        all_folder_ids.append(fid)
+        if pid not in children_of:
+            children_of[pid] = []
+        children_of[pid].append(fid)
+
+    cum_dup: dict[int, int] = {}
+
+    def accumulate(fid):
+        dup = direct_dup.get(fid, 0)
+        for child_id in children_of.get(fid, []):
+            accumulate(child_id)
+            dup += cum_dup[child_id]
+        cum_dup[fid] = dup
+
+    for root_id in children_of.get(None, []):
+        accumulate(root_id)
+
+    loc_dup_count = root_dup_count + sum(
+        direct_dup.get(fid, 0) for fid in all_folder_ids
+    )
+
+    async with stats_writer() as sdb:
+        for i in range(0, len(all_folder_ids), 500):
+            batch = all_folder_ids[i : i + 500]
+            await sdb.executemany(
+                "UPDATE folder_stats SET duplicate_count = ? WHERE folder_id = ?",
+                [(cum_dup.get(fid, 0), fid) for fid in batch],
+            )
+        await sdb.execute(
+            "UPDATE location_stats SET duplicate_count = ? WHERE location_id = ?",
+            (loc_dup_count, location_id),
+        )
+
+    from file_hunter.services.stats import patch_cache_dup_counts
+
+    patch_cache_dup_counts(location_id, loc_dup_count, cum_dup)
+
+
 async def populate_all_sizes_if_needed():
     """Populate stats for locations missing from stats.db."""
     async with read_db() as db:
