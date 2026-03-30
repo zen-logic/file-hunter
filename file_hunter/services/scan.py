@@ -164,6 +164,11 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
     scan_done_event = asyncio.Event()
 
     async def _drainer_progress(done, total):
+        pct = f" ({round(done / total * 100)}%)" if total > 0 else ""
+        activity_update(
+            _act_name,
+            progress=f"confirming duplicates: {done:,} / {total:,}{pct}",
+        )
         await broadcast(
             {
                 "type": "scan_progress",
@@ -255,6 +260,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             # --- Phase 3: find dup candidates for new/changed/recovered files ---
             # Pre-existing unprocessed candidates are handled by housekeeping
             if affected_file_ids:
+                activity_update(_act_name, progress="checking duplicates")
                 candidates_total = await post_ingest_dup_processing(
                     location_id,
                     agent_id,
@@ -309,6 +315,9 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             await _broadcast_location_children(location_id)
 
             # --- Phase 3: find dup candidates and queue for hashing ---
+            activity_update(
+                _act_name, progress=f"{files_found:,} files, checking duplicates"
+            )
             candidates_total = await post_ingest_dup_processing(
                 location_id,
                 agent_id,
@@ -351,6 +360,8 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
         # Wait for hash drainer to finish remaining work
         scan_done_event.set()
+        if not drainer_task.done():
+            activity_update(_act_name, progress="confirming duplicates")
         logger.info("Waiting for hash drainer to finish for %s", location_name)
         try:
             await drainer_task

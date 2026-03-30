@@ -1455,19 +1455,29 @@ WS.on('dup_recalc_started', (msg) => {
         for (const id of msg.locationIds) Detail._dupRecalcLocations.add(id);
         Detail._applyDupRecalcOverride();
     }
-    Activity.started('dup-recalc', {
-        label: 'Recalculating duplicates',
-        log: 'Recalculating duplicate counts...',
-    });
+    // Don't show separate activity if this is part of an active scan
+    const duringActiveScan = (msg.locationIds || []).some(id => Tree._scanningLocations.has('loc-' + id));
+    if (!duringActiveScan) {
+        Activity.started('dup-recalc', {
+            label: 'Recalculating duplicates',
+            log: 'Recalculating duplicate counts...',
+        });
+    }
 });
 WS.on('dup_recalc_completed', async (msg) => {
     if (msg.locationIds) {
         for (const id of msg.locationIds) Detail._dupRecalcLocations.delete(id);
     }
     const count = msg.hashCount ? msg.hashCount.toLocaleString() : '0';
-    Activity.completed('dup-recalc', {
-        log: `Duplicate recalculation complete — ${count} hashes processed`,
-    });
+    const duringActiveScan = (msg.locationIds || []).some(id => Tree._scanningLocations.has('loc-' + id));
+    if (!duringActiveScan) {
+        Activity.completed('dup-recalc', {
+            log: `Duplicate recalculation complete — ${count} hashes processed`,
+        });
+    } else {
+        // Silently dismiss if it was started before we could suppress
+        Activity.completed('dup-recalc', {});
+    }
     await StatusBar.loadStats();
     await Detail.refreshStats();
     FileList.refreshDupCounts();
