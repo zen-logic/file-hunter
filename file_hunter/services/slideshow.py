@@ -16,9 +16,8 @@ import sqlite3
 from file_hunter.hashes_db import read_hashes
 from file_hunter.helpers import parse_prefixed_id
 from file_hunter.services.locations import check_location_online
+from file_hunter.services import search as _search_mod
 from file_hunter.services.search import (
-    _search_db_path,
-    _search_id,
     build_condition_sql,
     parse_conditions_from_params,
     parse_size,
@@ -34,9 +33,9 @@ async def get_slideshow_ids_from_search(
     Uses the existing search cache — no re-query, correct scope, fast.
     Returns empty list if the cache is missing or expired.
     """
-    if not search_id or search_id != _search_id or not _search_db_path:
+    if not search_id or search_id != _search_mod._search_id or not _search_mod._search_db_path:
         return []
-    path = str(_search_db_path)
+    path = str(_search_mod._search_db_path)
     if not os.path.exists(path):
         return []
 
