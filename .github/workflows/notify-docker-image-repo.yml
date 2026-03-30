@@ -1,0 +1,56 @@
+name: Notify downstream image build
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository_dispatch to downstream repo
+        env:
+          TARGET_OWNER: ikidd
+          TARGET_REPO: file-hunter-dockerized
+          TOKEN: ${{ secrets.DOWNSTREAM_REPO_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          PUBLISHED_AT: ${{ github.event.release.published_at }}
+          RELEASE_TARGET: ${{ github.event.release.target_commitish }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TOKEN}" ]; then
+            echo "DOWNSTREAM_REPO_TOKEN is not configured."
+            exit 1
+          fi
+
+          SHA="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${TAG}^{}" | awk '{print $1}')"
+          if [ -z "${SHA}" ]; then
+            SHA="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${TAG}" | awk '{print $1}')"
+          fi
+          if [ -z "${SHA}" ]; then
+            echo "Failed to resolve tag ${TAG} to a commit SHA."
+            exit 1
+          fi
+
+          curl -sSf -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/dispatches" \
+            -d @- <<JSON
+          {
+            "event_type": "upstream_release",
+            "client_payload": {
+              "tag": "${TAG}",
+              "sha": "${SHA}",
+              "release_url": "${RELEASE_URL}",
+              "published_at": "${PUBLISHED_AT}",
+              "source_repo": "${GITHUB_REPOSITORY}",
+              "target_commitish": "${RELEASE_TARGET}"
+            }
+          }
+          JSON
