@@ -308,14 +308,14 @@ body::after {
     height: 1rem;
 }
 
-.btn-icon.btn-active {
+.btn.btn-active, .btn-icon.btn-active {
     background: transparent;
     border-color: var(--color-primary);
     color: var(--color-primary);
     box-shadow: var(--glow-primary);
 }
 
-.btn-icon.btn-active:hover {
+.btn.btn-active:hover, .btn-icon.btn-active:hover {
     background: var(--color-surface-hover);
     box-shadow: var(--glow-primary-hover);
 }
@@ -581,7 +581,7 @@ body::after {
     height: 0.75em;
     margin-left: 0.3rem;
     vertical-align: -0.1em;
-    color: var(--color-status-error);
+    color: var(--color-primary);
 }
 
 .tree-fav svg {

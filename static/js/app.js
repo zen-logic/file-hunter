@@ -270,6 +270,7 @@ function wireFavouriteBtn() {
             if (res.ok) {
                 const icon = btn.querySelector('.fav-icon');
                 if (icon) icon.innerHTML = res.data.favourite ? icons.heart : icons.heartOutline;
+                btn.classList.toggle('btn-active', res.data.favourite);
                 Tree.setFavourite(selectedNode.id, res.data.favourite);
             }
         });
@@ -748,8 +749,8 @@ function wireSlideshowBtn() {
     const folderId = FileList.currentFolder;
     if (!folderId) return;
     let html = '';
-    if (hasImages) html += `<button class="btn" id="detail-slideshow">Slideshow</button>`;
-    if (hasVideo) html += `<button class="btn" id="detail-playlist">Playlist</button>`;
+    if (hasImages) html += `<button class="btn btn-sm" id="detail-slideshow">Slideshow</button>`;
+    if (hasVideo) html += `<button class="btn btn-sm" id="detail-playlist">Playlist</button>`;
     slot.innerHTML = html;
     if (hasImages) {
         document.getElementById('detail-slideshow').addEventListener('click', async () => {

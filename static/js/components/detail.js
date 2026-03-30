@@ -1600,6 +1600,16 @@ const Detail = {
             <div class="detail-section">
                 <div class="detail-filename">${s.name}</div>
                 <div class="detail-path">${s.rootPath}</div>
+                <div class="detail-btn-group" style="margin-top:0.4rem">
+                    <button class="btn btn-sm${s.favourite ? ' btn-active' : ''}" id="detail-favourite" title="Toggle favourite"><span class="fav-icon">${s.favourite ? icons.heart : icons.heartOutline}</span></button>
+                    <span id="detail-slideshow-slot"></span>
+                    <button class="btn btn-sm" id="detail-new-folder"${_disabledIf(!s.online, _isScanning(locId))}>New Folder</button>
+                    <button class="btn btn-sm" id="detail-download-zip"${s.online ? '' : ' disabled title="Location is offline"'}>Download ZIP</button>
+                    <button class="btn btn-sm" id="detail-merge-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Merge</button>
+                    <button class="btn btn-sm" id="detail-treemap-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Storage Map</button>
+                    <button class="btn btn-sm" id="detail-rename-location">Rename</button>
+                    <button class="btn btn-danger btn-sm" id="detail-delete-location"${_disabledIf(false, _isScanning(locId))}>Delete Location</button>
+                </div>
             </div>
             <div class="detail-section">
                 <h3>Location Info</h3>
@@ -1680,18 +1690,6 @@ const Detail = {
                 </div>
             </div>
             ${typeHtml ? `<div class="detail-section" data-stat="typeBreakdown"><h3>File Types</h3>${typeHtml}</div>` : ''}
-            <div class="detail-section">
-                <div class="detail-btn-group">
-                    <button class="btn" id="detail-favourite" title="Toggle favourite"><span class="fav-icon">${s.favourite ? icons.heart : icons.heartOutline}</span></button>
-                    <span id="detail-slideshow-slot"></span>
-                    <button class="btn" id="detail-new-folder"${_disabledIf(!s.online, _isScanning(locId))}>New Folder</button>
-                    <button class="btn" id="detail-download-zip"${s.online ? '' : ' disabled title="Location is offline"'}>Download ZIP</button>
-                    <button class="btn" id="detail-merge-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Merge</button>
-                    <button class="btn" id="detail-treemap-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Storage Map</button>
-                    <button class="btn" id="detail-rename-location">Rename</button>
-                    <button class="btn btn-danger" id="detail-delete-location"${_disabledIf(false, _isScanning(locId))}>Delete Location</button>
-                </div>
-            </div>
         `;
 
         if (s.online) this._wireSchedule(locId);
@@ -1736,6 +1734,18 @@ const Detail = {
                     <input type="checkbox" id="detail-dup-exclude-cb" ${s.dupExcluded ? 'checked' : ''}>
                     Exclude from duplicates
                 </label>
+                <div class="detail-btn-group" style="margin-top:0.4rem">
+                    ${(() => { const loc = String(s.locationId).replace('loc-',''); const sc = _isScanning(loc); const off = s.locationOnline === false; const miss = s.online === false; return `
+                    <button class="btn btn-sm${s.favourite ? ' btn-active' : ''}" id="detail-favourite" title="Toggle favourite"><span class="fav-icon">${s.favourite ? icons.heart : icons.heartOutline}</span></button>
+                    <span id="detail-slideshow-slot"></span>
+                    <button class="btn btn-sm" id="detail-new-folder"${_disabledIf(off, sc, miss)}>New Folder</button>
+                    <button class="btn btn-sm" id="detail-download-zip"${_disabledIf(off, false, miss)}>Download ZIP</button>
+                    <button class="btn btn-sm" id="detail-merge-btn"${_disabledIf(off, false, miss)}>Merge</button>
+                    <button class="btn btn-sm" id="detail-rename-folder"${_disabledIf(off, sc, miss)}>Rename</button>
+                    <button class="btn btn-sm" id="detail-move-folder"${_disabledIf(off, sc, miss)}>Move</button>
+                    <button class="btn btn-danger btn-sm" id="detail-delete-folder"${_disabledIf(off, sc)}>Delete Folder</button>
+                    `; })()}
+                </div>
             </div>
             <div class="detail-section">
                 <h3>Contents</h3>
@@ -1758,20 +1768,6 @@ const Detail = {
                 <div class="detail-field">
                     <span class="label">Hidden</span>
                     <span class="value" data-stat="hiddenFiles">${(s.hiddenFiles || 0).toLocaleString()}</span>
-                </div>
-            </div>
-            <div class="detail-section">
-                <div class="detail-btn-group">
-                    ${(() => { const loc = String(s.locationId).replace('loc-',''); const sc = _isScanning(loc); const off = s.locationOnline === false; const miss = s.online === false; return `
-                    <button class="btn" id="detail-favourite" title="Toggle favourite"><span class="fav-icon">${s.favourite ? icons.heart : icons.heartOutline}</span></button>
-                    <span id="detail-slideshow-slot"></span>
-                    <button class="btn" id="detail-new-folder"${_disabledIf(off, sc, miss)}>New Folder</button>
-                    <button class="btn" id="detail-download-zip"${_disabledIf(off, false, miss)}>Download ZIP</button>
-                    <button class="btn" id="detail-merge-btn"${_disabledIf(off, false, miss)}>Merge</button>
-                    <button class="btn" id="detail-rename-folder"${_disabledIf(off, sc, miss)}>Rename</button>
-                    <button class="btn" id="detail-move-folder"${_disabledIf(off, sc, miss)}>Move</button>
-                    <button class="btn btn-danger" id="detail-delete-folder"${_disabledIf(off, sc)}>Delete Folder</button>
-                    `; })()}
                 </div>
             </div>
         `;
