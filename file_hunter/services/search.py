@@ -540,7 +540,7 @@ async def search_files(
     if min_dups is not None:
         try:
             v = int(min_dups)
-            if v > 0:
+            if v >= 0:
                 min_dups_val = v
         except (ValueError, TypeError):
             pass
@@ -552,7 +552,7 @@ async def search_files(
     if max_dups is not None:
         try:
             v = int(max_dups)
-            if v > 0:
+            if v >= 0:
                 max_dups_val = v
         except (ValueError, TypeError):
             pass
@@ -803,7 +803,7 @@ def build_condition_sql(cond):
         if cond.get("from"):
             try:
                 min_val = int(cond["from"])
-                if min_val > 0:
+                if min_val >= 0:
                     frags.append("f.dup_count >= ?")
                     params.append(min_val)
             except (ValueError, TypeError):
@@ -811,7 +811,7 @@ def build_condition_sql(cond):
         if cond.get("to"):
             try:
                 max_val = int(cond["to"])
-                if max_val > 0:
+                if max_val >= 0:
                     frags.append("f.dup_count <= ?")
                     params.append(max_val)
             except (ValueError, TypeError):
@@ -889,7 +889,7 @@ async def _build_adv_folder_insert_data(
             if cond.get("from"):
                 try:
                     v = int(cond["from"])
-                    if v > 0:
+                    if v >= 0:
                         frags.append("COALESCE(fs.duplicate_count, 0) >= ?")
                         folder_params.append(v)
                 except (ValueError, TypeError):
@@ -897,7 +897,7 @@ async def _build_adv_folder_insert_data(
             if cond.get("to"):
                 try:
                     v = int(cond["to"])
-                    if v > 0:
+                    if v >= 0:
                         frags.append("COALESCE(fs.duplicate_count, 0) <= ?")
                         folder_params.append(v)
                 except (ValueError, TypeError):
