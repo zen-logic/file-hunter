@@ -879,7 +879,7 @@ async def _ensure_folder_hierarchy(
 ) -> int:
     """Create/find folder records for a full relative directory path."""
     async with read_db() as db:
-        parts = rel_dir_path.replace("\\", "/").split("/")
+        parts = rel_dir_path.split("/")
     current_path = ""
     parent_id = None
 

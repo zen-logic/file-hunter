@@ -63,7 +63,7 @@ async def _ensure_folder_hierarchy(
     and their descendants. Uses each folder's own dup_exclude flag (not
     inherited from parents — allows subfolder carve-outs).
     """
-    parts = rel_dir_path.replace("\\", "/").split("/")
+    parts = rel_dir_path.split("/")
     current_path = ""
     parent_id = None
     is_hidden = False

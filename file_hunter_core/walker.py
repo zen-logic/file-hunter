@@ -28,7 +28,7 @@ def scan_directory(dirpath: str, root_path: str, parent_hidden: bool = False):
     except (PermissionError, OSError):
         return subdirs, file_infos
 
-    rel_dir = os.path.relpath(dirpath, root_path)
+    rel_dir = os.path.relpath(dirpath, root_path).replace(os.sep, "/")
     if rel_dir == ".":
         rel_dir = ""
 
@@ -64,7 +64,7 @@ def scan_directory(dirpath: str, root_path: str, parent_hidden: bool = False):
         if not stat.S_ISREG(st.st_mode):
             continue
 
-        rel_path = os.path.join(rel_dir, name) if rel_dir else name
+        rel_path = f"{rel_dir}/{name}" if rel_dir else name
         type_high, type_low = classify_file(name)
 
         file_infos.append(
