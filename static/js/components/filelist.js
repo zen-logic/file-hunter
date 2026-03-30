@@ -639,6 +639,14 @@ const FileList = {
         await this._fetchFolder(focusFileId);
     },
 
+    async refreshFolder() {
+        if (!this.currentFolder) return;
+        const focusFileId = this.pendingFocusFile;
+        this.pendingFocusFile = null;
+        this._clearSelection();
+        await this._fetchFolder(focusFileId);
+    },
+
     showSingleFile(file) {
         this.currentFolder = null;
         this.currentBreadcrumb = null;

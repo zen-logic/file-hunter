@@ -51,7 +51,11 @@ async function reloadTreeAndFileList(focusFileId) {
         // Don't blow away search results or in-flight select-all
         if (!FileList._searchMode) {
             if (focusFileId) FileList.pendingFocusFile = focusFileId;
-            await FileList.showFolder(folderId);
+            if (folderId === FileList.currentFolder) {
+                await FileList.refreshFolder();
+            } else {
+                await FileList.showFolder(folderId);
+            }
         }
     }
 }
