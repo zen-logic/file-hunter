@@ -858,8 +858,10 @@ async def _cross_location_dir_move(
     new_prefix,
     dest_root,
     desc_folder_rows,
+    *,
+    same_agent: bool = False,
 ):
-    """Copy a folder tree between agents, then delete the source.
+    """Move a folder tree between locations, then delete the source.
 
     Args:
         db: Read-capable DB connection for querying file rows.
@@ -914,7 +916,7 @@ async def _cross_location_dir_move(
             dest_sub_abs = os.path.join(dest_root, dest_sub_rel)
             await fs.dir_create(dest_sub_abs, dest_loc_id)
 
-        # 3. Copy every file (skip files missing from disk — catalog-only)
+        # 3. Move/copy every file (skip files missing from disk — catalog-only)
         copied = 0
         skipped = 0
         for fid in all_folder_ids:
@@ -926,13 +928,16 @@ async def _cross_location_dir_move(
                 dest_file_rel = new_prefix + fr["rel_path"][len(old_prefix) :]
                 dest_file_abs = os.path.join(dest_root, dest_file_rel)
                 try:
-                    await fs.copy_file(
-                        fr["full_path"],
-                        src_loc_id,
-                        dest_file_abs,
-                        dest_loc_id,
-                        mtime=parse_mtime(fr["modified_date"]),
-                    )
+                    if same_agent:
+                        await fs.file_move(fr["full_path"], dest_file_abs, src_loc_id)
+                    else:
+                        await fs.copy_file(
+                            fr["full_path"],
+                            src_loc_id,
+                            dest_file_abs,
+                            dest_loc_id,
+                            mtime=parse_mtime(fr["modified_date"]),
+                        )
                     copied += 1
                 except RuntimeError as e:
                     if "404" in str(e):
@@ -1140,23 +1145,19 @@ async def move_folder(
         dst_agent = agent_map.get(dest_loc_id)
         same_agent = src_agent is not None and src_agent == dst_agent
 
-        if same_agent:
-            # Same agent — direct move via agent filesystem
-            await fs.dir_move(src_abs, dest_abs, src_loc_id)
-        else:
-            # Different agents — stream through server
-            await _cross_location_dir_move(
-                db,
-                fld,
-                src_abs,
-                dest_abs,
-                src_loc_id,
-                dest_loc_id,
-                old_prefix,
-                new_prefix,
-                dest_root,
-                desc_folder_rows,
-            )
+        await _cross_location_dir_move(
+            db,
+            fld,
+            src_abs,
+            dest_abs,
+            src_loc_id,
+            dest_loc_id,
+            old_prefix,
+            new_prefix,
+            dest_root,
+            desc_folder_rows,
+            same_agent=same_agent,
+        )
     else:
         await fs.dir_move(src_abs, dest_abs, src_loc_id)
 
