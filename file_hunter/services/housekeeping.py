@@ -18,7 +18,7 @@ from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import open_hashes_connection, remove_location_hashes
 from file_hunter.helpers import post_op_stats
 from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
-from file_hunter.services.agent_ops import invalidate_loc_cache
+from file_hunter.services.agent_ops import delete_agent_location, invalidate_loc_cache
 from file_hunter.services.dup_counts import post_ingest_dup_processing
 from file_hunter.services.location_delete import _collect_affected_hashes
 from file_hunter.services.queue_manager import _running_ops, _paused
@@ -254,6 +254,29 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
     """
     location_id = params["location_id"]
     location_name = params.get("location_name", f"location {location_id}")
+    root_path = params.get("root_path", "")
+
+    # Tell agent to remove location from its config (if agent-backed)
+    if agent_id is not None and root_path:
+        try:
+            await delete_agent_location(agent_id, root_path, location_id=location_id)
+            logger.info("Agent #%d confirmed delete of '%s'", agent_id, location_name)
+        except ConnectionError:
+            logger.info(
+                "Agent #%d offline — queuing config cleanup for '%s'",
+                agent_id,
+                location_name,
+            )
+            async with db_writer() as db:
+                await db.execute(
+                    "INSERT OR IGNORE INTO pending_agent_deletes "
+                    "(agent_id, root_path, created_at) VALUES (?, ?, ?)",
+                    (
+                        agent_id,
+                        root_path,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
 
     # Collect affected hashes before deletion (for dup recount after)
     affected_fast, affected_strong = await _collect_affected_hashes(location_id)

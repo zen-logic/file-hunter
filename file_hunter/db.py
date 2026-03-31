@@ -326,6 +326,16 @@ async def init_db(db: aiosqlite.Connection):
         "CREATE INDEX IF NOT EXISTS idx_pending_hashes_agent "
         "ON pending_hashes(agent_id)"
     )
+    # Pending agent config cleanups — paths to remove from agent config.json
+    # when the agent reconnects (location was deleted while agent was offline)
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS pending_agent_deletes (
+            agent_id INTEGER NOT NULL,
+            root_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (agent_id, root_path)
+        )"""
+    )
     await db.commit()
 
     # Post-migration indexes (columns may not exist until migrations run)

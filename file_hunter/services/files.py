@@ -505,7 +505,8 @@ async def move_file(
         batch_move() in batch.py (per-file, with skip_post_processing=True).
     """
     row = await db.execute_fetchall(
-        """SELECT f.*, l.root_path AS location_root_path, l.name AS location_name
+        """SELECT f.*, l.root_path AS location_root_path, l.name AS location_name,
+              l.agent_id AS src_agent_id
            FROM files f JOIN locations l ON l.id = f.location_id
            WHERE f.id = ?""",
         (file_id,),
@@ -592,15 +593,28 @@ async def move_file(
     # Move/rename on disk
     if new_full_path != f["full_path"]:
         if cross_location:
-            # Cross-location (possibly agent↔local): copy + delete
-            await fs.copy_file(
-                f["full_path"],
-                src_loc_id,
-                new_full_path,
-                final_location_id,
-                mtime=parse_mtime(f["modified_date"]),
+            # Check if both locations are on the same agent
+            dst_row = await db.execute_fetchall(
+                "SELECT agent_id FROM locations WHERE id = ?",
+                (final_location_id,),
             )
-            await fs.file_delete(f["full_path"], src_loc_id)
+            dst_agent_id = dst_row[0]["agent_id"] if dst_row else None
+            same_agent = (
+                f["src_agent_id"] is not None and f["src_agent_id"] == dst_agent_id
+            )
+            if same_agent:
+                # Same agent — direct move via agent filesystem
+                await fs.file_move(f["full_path"], new_full_path, src_loc_id)
+            else:
+                # Different agents — stream through server
+                await fs.copy_file(
+                    f["full_path"],
+                    src_loc_id,
+                    new_full_path,
+                    final_location_id,
+                    mtime=parse_mtime(f["modified_date"]),
+                )
+                await fs.file_delete(f["full_path"], src_loc_id)
         else:
             await fs.file_move(f["full_path"], new_full_path, final_location_id)
 

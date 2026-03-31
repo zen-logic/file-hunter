@@ -12,7 +12,7 @@ from urllib.parse import parse_qs
 
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from file_hunter.db import read_db, execute_write
+from file_hunter.db import db_writer, read_db, execute_write
 from file_hunter.services.auth import verify_password
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
@@ -144,6 +144,57 @@ async def _adopt_orphaned_locations(agent_id: int):
         _agent_location_ids[agent_id] = set(orphan_ids)
 
     invalidate_stats_cache()
+
+
+async def _process_pending_deletes(
+    agent_id: int, agent_locations: list[dict]
+) -> list[dict]:
+    """Remove stale locations from agent config on reconnect.
+
+    Checks pending_agent_deletes for this agent, tells the agent to drop
+    each path, and filters them from the reported locations so
+    _sync_agent_locations won't re-create catalog records.
+    """
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT root_path FROM pending_agent_deletes WHERE agent_id = ?",
+            (agent_id,),
+        )
+    if not rows:
+        return agent_locations
+
+    from file_hunter.services.agent_ops import delete_agent_location
+
+    pending_paths: set[str] = {r["root_path"] for r in rows}
+    cleaned: set[str] = set()
+
+    for path in pending_paths:
+        try:
+            await delete_agent_location(agent_id, path)
+            cleaned.add(path)
+            logger.info(
+                "Reconnect cleanup: removed '%s' from agent #%d config", path, agent_id
+            )
+        except Exception:
+            logger.warning(
+                "Reconnect cleanup: failed to remove '%s' from agent #%d",
+                path,
+                agent_id,
+            )
+
+    if cleaned:
+        async with db_writer() as db:
+            for path in cleaned:
+                await db.execute(
+                    "DELETE FROM pending_agent_deletes WHERE agent_id = ? AND root_path = ?",
+                    (agent_id, path),
+                )
+
+    # Filter all pending paths (cleaned or not) from sync to prevent re-creation
+    agent_locations = [
+        loc for loc in agent_locations if loc.get("path") not in pending_paths
+    ]
+    return agent_locations
 
 
 async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
@@ -344,8 +395,11 @@ async def agent_ws_endpoint(websocket: WebSocket):
         _set_online, agent_id, hostname, agent_os, http_port, http_host, now
     )
 
-    # Auto-create/update locations from agent's configured location roots
+    # Process any pending config cleanups from locations deleted while offline
     agent_locations = msg.get("locations", [])
+    agent_locations = await _process_pending_deletes(agent_id, agent_locations)
+
+    # Auto-create/update locations from agent's configured location roots
     if agent_locations:
         await _sync_agent_locations(agent_id, agent_locations)
         from file_hunter.services.online_check import (

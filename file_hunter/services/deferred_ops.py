@@ -233,14 +233,29 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
     # Execute the move
     cross_location = dst_location_id != location_id
     if cross_location:
-        await fs.copy_file(
-            full_path,
-            location_id,
-            dst_full_path,
-            dst_location_id,
-            mtime=parse_mtime(f["modified_date"]),
-        )
-        await fs.file_delete(full_path, location_id)
+        # Check if both locations are on the same agent
+        async with read_db() as rdb:
+            src_row = await rdb.execute_fetchall(
+                "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
+            )
+            dst_row = await rdb.execute_fetchall(
+                "SELECT agent_id FROM locations WHERE id = ?", (dst_location_id,)
+            )
+        src_agent = src_row[0]["agent_id"] if src_row else None
+        dst_agent = dst_row[0]["agent_id"] if dst_row else None
+        same_agent = src_agent is not None and src_agent == dst_agent
+
+        if same_agent:
+            await fs.file_move(full_path, dst_full_path, location_id)
+        else:
+            await fs.copy_file(
+                full_path,
+                location_id,
+                dst_full_path,
+                dst_location_id,
+                mtime=parse_mtime(f["modified_date"]),
+            )
+            await fs.file_delete(full_path, location_id)
     else:
         await fs.file_move(full_path, dst_full_path, location_id)
 

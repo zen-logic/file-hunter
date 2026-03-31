@@ -1130,18 +1130,33 @@ async def move_folder(
 
     # Move on disk
     if cross_location:
-        await _cross_location_dir_move(
-            db,
-            fld,
-            src_abs,
-            dest_abs,
-            src_loc_id,
-            dest_loc_id,
-            old_prefix,
-            new_prefix,
-            dest_root,
-            desc_folder_rows,
+        # Check if both locations are on the same agent
+        agent_rows = await db.execute_fetchall(
+            "SELECT id, agent_id FROM locations WHERE id IN (?, ?)",
+            (src_loc_id, dest_loc_id),
         )
+        agent_map = {r["id"]: r["agent_id"] for r in agent_rows}
+        src_agent = agent_map.get(src_loc_id)
+        dst_agent = agent_map.get(dest_loc_id)
+        same_agent = src_agent is not None and src_agent == dst_agent
+
+        if same_agent:
+            # Same agent — direct move via agent filesystem
+            await fs.dir_move(src_abs, dest_abs, src_loc_id)
+        else:
+            # Different agents — stream through server
+            await _cross_location_dir_move(
+                db,
+                fld,
+                src_abs,
+                dest_abs,
+                src_loc_id,
+                dest_loc_id,
+                old_prefix,
+                new_prefix,
+                dest_root,
+                desc_folder_rows,
+            )
     else:
         await fs.dir_move(src_abs, dest_abs, src_loc_id)
 
