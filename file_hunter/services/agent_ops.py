@@ -55,6 +55,14 @@ async def _get_agent_id(location_id: int) -> int:
     return agent_id
 
 
+async def locations_same_agent(loc_a: int, loc_b: int) -> bool:
+    """Return True if both locations are on the same agent."""
+    try:
+        return await _get_agent_id(loc_a) == await _get_agent_id(loc_b)
+    except ValueError:
+        return False
+
+
 def invalidate_loc_cache(location_id: int = None):
     """Clear the location->agent cache (e.g. when locations change)."""
     if location_id:
@@ -165,6 +173,15 @@ async def dispatch(operation: str, location_id: int, **kwargs):
 
     elif operation == "file_delete":
         await _post(host, port, token, "/files/delete", {"path": kwargs["path"]})
+
+    elif operation == "file_copy":
+        body = {
+            "path": kwargs["path"],
+            "destination": kwargs["destination"],
+        }
+        if kwargs.get("mtime") is not None:
+            body["mtime"] = kwargs["mtime"]
+        await _post(host, port, token, "/files/copy", body, timeout=None)
 
     elif operation == "file_move":
         await _post(

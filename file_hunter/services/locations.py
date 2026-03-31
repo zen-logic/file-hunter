@@ -858,8 +858,6 @@ async def _cross_location_dir_move(
     new_prefix,
     dest_root,
     desc_folder_rows,
-    *,
-    same_agent: bool = False,
 ):
     """Move a folder tree between locations, then delete the source.
 
@@ -916,7 +914,11 @@ async def _cross_location_dir_move(
             dest_sub_abs = os.path.join(dest_root, dest_sub_rel)
             await fs.dir_create(dest_sub_abs, dest_loc_id)
 
-        # 3. Move/copy every file (skip files missing from disk — catalog-only)
+        # 3. Copy every file (skip files missing from disk — catalog-only)
+        #    Always copy, never move — source tree is deleted in step 4
+        #    only after ALL copies succeed. This keeps rollback safe:
+        #    if any file fails, the error handler deletes the partial
+        #    destination and the source remains intact.
         copied = 0
         skipped = 0
         for fid in all_folder_ids:
@@ -928,19 +930,17 @@ async def _cross_location_dir_move(
                 dest_file_rel = new_prefix + fr["rel_path"][len(old_prefix) :]
                 dest_file_abs = os.path.join(dest_root, dest_file_rel)
                 try:
-                    if same_agent:
-                        await fs.file_move(fr["full_path"], dest_file_abs, src_loc_id)
-                    else:
-                        await fs.copy_file(
-                            fr["full_path"],
-                            src_loc_id,
-                            dest_file_abs,
-                            dest_loc_id,
-                            mtime=parse_mtime(fr["modified_date"]),
-                        )
+                    await fs.copy_file(
+                        fr["full_path"],
+                        src_loc_id,
+                        dest_file_abs,
+                        dest_loc_id,
+                        mtime=parse_mtime(fr["modified_date"]),
+                    )
                     copied += 1
-                except RuntimeError as e:
-                    if "404" in str(e):
+                except (RuntimeError, ValueError) as e:
+                    err = str(e).lower()
+                    if "404" in err or "not found" in err:
                         log.warning("Skipping missing file: %s", fr["full_path"])
                         skipped += 1
                     else:
@@ -1135,16 +1135,6 @@ async def move_folder(
 
     # Move on disk
     if cross_location:
-        # Check if both locations are on the same agent
-        agent_rows = await db.execute_fetchall(
-            "SELECT id, agent_id FROM locations WHERE id IN (?, ?)",
-            (src_loc_id, dest_loc_id),
-        )
-        agent_map = {r["id"]: r["agent_id"] for r in agent_rows}
-        src_agent = agent_map.get(src_loc_id)
-        dst_agent = agent_map.get(dest_loc_id)
-        same_agent = src_agent is not None and src_agent == dst_agent
-
         await _cross_location_dir_move(
             db,
             fld,
@@ -1156,7 +1146,6 @@ async def move_folder(
             new_prefix,
             dest_root,
             desc_folder_rows,
-            same_agent=same_agent,
         )
     else:
         await fs.dir_move(src_abs, dest_abs, src_loc_id)

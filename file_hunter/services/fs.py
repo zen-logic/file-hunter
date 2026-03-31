@@ -8,7 +8,7 @@ import base64
 import os
 
 from file_hunter.extensions import get_agent_proxy, get_fetch_bytes
-from file_hunter.services.agent_ops import stream_copy
+from file_hunter.services.agent_ops import locations_same_agent, stream_copy
 
 
 # ---------------------------------------------------------------------------
@@ -182,18 +182,26 @@ async def copy_file(
     on_progress=None,
     mtime: float | None = None,
 ):
-    """Copy a file between agent locations via streaming (constant memory).
+    """Copy a file between agent locations.
 
+    Same-agent copies dispatch directly to the agent's local filesystem.
+    Cross-agent copies stream through the server (constant memory, 1MB chunks).
     mtime: if provided, destination agent restores this as the file's modified time.
     """
-    await stream_copy(
-        src,
-        src_loc_id,
-        dst,
-        dst_loc_id,
-        on_progress=on_progress,
-        mtime=mtime,
-    )
+    if await locations_same_agent(src_loc_id, dst_loc_id):
+        proxy = get_agent_proxy()
+        if not proxy:
+            raise ConnectionError("Agent proxy not available.")
+        await proxy("file_copy", src_loc_id, path=src, destination=dst, mtime=mtime)
+    else:
+        await stream_copy(
+            src,
+            src_loc_id,
+            dst,
+            dst_loc_id,
+            on_progress=on_progress,
+            mtime=mtime,
+        )
 
 
 # ---------------------------------------------------------------------------
