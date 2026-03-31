@@ -290,6 +290,7 @@ const Search = {
         fieldSel.addEventListener('change', () => {
             cond.field = fieldSel.value;
             this._renderConditionInputs(inputsDiv, fieldSel.value);
+            this._syncFoldersCheckbox();
             this._updateSearchBtn();
         });
 
@@ -304,7 +305,20 @@ const Search = {
         const row = document.querySelector(`.search-condition-row[data-cond-id="${id}"]`);
         if (row) row.remove();
         this._updateRemoveButtons();
+        this._syncFoldersCheckbox();
         this._updateSearchBtn();
+    },
+
+    _syncFoldersCheckbox() {
+        const cb = document.getElementById('search-adv-folders');
+        if (!cb) return;
+        const hasFolderOnly = this.conditions.some(c => c.field === 'files');
+        if (hasFolderOnly) {
+            cb.checked = true;
+            cb.disabled = true;
+        } else {
+            cb.disabled = false;
+        }
     },
 
     _updateRemoveButtons() {
@@ -651,6 +665,7 @@ const Search = {
             }
             if (params.folders) document.getElementById('search-adv-folders').checked = true;
             if (params.files === false) document.getElementById('search-adv-files').checked = false;
+            this._syncFoldersCheckbox();
         } else {
             // Switch to basic mode if not already
             if (this.mode !== 'basic') this._toggleMode();

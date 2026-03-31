@@ -53,11 +53,21 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
     async with read_db() as db:
         if request.query_params.get("mode") == "advanced":
             conditions = parse_conditions_from_params(request.query_params)
+            include_folders = request.query_params.get("folders") == "true"
+            folder_only_fields = {"files"}
+            if not include_folders and any(
+                c["field"] in folder_only_fields
+                and (c.get("from") or c.get("to"))
+                for c in conditions
+            ):
+                return json_error(
+                    "File count filter requires 'Include folders' to be enabled."
+                )
             results = await search_files_advanced(
                 db,
                 conditions=conditions,
                 include_files=request.query_params.get("files") != "false",
-                include_folders=request.query_params.get("folders") == "true",
+                include_folders=include_folders,
                 location_id=location_id,
                 folder_id=folder_id,
                 page=page,

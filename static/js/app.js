@@ -1085,7 +1085,12 @@ Search.init({
             Detail.renderSearchResults(res.data, searchParams);
         } else {
             FileList.renderEmpty();
-            Toast.error(res.error || 'Search failed.');
+            ConfirmModal.open({
+                title: 'Search Error',
+                message: res.error || 'Search failed.',
+                confirmLabel: 'OK',
+                alert: true,
+            });
         }
     },
     onClear() {
