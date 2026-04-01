@@ -61,6 +61,70 @@ def get_active_recalc_locations() -> set[int]:
     return set(_active_recalc_locations)
 
 
+async def update_dup_counts_inline(fast_hashes: set[str]) -> set[int]:
+    """Update dup_count for files sharing the given hashes. Returns affected location_ids.
+
+    Inline alternative to the background recalc queue — queries active_hashes
+    for actual duplicate counts, updates only hashes with count > 1, and syncs
+    the denormalized dup_count in the catalog files table.
+    """
+    if not fast_hashes:
+        return set()
+
+    affected_locs: set[int] = set()
+    h_list = list(fast_hashes)
+
+    for i in range(0, len(h_list), SQL_VAR_LIMIT):
+        batch = h_list[i : i + SQL_VAR_LIMIT]
+        ph = ",".join("?" for _ in batch)
+
+        # Count files per hash
+        async with read_hashes() as hdb:
+            rows = await hdb.execute_fetchall(
+                f"SELECT hash_fast, COUNT(*) as cnt FROM active_hashes "
+                f"WHERE hash_fast IN ({ph}) AND hash_strong IS NULL "
+                f"GROUP BY hash_fast",
+                batch,
+            )
+
+        if not rows:
+            continue
+
+        # Update dup_count for hashes that have duplicates
+        for r in rows:
+            hf = r["hash_fast"]
+            cnt = r["cnt"]
+            dc = cnt - 1 if cnt > 1 else 0
+
+            async with hashes_writer() as wdb:
+                await wdb.execute(
+                    "UPDATE file_hashes SET dup_count = ? "
+                    "WHERE hash_fast = ? AND hash_strong IS NULL",
+                    (dc, hf),
+                )
+                fid_rows = await wdb.execute(
+                    "SELECT file_id, location_id FROM file_hashes "
+                    "WHERE hash_fast = ? AND hash_strong IS NULL",
+                    (hf,),
+                )
+                file_rows = await fid_rows.fetchall()
+
+            # Sync denormalized dup_count in catalog + collect locations
+            if file_rows:
+                fids = [fr[0] for fr in file_rows]
+                affected_locs.update(fr[1] for fr in file_rows)
+                for j in range(0, len(fids), 500):
+                    id_batch = fids[j : j + 500]
+                    id_ph = ",".join("?" for _ in id_batch)
+                    async with db_writer() as cdb:
+                        await cdb.execute(
+                            f"UPDATE files SET dup_count = ? WHERE id IN ({id_ph})",
+                            [dc] + id_batch,
+                        )
+
+    return affected_locs
+
+
 async def _batched_recalc(
     hashes, *, hash_column: str = "hash_strong", on_progress=None, batch_size: int = 0
 ):
@@ -554,14 +618,6 @@ def submit_hashes_for_recalc(
 
     if _writer_task is None or _writer_task.done():
         _writer_task = asyncio.create_task(_dup_recalc_writer())
-
-
-async def wait_for_recalc():
-    """Wait for the dup recalc writer to finish all queued work."""
-    if _writer_task and not _writer_task.done():
-        log.info("Waiting for dup recalc writer to drain...")
-        await _writer_task
-        log.info("Dup recalc writer drained")
 
 
 async def stop_writer():
@@ -1215,12 +1271,10 @@ async def hash_candidates_for_location(
             "hash_candidates_for_location: %d small files hash_fast copied from hash_partial",
             len(small_files),
         )
-        # Submit to coalesced writer for incremental dup recounting
-        submit_hashes_for_recalc(
-            fast_hashes=small_fast_hashes,
-            source=f"small file candidates location {location_id}",
-            location_ids={location_id},
-        )
+        # Inline dup count update for small files
+        small_affected = await update_dup_counts_inline(small_fast_hashes)
+        for lid in small_affected | {location_id}:
+            await recalculate_folder_dup_counts(lid)
 
     # Large files: insert into pending_hashes for the drainer
     if large_files:
@@ -1343,11 +1397,9 @@ async def run_hash_file(op_id: int, agent_id: int, params: dict):
             (hash_fast, file_id),
         )
 
-    submit_hashes_for_recalc(
-        fast_hashes={hash_fast},
-        source="hash_file",
-        location_ids={location_id},
-    )
+    affected = await update_dup_counts_inline({hash_fast})
+    for lid in affected | {location_id}:
+        await recalculate_folder_dup_counts(lid)
 
 
 async def drain_pending_hashes(
@@ -1375,6 +1427,7 @@ async def drain_pending_hashes(
     FETCH_LIMIT = 2000
     total_hashed = 0
     total_pending = 0
+    all_affected_locs: set[int] = set()
 
     where_clause = "WHERE agent_id = ? AND location_id = ?"
     where_params: tuple = (agent_id, location_id)
@@ -1420,12 +1473,8 @@ async def drain_pending_hashes(
         total_hashed += len(hash_results)
 
         if affected_fast:
-            submit_hashes_for_recalc(
-                strong_hashes=None,
-                fast_hashes=affected_fast,
-                source=f"hash drainer {location_name}",
-                location_ids=affected_locs,
-            )
+            batch_affected_locs = await update_dup_counts_inline(affected_fast)
+            all_affected_locs.update(batch_affected_locs)
 
         log.info(
             "Hash drainer: %d hashed (%d / %d) for %s",
@@ -1456,7 +1505,15 @@ async def drain_pending_hashes(
 
             if not rows:
                 if scan_done is None or scan_done.is_set():
-                    log.info("Hash drainer: done for %s", location_name)
+                    # Rebuild folder dup counts for all affected locations
+                    all_affected_locs.add(location_id)
+                    for lid in all_affected_locs:
+                        await recalculate_folder_dup_counts(lid)
+                    log.info(
+                        "Hash drainer: done for %s (%d locations updated)",
+                        location_name,
+                        len(all_affected_locs),
+                    )
                     return
                 await asyncio.sleep(2)
                 continue

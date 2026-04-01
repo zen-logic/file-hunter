@@ -377,10 +377,6 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             )
         logger.info("Hash drainer finished for %s", location_name)
 
-        # Wait for dup recalc to finish so stats are complete before scan reports done
-        from file_hunter.services.dup_counts import wait_for_recalc
-        await wait_for_recalc()
-
         await recalculate_location_sizes(location_id)
         await post_op_stats()
 
