@@ -957,8 +957,11 @@ const FileList = {
         this.el.innerHTML = '';
         this.el.appendChild(table);
 
+        // Paging bar sits outside the scroll container, fixed at bottom of panel
+        const existing = this.el.parentElement.querySelector('.paging-bar');
+        if (existing) existing.remove();
         const pagingBar = this._renderPagingBar();
-        if (pagingBar) this.el.appendChild(pagingBar);
+        if (pagingBar) this.el.parentElement.appendChild(pagingBar);
 
         this._scrollSelectedIntoView();
     },
