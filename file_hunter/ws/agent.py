@@ -35,6 +35,39 @@ def get_agent_capabilities(agent_id: int) -> set[str]:
     return _agent_capabilities.get(agent_id, set())
 
 
+async def _backfill_dup_candidates(agent_id: int, location_id: int):
+    """Background task: find files with hash_partial but no hash_fast that
+    have size+partial matches elsewhere. Queue them for hashing."""
+    from file_hunter.services.activity import register, unregister, update
+    from file_hunter.services.dup_counts import hash_candidates_for_location
+
+    async with read_db() as db:
+        name_row = await db.execute_fetchall(
+            "SELECT name FROM locations WHERE id = ?", (location_id,)
+        )
+    loc_name = name_row[0]["name"] if name_row else f"location {location_id}"
+
+    act_name = f"backfill-candidates-{location_id}"
+    try:
+        register(act_name, f"Checking duplicates: {loc_name}")
+        total, small, large = await hash_candidates_for_location(
+            location_id=location_id,
+            agent_id=agent_id,
+        )
+        if total > 0:
+            logger.info(
+                "Reconnect backfill for %s: %d candidates (%d small, %d queued)",
+                loc_name, total, small, large,
+            )
+            update(act_name, progress=f"{small} resolved, {large} queued")
+        # If large files were queued, drain_pending_hashes will pick them up
+        # (already launched as a task in the reconnect flow)
+    except Exception:
+        logger.exception("Reconnect backfill failed for %s", loc_name)
+    finally:
+        unregister(act_name)
+
+
 def get_agent_connection(agent_id: int) -> WebSocket | None:
     return _agent_connections.get(agent_id)
 
@@ -316,6 +349,9 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
                 loc_name = name_row[0]["name"]
 
             asyncio.create_task(drain_pending_hashes(agent_id, loc_id, loc_name))
+
+        # Queue dup candidates that couldn't be hashed while offline
+        asyncio.create_task(_backfill_dup_candidates(agent_id, loc_id))
 
     return location_ids
 
