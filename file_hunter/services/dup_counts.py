@@ -556,6 +556,14 @@ def submit_hashes_for_recalc(
         _writer_task = asyncio.create_task(_dup_recalc_writer())
 
 
+async def wait_for_recalc():
+    """Wait for the dup recalc writer to finish all queued work."""
+    if _writer_task and not _writer_task.done():
+        log.info("Waiting for dup recalc writer to drain...")
+        await _writer_task
+        log.info("Dup recalc writer drained")
+
+
 async def stop_writer():
     """Wait for the dup recalc writer to finish current work, then stop it."""
     global _writer_task
