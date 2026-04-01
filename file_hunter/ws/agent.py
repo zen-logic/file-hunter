@@ -37,9 +37,14 @@ def get_agent_capabilities(agent_id: int) -> set[str]:
 
 async def _backfill_dup_candidates(agent_id: int, location_id: int):
     """Background task: find files with hash_partial but no hash_fast that
-    have size+partial matches elsewhere. Queue them for hashing."""
+    have size+partial matches elsewhere. Queue them for hashing.
+    Loops until no new candidates are found — each hashing pass can reveal
+    new cross-location matches."""
     from file_hunter.services.activity import register, unregister, update
-    from file_hunter.services.dup_counts import hash_candidates_for_location
+    from file_hunter.services.dup_counts import (
+        drain_pending_hashes,
+        hash_candidates_for_location,
+    )
 
     async with read_db() as db:
         name_row = await db.execute_fetchall(
@@ -48,20 +53,28 @@ async def _backfill_dup_candidates(agent_id: int, location_id: int):
     loc_name = name_row[0]["name"] if name_row else f"location {location_id}"
 
     act_name = f"backfill-candidates-{location_id}"
+    iteration = 0
     try:
         register(act_name, f"Checking duplicates: {loc_name}")
-        total, small, large = await hash_candidates_for_location(
-            location_id=location_id,
-            agent_id=agent_id,
-        )
-        if total > 0:
-            logger.info(
-                "Reconnect backfill for %s: %d candidates (%d small, %d queued)",
-                loc_name, total, small, large,
+        while True:
+            iteration += 1
+            total, small, large = await hash_candidates_for_location(
+                location_id=location_id,
+                agent_id=agent_id,
             )
-            update(act_name, progress=f"{small} resolved, {large} queued")
-        # If large files were queued, drain_pending_hashes will pick them up
-        # (already launched as a task in the reconnect flow)
+            if total == 0:
+                break
+            logger.info(
+                "Reconnect backfill pass %d for %s: %d candidates (%d small, %d queued)",
+                iteration, loc_name, total, small, large,
+            )
+            update(act_name, progress=f"pass {iteration}: {small} resolved, {large} queued")
+            if large > 0:
+                # Drain the queued hashes before checking for more candidates
+                await drain_pending_hashes(agent_id, location_id, loc_name)
+            else:
+                # Only small files handled inline — no more work to drain
+                break
     except Exception:
         logger.exception("Reconnect backfill failed for %s", loc_name)
     finally:
