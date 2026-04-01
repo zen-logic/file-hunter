@@ -118,6 +118,18 @@ async def remove_location(request: Request):
             (f"__deleting_{loc_id}_{location_name}", f"__deleting_{loc_id}", loc_id),
         )
 
+    # Tell the agent to remove this path from its config
+    if agent_id:
+        resolved = _resolve_agent(agent_id)
+        if resolved:
+            host, port, token = resolved
+            try:
+                await _post(host, port, token, "/locations/delete", {"path": root_path}, agent_id=agent_id)
+            except Exception as e:
+                logging.getLogger("file_hunter").warning(
+                    "Failed to remove location from agent: %s", e
+                )
+
     # Broadcast deletion immediately — UI removes the location now
     await broadcast(
         {

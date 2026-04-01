@@ -27,7 +27,7 @@ import httpx
 from file_hunter.db import db_writer, open_connection, read_db
 from file_hunter.hashes_db import clear_hashes_stale, hashes_writer, mark_hashes_stale
 from file_hunter.helpers import post_op_stats
-from file_hunter.services.activity import update as activity_update
+from file_hunter.services.activity import unregister as activity_unregister, update as activity_update
 from file_hunter.services.agent_ops import hash_partial_batch, stream_tree
 from file_hunter.services.dup_counts import (
     HASH_BATCH_BYTES,
@@ -362,7 +362,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         # Wait for hash drainer to finish remaining work
         scan_done_event.set()
         if not drainer_task.done():
-            activity_update(_act_name, progress="confirming duplicates")
+            activity_unregister(_act_name)
         logger.info("Waiting for hash drainer to finish for %s", location_name)
         try:
             await drainer_task
