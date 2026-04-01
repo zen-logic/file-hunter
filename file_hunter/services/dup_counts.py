@@ -640,8 +640,12 @@ async def _dup_recalc_writer():
     """Single long-lived task that drains the hash queue.
 
     Processes work items, coalesces rapid submissions into larger batches.
-    All writes go through db_writer(). Shuts down after 10s idle.
+    All writes go through db_writer(). Stats rebuild happens once when the
+    queue drains, not per batch.
     """
+    all_affected: set[int] = set()
+    total_hashes_processed = 0
+
     try:
         while True:
             # Wait for work (shut down after 10s idle)
@@ -685,8 +689,8 @@ async def _dup_recalc_writer():
                 source=source_label,
             )
 
-            # Update stored duplicate_count for affected locations
-            affected: set[int] = set(merged_location_ids)
+            # Collect affected locations for stats rebuild at the end
+            all_affected.update(merged_location_ids)
 
             async with read_hashes() as hdb:
                 for hash_set, col in (
@@ -704,23 +708,29 @@ async def _dup_recalc_writer():
                             f"WHERE {col} IN ({ph})",
                             batch,
                         )
-                        affected |= {r["location_id"] for r in rows}
+                        all_affected |= {r["location_id"] for r in rows}
 
-            await update_location_dup_counts(affected)
+            total_hashes_processed += len(merged_strong) + len(merged_fast)
 
-            # Rebuild folder-level dup counts now that hashes.db is up to date
-            for lid in affected:
+        # Queue drained — rebuild stats once for all affected locations
+        if all_affected:
+            log.info(
+                "Dup recalc complete: %d hashes, rebuilding stats for %d locations",
+                total_hashes_processed,
+                len(all_affected),
+            )
+            await update_location_dup_counts(all_affected)
+            for lid in all_affected:
                 await recalculate_folder_dup_counts(lid)
 
-            total_hashes = len(merged_strong) + len(merged_fast)
-            _active_recalc_locations.difference_update(affected)
-            await broadcast(
-                {
-                    "type": "dup_recalc_completed",
-                    "hashCount": total_hashes,
-                    "locationIds": list(affected),
-                }
-            )
+        _active_recalc_locations.difference_update(all_affected)
+        await broadcast(
+            {
+                "type": "dup_recalc_completed",
+                "hashCount": total_hashes_processed,
+                "locationIds": list(all_affected),
+            }
+        )
     except Exception:
         log.error("Coalesced dup recalc writer failed", exc_info=True)
 
