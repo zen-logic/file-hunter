@@ -10,7 +10,7 @@
     display: none !important;
 }
 
-input, textarea, select, [contenteditable], .detail-preview pre, .preview-modal-content pre {
+input, textarea, select, [contenteditable], .detail-preview pre, .preview-modal-content pre, .selectable {
     -webkit-user-select: text;
     user-select: text;
 }
@@ -1071,8 +1071,6 @@ body::after {
     border: 1px solid var(--color-border-subtle);
     border-radius: 3px;
     background: var(--color-bg);
-    -webkit-user-select: text;
-    user-select: text;
 }
 
 .preview-modal-content .csv-preview {
@@ -1080,8 +1078,6 @@ body::after {
     height: 100%;
     overflow: auto;
     align-self: stretch;
-    -webkit-user-select: text;
-    user-select: text;
 }
 
 .csv-table {

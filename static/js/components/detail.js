@@ -317,7 +317,7 @@ const Detail = {
         } else if (type === 'document' && (detail.typeLow || '').toLowerCase() === 'pdf') {
             m.content.innerHTML = `<iframe src="${url}" title="${detail.name}"></iframe>`;
         } else if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'csv') {
-            m.content.innerHTML = `<div id="modal-csv-preview" class="csv-preview">Loading...</div>`;
+            m.content.innerHTML = `<div id="modal-csv-preview" class="csv-preview selectable">Loading...</div>`;
             fetch(url, { headers: _authHeaders() }).then(r => r.ok ? r.text() : null).then(text => {
                 const el = document.getElementById('modal-csv-preview');
                 if (!el || !text) { if (el) el.textContent = '(Preview not available)'; return; }
@@ -919,7 +919,7 @@ const Detail = {
 
         let html = `
             <div class="detail-section">
-                <div class="detail-filename">${detail.name}${detail.locationOnline === false ? '<span class="detail-offline-badge">offline</span>' : ''}${hasPendingOp ? `<span class="pending-indicator">pending ${detail.pendingOp}</span>` : ''}</div>
+                <div class="detail-filename selectable">${detail.name}${detail.locationOnline === false ? '<span class="detail-offline-badge">offline</span>' : ''}${hasPendingOp ? `<span class="pending-indicator">pending ${detail.pendingOp}</span>` : ''}</div>
                 ${staleBanner}
                 ${pendingBanner}
                 ${ignoredBannerPlaceholder}
@@ -954,15 +954,15 @@ const Detail = {
                 <h3>Hashes${detail.verified ? '<span class="detail-verified-badge">verified</span>' : ''}</h3>
                 <div class="detail-field">
                     <span class="label">Partial</span>
-                    <span class="value" style="font-family: monospace; font-size: 0.8em;">${detail.hashPartial || ''}</span>
+                    <span class="value selectable" style="font-family: monospace; font-size: 0.8em;">${detail.hashPartial || ''}</span>
                 </div>
                 <div class="detail-field">
                     <span class="label">Fast</span>
-                    <span class="value" style="font-family: monospace; font-size: 0.8em;">${detail.hashFast || ''}</span>
+                    <span class="value selectable" style="font-family: monospace; font-size: 0.8em;">${detail.hashFast || ''}</span>
                 </div>
                 <div class="detail-field">
                     <span class="label">Strong</span>
-                    <span class="value" style="font-family: monospace; font-size: 0.8em; word-break: break-all;">${detail.hashStrong || ''}</span>
+                    <span class="value selectable" style="font-family: monospace; font-size: 0.8em; word-break: break-all;">${detail.hashStrong || ''}</span>
                 </div>
                 ${detail.id && !detail.stale && !hasPendingOp && detail.online !== false ? `<button class="btn btn-sm" id="detail-rehash" style="margin-top:0.4rem">Re-hash</button>` : ''}
                 ${detail.id && !detail.verified && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-verify" style="margin-top:0.4rem">Verify (SHA-256)${detail.locationOnline === false ? ' \u2014 queued' : ''}</button>` : ''}
@@ -1096,7 +1096,7 @@ const Detail = {
             return `<div class="detail-preview detail-preview-pdf">${zoom}<iframe src="${url}" title="${detail.name}"></iframe></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'csv') {
-            return `<div class="detail-preview">${zoom}<div id="detail-csv-preview" class="csv-preview">Loading...</div></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<div id="detail-csv-preview" class="csv-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'text') {
             return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div><div class="detail-preview-btns">${hexBtn}</div>`;
