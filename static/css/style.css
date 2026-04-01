@@ -10,7 +10,7 @@
     display: none !important;
 }
 
-input, textarea, select, [contenteditable], .detail-preview pre, .preview-modal-content pre, .selectable {
+input, textarea, select, [contenteditable], .detail-preview pre, .preview-modal-content pre, .selectable, .selectable * {
     -webkit-user-select: text;
     user-select: text;
 }
