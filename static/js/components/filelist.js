@@ -468,6 +468,7 @@ const FileList = {
     },
 
     showLoading() {
+        this.breadcrumbEl.innerHTML = '';
         this.el.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div><span>Searching\u2026</span></div>';
     },
 

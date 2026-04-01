@@ -1064,6 +1064,7 @@ Search.init({
         }
         params.set('page', '0');
         FileList.showLoading();
+        Detail.el.innerHTML = '';
         const res = await API.get(`/api/search?${params.toString()}`);
         if (res.ok) {
             // Pass search params so FileList can re-fetch for paging/sorting
