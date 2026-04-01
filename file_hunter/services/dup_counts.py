@@ -1438,6 +1438,7 @@ async def drain_pending_hashes(
     total_hashed = 0
     total_pending = 0
     all_affected_locs: set[int] = set()
+    drainer_act = f"hash-drainer-{location_id}"
 
     where_clause = "WHERE agent_id = ? AND location_id = ?"
     where_params: tuple = (agent_id, location_id)
@@ -1493,11 +1494,14 @@ async def drain_pending_hashes(
             total_pending,
             location_name,
         )
+        _act_upd(drainer_act, progress=f"{total_hashed}/{total_pending}")
 
         if on_progress:
             await on_progress(total_hashed, total_pending)
 
     try:
+        _act_reg(drainer_act, f"Hashing: {location_name}")
+
         while True:
             async with read_db() as rdb:
                 rows = await rdb.execute_fetchall(
@@ -1524,6 +1528,7 @@ async def drain_pending_hashes(
                         location_name,
                         len(all_affected_locs),
                     )
+                    _act_unreg(drainer_act)
                     return
                 await asyncio.sleep(2)
                 continue
@@ -1562,6 +1567,8 @@ async def drain_pending_hashes(
             await asyncio.sleep(0)
 
     except (ConnectionError, OSError, httpx.ConnectError):
+        _act_unreg(drainer_act)
         return
     except asyncio.CancelledError:
+        _act_unreg(drainer_act)
         return
