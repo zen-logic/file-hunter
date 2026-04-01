@@ -537,18 +537,8 @@ DeleteFileModal.init(async (item) => {
             folder_ids: item.batchFolderIds,
         });
         if (res.ok) {
-            const d = res.data;
-            ActivityLog.add(`Batch deleted: <b>${d.deleted_files} files, ${d.deleted_folders} folders</b>`);
-            Toast.success(`Deleted ${d.deleted_files} files, ${d.deleted_folders} folders`);
-            selectedFile = null;
-            selectedFileDups = [];
-            consolidateBtn.disabled = true;
-            await Tree.reload();
-            if (selectedNode) {
-                await FileList.showFolder(selectedNode.id);
-            }
-            await StatusBar.loadStats();
-            await refreshDetailPanel();
+            ActivityLog.add(`Batch delete started: <b>${res.data.total} items</b>`);
+            Activity.progress('batch-delete', { label: 'Deleting', detail: `0/${res.data.total}` });
         }
     } else if (item.type === 'folder') {
         const folderId = String(item.id).replace('fld-', '');
@@ -1681,6 +1671,12 @@ WS.on('batch_delete_progress', (msg) => {
 
 WS.on('batch_deleted', async (msg) => {
     Activity.completed('batch-delete');
+    const files = msg.deletedFiles || 0;
+    const folders = msg.deletedFolders || 0;
+    ActivityLog.add(`Batch deleted: <b>${files} files, ${folders} folders</b>`);
+    Toast.success(`Deleted ${files} files, ${folders} folders`);
+    selectedFile = null;
+    selectedFileDups = [];
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
     await refreshDetailPanel();
