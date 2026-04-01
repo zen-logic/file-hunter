@@ -274,8 +274,12 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     invalidate_stats_cache()
 
     # Build per-location path status from agent-reported online field
-    from file_hunter.services.online_check import update_location_path_status
+    from file_hunter.services.online_check import (
+        _agent_location_path_status,
+        update_location_path_status,
+    )
 
+    prev_status = _agent_location_path_status.get(agent_id, {})
     path_status: dict[int, bool] = {}
     async with read_db() as db:
         for loc_id in location_ids:
@@ -291,6 +295,12 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
                 else:
                     path_status[loc_id] = True
     update_location_path_status(agent_id, path_status)
+
+    # Detect locations that just came online (were offline or unknown before)
+    newly_online: set[int] = set()
+    for loc_id, online in path_status.items():
+        if online and not prev_status.get(loc_id, False):
+            newly_online.add(loc_id)
 
     # Drain any pending consolidation jobs and deferred file ops for online locations
     from file_hunter.services.consolidate import drain_pending_jobs
@@ -350,8 +360,9 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
 
             asyncio.create_task(drain_pending_hashes(agent_id, loc_id, loc_name))
 
-        # Queue dup candidates that couldn't be hashed while offline
-        asyncio.create_task(_backfill_dup_candidates(agent_id, loc_id))
+        # Queue dup candidates for locations that just came online
+        if loc_id in newly_online:
+            asyncio.create_task(_backfill_dup_candidates(agent_id, loc_id))
 
     return location_ids
 
