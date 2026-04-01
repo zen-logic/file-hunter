@@ -1,4 +1,3 @@
-import asyncio
 import os
 
 from starlette.requests import Request
@@ -8,10 +7,10 @@ from file_hunter.db import read_db
 from file_hunter.services import fs
 from file_hunter.services.merge import (
     resolve_merge_target,
-    run_merge,
     is_merge_running,
     request_merge_cancel,
 )
+from file_hunter.services.queue_manager import enqueue
 
 
 async def merge(request: Request):
@@ -62,7 +61,12 @@ async def merge(request: Request):
     if is_merge_running():
         return json_error("A merge is already in progress.", 409)
 
-    asyncio.create_task(run_merge(source_id, source_info, destination_id, dest_info))
+    await enqueue("merge", None, {
+        "source_id": source_id,
+        "source_info": source_info,
+        "destination_id": destination_id,
+        "dest_info": dest_info,
+    })
 
     return json_ok(
         {"message": f"Merge started: {source_info['label']} → {dest_info['label']}"}

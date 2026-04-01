@@ -546,11 +546,53 @@ async def _handle_hash_file(op_id: int, agent_id: int | None, params: dict):
     await run_hash_file(op_id, agent_id, params)
 
 
+async def _handle_batch_delete(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.batch import batch_delete
+
+    await batch_delete(
+        params.get("file_ids", []),
+        params.get("folder_ids", []),
+        params.get("all_duplicates", False),
+    )
+
+
+async def _handle_merge(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.merge import run_merge
+
+    await run_merge(
+        params["source_id"],
+        params["source_info"],
+        params["destination_id"],
+        params["dest_info"],
+    )
+
+
+async def _handle_batch_consolidate(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.consolidate import run_batch_consolidation
+
+    await run_batch_consolidation(
+        params["file_ids"],
+        params["mode"],
+        params.get("dest_folder_id"),
+        filename_match_only=params.get("filename_match_only", False),
+    )
+
+
+async def _handle_batch_rehash(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.routes.files import _run_batch_rehash
+
+    await _run_batch_rehash(params["file_ids"])
+
+
 _HANDLERS = {
     "scan_dir": _handle_scan_dir,
     "backfill_location": _handle_backfill_location,
     "rehash_partial": _handle_rehash_partial,
     "hash_file": _handle_hash_file,
+    "batch_delete": _handle_batch_delete,
+    "merge": _handle_merge,
+    "batch_consolidate": _handle_batch_consolidate,
+    "batch_rehash": _handle_batch_rehash,
 }
 
 

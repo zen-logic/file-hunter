@@ -10,9 +10,9 @@ from file_hunter.services import fs
 from file_hunter.services.consolidate import (
     _resolve_folder_path_with_loc,
     run_consolidation,
-    run_batch_consolidation,
     is_consolidation_running,
 )
+from file_hunter.services.queue_manager import enqueue
 
 
 async def consolidate(request: Request):
@@ -103,11 +103,12 @@ async def batch_consolidate(request: Request):
             return json_error("Destination is offline.", 400)
 
     filename_match_only = body.get("filename_match_only", False)
-    asyncio.create_task(
-        run_batch_consolidation(
-            file_ids, mode, dest_folder_id, filename_match_only=filename_match_only
-        )
-    )
+    await enqueue("batch_consolidate", None, {
+        "file_ids": file_ids,
+        "mode": mode,
+        "dest_folder_id": dest_folder_id,
+        "filename_match_only": filename_match_only,
+    })
 
     return json_ok(
         {"message": f"Batch consolidation started for {len(file_ids)} files"}

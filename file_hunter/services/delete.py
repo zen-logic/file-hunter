@@ -77,10 +77,11 @@ async def delete_file(db, file_id: int) -> dict:
 
     # Online — delete from disk and catalog immediately
     deleted_from_disk = False
-    exists = await fs.file_exists(full_path, location_id)
-    if exists:
+    try:
         await fs.file_delete(full_path, location_id)
         deleted_from_disk = True
+    except FileNotFoundError:
+        pass  # already gone from disk
 
     await db.execute("DELETE FROM files WHERE id = ?", (file_id,))
     await db.commit()
@@ -192,10 +193,11 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
 
         online = await fs.dir_exists(root_path, loc_id)
         if online:
-            exists = await fs.file_exists(full_path, loc_id)
-            if exists:
+            try:
                 await fs.file_delete(full_path, loc_id)
                 deleted_from_disk_count += 1
+            except FileNotFoundError:
+                pass  # already gone from disk
             await db.execute("DELETE FROM files WHERE id = ?", (fid,))
             deleted_ids.append(fid)
             deleted_count += 1

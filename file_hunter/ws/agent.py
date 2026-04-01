@@ -380,6 +380,9 @@ async def agent_ws_endpoint(websocket: WebSocket):
         "os": agent_os,
     }
 
+    from file_hunter.services.agent_ops import open_agent_client
+    await open_agent_client(agent_id)
+
     # Update agent status in DB
     now = datetime.now(timezone.utc).isoformat()
 
@@ -566,6 +569,9 @@ async def agent_ws_endpoint(websocket: WebSocket):
                     f"loc-{lid}" for lid in _agent_location_ids.get(agent_id, set())
                 ]
 
+                from file_hunter.services.agent_ops import close_agent_client
+                await close_agent_client(agent_id)
+
                 _agent_connections.pop(agent_id, None)
                 _agent_tokens.pop(agent_id, None)
                 _agent_info.pop(agent_id, None)
@@ -614,6 +620,8 @@ async def agent_ws_endpoint(websocket: WebSocket):
             # Shutdown cancelled the cleanup — in-memory state already torn down,
             # DB will be corrected on next startup (_recover_interrupted)
             logger.info("Agent #%d cleanup skipped (shutdown)", agent_id)
+            from file_hunter.services.agent_ops import close_agent_client
+            await close_agent_client(agent_id)
             _agent_connections.pop(agent_id, None)
             _agent_tokens.pop(agent_id, None)
             _agent_info.pop(agent_id, None)

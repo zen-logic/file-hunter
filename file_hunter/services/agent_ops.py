@@ -17,6 +17,9 @@ logger = logging.getLogger("file_hunter")
 # Cache location_id -> agent_id to avoid repeated DB lookups
 _loc_agent_cache: dict[int, int] = {}
 
+# Persistent HTTP clients per agent — reuse TCP connections
+_agent_clients: dict[int, httpx.AsyncClient] = {}
+
 
 def _resolve_agent(agent_id: int):
     """Return (host, port, token) for an online agent, or None."""
@@ -59,7 +62,18 @@ async def locations_same_agent(loc_a: int, loc_b: int) -> bool:
     """Return True if both locations are on the same agent."""
     try:
         return await _get_agent_id(loc_a) == await _get_agent_id(loc_b)
-    except ValueError:
+    except (ValueError, OSError):
+        return False
+
+
+async def location_agent_has_capability(location_id: int, capability: str) -> bool:
+    """Check whether the agent serving a location advertises a capability."""
+    from file_hunter.ws.agent import get_agent_capabilities
+
+    try:
+        agent_id = await _get_agent_id(location_id)
+        return capability in get_agent_capabilities(agent_id)
+    except (ValueError, OSError):
         return False
 
 
@@ -71,29 +85,71 @@ def invalidate_loc_cache(location_id: int = None):
         _loc_agent_cache.clear()
 
 
-async def _post(host, port, token, path, body, timeout=60.0):
+async def open_agent_client(agent_id: int):
+    """Create a persistent HTTP client for an agent. Call on agent connect."""
+    await close_agent_client(agent_id)
+    _agent_clients[agent_id] = httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0, connect=10.0),
+        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+    )
+    logger.info("HTTP client opened for agent #%d", agent_id)
+
+
+async def close_agent_client(agent_id: int):
+    """Close the persistent HTTP client for an agent. Call on agent disconnect."""
+    client = _agent_clients.pop(agent_id, None)
+    if client:
+        await client.aclose()
+        logger.info("HTTP client closed for agent #%d", agent_id)
+
+
+def _get_client(agent_id: int) -> httpx.AsyncClient | None:
+    """Get the persistent client for an agent, or None."""
+    return _agent_clients.get(agent_id)
+
+
+def _raise_agent_error(error_msg: str, status_code: int):
+    """Raise a proper I/O exception from an agent error response."""
+    if status_code == 404 or "not found" in error_msg.lower():
+        raise FileNotFoundError(error_msg)
+    if "permission" in error_msg.lower():
+        raise PermissionError(error_msg)
+    raise OSError(error_msg)
+
+
+async def _post(host, port, token, path, body, timeout=60.0, agent_id=None):
     """POST JSON to agent and return the parsed data field."""
     url = f"http://{host}:{port}{path}"
-    if timeout is None:
-        timeout = httpx.Timeout(None, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            url, json=body, headers={"Authorization": f"Bearer {token}"}
-        )
+    headers = {"Authorization": f"Bearer {token}"}
+    client = _get_client(agent_id) if agent_id else None
+    if client:
+        if timeout is None:
+            timeout = httpx.Timeout(None, connect=10.0)
+        resp = await client.post(url, json=body, headers=headers, timeout=timeout)
+    else:
+        if timeout is None:
+            timeout = httpx.Timeout(None, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            resp = await c.post(url, json=body, headers=headers)
     result = resp.json()
     if not result.get("ok"):
-        raise ValueError(result.get("error", resp.text))
+        _raise_agent_error(result.get("error", resp.text), resp.status_code)
     return result.get("data", {})
 
 
-async def _get(host, port, token, path, timeout=60.0):
+async def _get(host, port, token, path, timeout=60.0, agent_id=None):
     """GET from agent and return the parsed data field."""
     url = f"http://{host}:{port}{path}"
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+    headers = {"Authorization": f"Bearer {token}"}
+    client = _get_client(agent_id) if agent_id else None
+    if client:
+        resp = await client.get(url, headers=headers, timeout=timeout)
+    else:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            resp = await c.get(url, headers=headers)
     result = resp.json()
     if not result.get("ok"):
-        raise ValueError(result.get("error", resp.text))
+        _raise_agent_error(result.get("error", resp.text), resp.status_code)
     return result.get("data", {})
 
 
@@ -160,19 +216,19 @@ async def dispatch(operation: str, location_id: int, **kwargs):
     host, port, token = resolved
 
     if operation == "file_exists":
-        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]})
+        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
         return data.get("is_file", False)
 
     elif operation == "dir_exists":
-        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]})
+        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
         return data.get("is_dir", False)
 
     elif operation == "path_exists":
-        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]})
+        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
         return data.get("exists", False)
 
     elif operation == "file_delete":
-        await _post(host, port, token, "/files/delete", {"path": kwargs["path"]})
+        await _post(host, port, token, "/files/delete", {"path": kwargs["path"]}, agent_id=agent_id)
 
     elif operation == "file_copy":
         body = {
@@ -181,18 +237,13 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         }
         if kwargs.get("mtime") is not None:
             body["mtime"] = kwargs["mtime"]
-        await _post(host, port, token, "/files/copy", body, timeout=None)
+        await _post(host, port, token, "/files/copy", body, timeout=None, agent_id=agent_id)
 
     elif operation == "file_move":
         await _post(
-            host,
-            port,
-            token,
-            "/files/move",
-            {
-                "path": kwargs["path"],
-                "destination": kwargs["destination"],
-            },
+            host, port, token, "/files/move",
+            {"path": kwargs["path"], "destination": kwargs["destination"]},
+            agent_id=agent_id,
         )
 
     elif operation == "file_write":
@@ -201,10 +252,10 @@ async def dispatch(operation: str, location_id: int, **kwargs):
             body["encoding"] = kwargs["encoding"]
         if kwargs.get("append"):
             body["append"] = True
-        await _post(host, port, token, "/files/write", body)
+        await _post(host, port, token, "/files/write", body, agent_id=agent_id)
 
     elif operation == "file_stat":
-        data = await _post(host, port, token, "/files/stat", {"path": kwargs["path"]})
+        data = await _post(host, port, token, "/files/stat", {"path": kwargs["path"]}, agent_id=agent_id)
         if not data.get("exists"):
             return None
         return {"size": data["size"], "mtime": data["mtime"], "ctime": data["ctime"]}
@@ -213,47 +264,45 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         body = {"path": kwargs["path"]}
         if kwargs.get("strong"):
             body["strong"] = True
-        data = await _post(host, port, token, "/files/hash", body, timeout=None)
+        data = await _post(host, port, token, "/files/hash", body, timeout=None, agent_id=agent_id)
         result = {"hash_fast": data["hash_fast"]}
         if "hash_strong" in data:
             result["hash_strong"] = data["hash_strong"]
         return result
 
     elif operation == "dir_create":
-        await _post(host, port, token, "/folders/create", {"path": kwargs["path"]})
+        await _post(host, port, token, "/folders/create", {"path": kwargs["path"]}, agent_id=agent_id)
 
     elif operation == "dir_delete":
-        await _post(host, port, token, "/folders/delete", {"path": kwargs["path"]})
+        await _post(host, port, token, "/folders/delete", {"path": kwargs["path"]}, agent_id=agent_id)
 
     elif operation == "dir_move":
         await _post(
-            host,
-            port,
-            token,
-            "/folders/move",
-            {
-                "path": kwargs["path"],
-                "destination": kwargs["destination"],
-            },
+            host, port, token, "/folders/move",
+            {"path": kwargs["path"], "destination": kwargs["destination"]},
+            agent_id=agent_id,
         )
 
     elif operation == "dir_exists":
         data = await _post(
-            host, port, token, "/folders/exists", {"path": kwargs["path"]}
+            host, port, token, "/folders/exists", {"path": kwargs["path"]},
+            agent_id=agent_id,
         )
         return data.get("exists", False)
 
     elif operation == "agent_status":
-        return await _get(host, port, token, "/status", timeout=5.0)
+        return await _get(host, port, token, "/status", timeout=5.0, agent_id=agent_id)
 
     elif operation == "disk_stats":
         return await _post(
-            host, port, token, "/disk-stats", {"path": kwargs["path"]}, timeout=10.0
+            host, port, token, "/disk-stats", {"path": kwargs["path"]}, timeout=10.0,
+            agent_id=agent_id,
         )
 
     elif operation == "list_dir":
         return await _post(
-            host, port, token, "/list-dir", {"path": kwargs["path"]}, timeout=30.0
+            host, port, token, "/list-dir", {"path": kwargs["path"]}, timeout=30.0,
+            agent_id=agent_id,
         )
 
     elif operation == "_upload_file":

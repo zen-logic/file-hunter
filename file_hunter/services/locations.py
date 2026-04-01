@@ -938,7 +938,7 @@ async def _cross_location_dir_move(
                         mtime=parse_mtime(fr["modified_date"]),
                     )
                     copied += 1
-                except (RuntimeError, ValueError) as e:
+                except (RuntimeError, ValueError, OSError) as e:
                     err = str(e).lower()
                     if "404" in err or "not found" in err:
                         log.warning("Skipping missing file: %s", fr["full_path"])

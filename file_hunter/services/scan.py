@@ -41,6 +41,7 @@ from file_hunter.services.scanner import (
     mark_stale_folders,
 )
 from file_hunter.services.settings import get_setting
+from file_hunter.services.sizes import recalculate_location_sizes
 from file_hunter.stats_db import apply_file_deltas, read_stats as read_stats_db
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
@@ -376,6 +377,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             )
         logger.info("Hash drainer finished for %s", location_name)
 
+        await recalculate_location_sizes(location_id)
         await post_op_stats()
 
         scan_folder_id = params.get("folder_id")

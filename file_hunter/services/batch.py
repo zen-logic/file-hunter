@@ -1,5 +1,8 @@
 """Batch operations — delete, move, tag, and download multiple items."""
 
+import logging
+
+from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import get_file_hashes, read_hashes, remove_file_hashes
 from file_hunter.helpers import parse_prefixed_id, post_op_stats
 from file_hunter.services import fs
@@ -11,41 +14,20 @@ from file_hunter.services.locations import move_folder
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
+logger = logging.getLogger("file_hunter")
+
 
 async def batch_delete(
-    db, file_ids: list[int], folder_ids: list[int], all_duplicates: bool = False
-) -> dict:
-    """Delete multiple files and folders from disk and catalog in a single operation.
+    file_ids: list[int], folder_ids: list[int], all_duplicates: bool = False
+):
+    """Delete multiple files and folders from disk and catalog as a background task.
 
     Folders are deleted first (they may contain listed files). Files on offline
     locations are queued as deferred ops. When all_duplicates is True, the file
     list is expanded to include all files sharing the same hash (strong or fast)
     before deletion.
 
-    Parameters:
-        db: Writable database connection (called inside execute_write).
-        file_ids: List of numeric file IDs to delete.
-        folder_ids: List of numeric folder IDs to delete.
-        all_duplicates: If True, expand file_ids to include all duplicate files
-            (by hash) from hashes.db before deleting.
-
-    Returns:
-        dict with keys: deleted_files (int), deleted_folders (int),
-        deleted_from_disk (int).
-
-    Side effects:
-        Disk I/O — deletes files/folders via fs service for online locations.
-        DB write + commit — bulk DELETE FROM files (batched by 500), folder
-        deletes via delete_folder().
-        Removes hashes from hashes.db via remove_file_hashes().
-        Updates stats_db per affected location via update_stats_for_files().
-        Registers/unregisters an activity entry for status bar progress.
-        Broadcasts batch_delete_progress and status_bar_idle via WebSocket.
-        Broadcasts updated stats and dup counts via post_op_stats().
-        May queue deferred_ops for files on offline locations.
-
-    Called by:
-        Route handler batch_delete_route (POST /api/batch/delete) via execute_write.
+    Runs as a background task — broadcasts progress and completion via WebSocket.
     """
     total = len(file_ids) + len(folder_ids)
     act_name = f"batch-delete-{id(file_ids)}"
@@ -59,7 +41,8 @@ async def batch_delete(
     try:
         # Delete folders first (they may contain some of the listed files)
         for fid in folder_ids:
-            result = await delete_folder(db, fid)
+            async with db_writer() as db:
+                result = await delete_folder(db, fid)
             if result:
                 deleted_folders += 1
                 if result.get("deleted_from_disk"):
@@ -68,11 +51,14 @@ async def batch_delete(
             update(act_name, progress=f"{done}/{total}")
 
         if not file_ids:
-            return {
-                "deleted_files": 0,
-                "deleted_folders": deleted_folders,
-                "deleted_from_disk": deleted_from_disk,
-            }
+            await broadcast(
+                {
+                    "type": "batch_deleted",
+                    "deletedFiles": 0,
+                    "deletedFolders": deleted_folders,
+                }
+            )
+            return
 
         # Expand to include duplicates if requested
         if all_duplicates:
@@ -106,21 +92,25 @@ async def batch_delete(
             file_ids = list(all_ids)
 
         # Load all file records in one query
-        ph = ",".join("?" for _ in file_ids)
-        all_rows = await db.execute_fetchall(
-            f"""SELECT f.id, f.filename, f.full_path, f.location_id, f.folder_id,
-                      f.file_size, f.file_type_high, f.hidden, l.root_path
-               FROM files f
-               JOIN locations l ON l.id = f.location_id
-               WHERE f.id IN ({ph})""",
-            file_ids,
-        )
+        async with read_db() as db:
+            ph = ",".join("?" for _ in file_ids)
+            all_rows = await db.execute_fetchall(
+                f"""SELECT f.id, f.filename, f.full_path, f.location_id, f.folder_id,
+                          f.file_size, f.file_type_high, f.hidden, l.root_path
+                   FROM files f
+                   JOIN locations l ON l.id = f.location_id
+                   WHERE f.id IN ({ph})""",
+                file_ids,
+            )
         if not all_rows:
-            return {
-                "deleted_files": 0,
-                "deleted_folders": deleted_folders,
-                "deleted_from_disk": deleted_from_disk,
-            }
+            await broadcast(
+                {
+                    "type": "batch_deleted",
+                    "deletedFiles": 0,
+                    "deletedFolders": deleted_folders,
+                }
+            )
+            return
 
         # Get hashes for dup recalc
         fids = [r["id"] for r in all_rows]
@@ -145,10 +135,10 @@ async def batch_delete(
 
             if online_cache[loc_id]:
                 try:
-                    exists = await fs.file_exists(rec["full_path"], loc_id)
-                    if exists:
-                        await fs.file_delete(rec["full_path"], loc_id)
-                        deleted_from_disk += 1
+                    await fs.file_delete(rec["full_path"], loc_id)
+                    deleted_from_disk += 1
+                except FileNotFoundError:
+                    pass  # already gone from disk
                 except Exception:
                     pass  # file delete failed, still remove from catalog
                 deleted_ids.append(fid)
@@ -164,7 +154,8 @@ async def batch_delete(
                     )
                 )
             else:
-                await queue_deferred_op(db, fid, loc_id, "delete")
+                async with db_writer() as db:
+                    await queue_deferred_op(db, fid, loc_id, "delete")
 
             h = h_map.get(fid, {})
             if h.get("hash_strong"):
@@ -185,11 +176,11 @@ async def batch_delete(
 
         # Bulk delete from catalog
         if deleted_ids:
-            for i in range(0, len(deleted_ids), 500):
-                batch = deleted_ids[i : i + 500]
-                bph = ",".join("?" for _ in batch)
-                await db.execute(f"DELETE FROM files WHERE id IN ({bph})", batch)
-            await db.commit()
+            async with db_writer() as db:
+                for i in range(0, len(deleted_ids), 500):
+                    batch = deleted_ids[i : i + 500]
+                    bph = ",".join("?" for _ in batch)
+                    await db.execute(f"DELETE FROM files WHERE id IN ({bph})", batch)
 
             await remove_file_hashes(deleted_ids)
 
@@ -204,11 +195,21 @@ async def batch_delete(
             source=f"batch delete ({len(file_ids)} files)",
         )
 
-        return {
-            "deleted_files": deleted_files,
-            "deleted_folders": deleted_folders,
-            "deleted_from_disk": deleted_from_disk,
-        }
+        await broadcast(
+            {
+                "type": "batch_deleted",
+                "deletedFiles": deleted_files,
+                "deletedFolders": deleted_folders,
+            }
+        )
+    except Exception as exc:
+        logger.exception("Batch delete failed: %s", exc)
+        await broadcast(
+            {
+                "type": "batch_delete_error",
+                "error": str(exc),
+            }
+        )
     finally:
         unregister(act_name)
         await broadcast({"type": "status_bar_idle"})
@@ -301,7 +302,7 @@ async def batch_move(
             try:
                 await move_folder(db, fid, destination_folder_id)
                 moved_folders += 1
-            except ValueError as e:
+            except (ValueError, OSError) as e:
                 errors.append(f"Folder {fid}: {e}")
             done = moved_folders + moved_files
             update(act_name, progress=f"{done}/{total}")
@@ -325,7 +326,7 @@ async def batch_move(
                     skip_post_processing=True,
                 )
                 moved_files += 1
-            except ValueError as e:
+            except (ValueError, OSError) as e:
                 errors.append(f"File {fid}: {e}")
             done = moved_folders + moved_files
             update(act_name, progress=f"{done}/{total}")

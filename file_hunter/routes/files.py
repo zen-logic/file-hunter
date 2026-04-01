@@ -318,17 +318,14 @@ async def _run_group_verify(
             continue
 
         try:
-            exists = await fs.file_exists(f["full_path"], f["location_id"])
-            if not exists:
-                skipped += 1
-                continue
-
             new_fast, new_strong = await fs.file_hash(
                 f["full_path"], f["location_id"], strong=True
             )
             await update_file_hash(fid, hash_fast=new_fast, hash_strong=new_strong)
             strong_hashes.add(new_strong)
             verified += 1
+        except FileNotFoundError:
+            skipped += 1
         except Exception as exc:
             logger.warning("Verify failed for file %d: %s", fid, exc)
             skipped += 1
@@ -393,13 +390,11 @@ async def file_rehash(request: Request):
     if not online:
         return json_error("Location is offline.", 400)
 
-    exists = await fs.file_exists(f["full_path"], f["location_id"])
-    if not exists:
-        return json_error("File not found on disk.", 400)
-
     # Compute hash_fast
     try:
         (hash_fast,) = await fs.file_hash(f["full_path"], f["location_id"])
+    except FileNotFoundError:
+        return json_error("File not found on disk.", 400)
     except Exception as exc:
         return json_error(f"Hash computation failed: {exc}", 500)
 
@@ -449,7 +444,9 @@ async def batch_rehash(request: Request):
     if not file_ids:
         return json_error("fileIds is required.")
 
-    asyncio.create_task(_run_batch_rehash(file_ids))
+    from file_hunter.services.queue_manager import enqueue
+
+    await enqueue("batch_rehash", None, {"file_ids": file_ids})
     return json_ok({"queued": len(file_ids)})
 
 
@@ -480,15 +477,15 @@ async def _run_batch_rehash(file_ids: list[int]):
                 )
             agent_id = loc_row[0]["agent_id"] if loc_row else None
 
-            if not await fs.file_exists(f["full_path"], f["location_id"]):
-                continue
-
             # Read old hash before overwriting
             old_h = (await get_file_hashes([file_id])).get(file_id, {})
             old_fast = old_h.get("hash_fast")
             old_strong = old_h.get("hash_strong")
 
-            (hash_fast,) = await fs.file_hash(f["full_path"], f["location_id"])
+            try:
+                (hash_fast,) = await fs.file_hash(f["full_path"], f["location_id"])
+            except FileNotFoundError:
+                continue
 
             hash_partial = None
             if agent_id is not None:

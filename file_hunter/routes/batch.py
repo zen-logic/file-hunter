@@ -4,11 +4,11 @@ from starlette.requests import Request
 from file_hunter.db import read_db, execute_write
 from file_hunter.core import json_ok, json_error
 from file_hunter.services.batch import (
-    batch_delete,
     batch_move,
     batch_tag,
     batch_collect_files,
 )
+from file_hunter.services.queue_manager import enqueue
 from file_hunter.services.zip_download import start_build
 from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
@@ -24,18 +24,12 @@ async def batch_delete_route(request: Request):
     if not file_ids and not folder_ids:
         return json_error("No items to delete.")
 
-    result = await execute_write(batch_delete, file_ids, folder_ids, all_duplicates)
-    await post_op_stats()
-
-    await broadcast(
-        {
-            "type": "batch_deleted",
-            "deletedFiles": result["deleted_files"],
-            "deletedFolders": result["deleted_folders"],
-        }
-    )
-
-    return json_ok(result)
+    op_id = await enqueue("batch_delete", None, {
+        "file_ids": file_ids,
+        "folder_ids": folder_ids,
+        "all_duplicates": all_duplicates,
+    })
+    return json_ok({"started": True, "op_id": op_id, "total": len(file_ids) + len(folder_ids)})
 
 
 async def batch_move_route(request: Request):
