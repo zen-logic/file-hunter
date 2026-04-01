@@ -495,17 +495,6 @@ async def run_consolidation(
                     "file_type_high": copy["file_type_high"],
                 }
             )
-            stubs_written += 1
-
-            await append_row(
-                csv_path,
-                csv_loc_id,
-                copy["location_name"],
-                original_path,
-                dest_loc_name,
-                canonical_path,
-                "stubbed",
-            )
 
         # Add result CSV to catalog (only if this consolidation owns it)
         if owns_csv:
@@ -588,11 +577,32 @@ async def run_consolidation(
                     ],
                     added=[(stub_info["folder_id"], stub_size, "text", 0)],
                 )
+                stubs_written += 1
+                await append_row(
+                    csv_path,
+                    csv_loc_id,
+                    stub_info["location_name"],
+                    original_path,
+                    stub_info["dest_loc_name"],
+                    stub_info["canonical_path"],
+                    "stubbed",
+                )
             except Exception as e:
                 logger.warning(
                     "Stub write failed for %s: %s — queued",
                     original_path,
                     e,
+                )
+                stubs_queued += 1
+                await append_row(
+                    csv_path,
+                    csv_loc_id,
+                    stub_info["location_name"],
+                    original_path,
+                    stub_info["dest_loc_name"],
+                    stub_info["canonical_path"],
+                    "queued",
+                    str(e),
                 )
                 async with db_writer() as wdb:
                     await wdb.execute(

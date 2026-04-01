@@ -325,7 +325,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                 dest_rel_path = os.path.join(dest_info["abs_path"], src_rel)
                 dest_dir = os.path.dirname(dest_rel_path)
 
-                # DB-based collision check instead of filesystem
+                # DB-based collision check (fast), filesystem fallback (safe)
                 actual_dest = dest_rel_path
                 async with read_db() as db:
                     collision = await db.execute_fetchall(
@@ -345,6 +345,11 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         if not collision:
                             break
                         counter += 1
+                # Final filesystem check — catch files on disk not in catalog
+                if await fs.path_exists(actual_dest, dest_loc_id):
+                    actual_dest = await fs.unique_dest_path(
+                        actual_dest, dest_loc_id
+                    )
 
                 # Agent calls: dir_create (cached) + copy + hash
                 try:

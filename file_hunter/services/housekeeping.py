@@ -261,6 +261,9 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
         try:
             await delete_agent_location(agent_id, root_path, location_id=location_id)
             logger.info("Agent #%d confirmed delete of '%s'", agent_id, location_name)
+        except (FileNotFoundError, OSError):
+            # Already removed (route handler notified agent) or path gone — safe to continue
+            logger.info("Agent #%d: location '%s' already removed", agent_id, location_name)
         except ConnectionError:
             logger.info(
                 "Agent #%d offline — queuing config cleanup for '%s'",
