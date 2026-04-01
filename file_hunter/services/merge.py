@@ -612,16 +612,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                 }
             )
         else:
-            await broadcast(
-                {
-                    "type": "merge_completed",
-                    "source": source_label,
-                    "destination": dest_label,
-                    "filesCopied": files_copied,
-                    "filesStubbed": files_stubbed,
-                    "filesSkipped": files_skipped,
-                }
-            )
+            activity_update(act_name, progress="writing stubs")
         invalidate_stats_cache()
         for lid in {src_loc_id, dest_loc_id}:
             try:
@@ -638,6 +629,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
         )
 
         # ── Stub writing phase: disk first, then catalog ──
+        total_stubs = len(pending_stubs)
+        stubs_done = 0
         for stub_info in pending_stubs:
             src_path = stub_info["src_path"]
             src_file_id = stub_info["src_file_id"]
@@ -750,6 +743,21 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     stub_info["dest_path"],
                     e,
                 )
+
+            stubs_done += 1
+            if stubs_done % 100 == 0 or stubs_done == total_stubs:
+                activity_update(act_name, progress=f"stubs {stubs_done}/{total_stubs}")
+
+        await broadcast(
+            {
+                "type": "merge_completed",
+                "source": source_label,
+                "destination": dest_label,
+                "filesCopied": files_copied,
+                "filesStubbed": files_stubbed,
+                "filesSkipped": files_skipped,
+            }
+        )
 
     except Exception as exc:
         logger.exception("Merge failed: %s", exc)
