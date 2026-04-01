@@ -30,7 +30,7 @@
 
     --color-offline-bg: #1e0c0c;
     --color-offline-text: #ff4060;
-    --opacity-offline: 0;
+    --opacity-offline: 0.45;
 
     --color-stale-bg: #0c1a1a;
     --color-stale-text: #60c0c0;
