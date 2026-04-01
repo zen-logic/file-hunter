@@ -202,12 +202,25 @@ const Settings = {
 
         // Reset queues
         document.getElementById('settings-reset-queues').addEventListener('click', async () => {
-            if (!confirm('Stop all operations and reset queues? This will cancel running scans, remove temporary databases, and clear all queued operations. This cannot be undone.')) return;
+            const ok = await ConfirmModal.open({
+                title: 'Reset Queues',
+                message: 'Stop all operations and reset queues? This will cancel running scans, remove temporary databases, and clear all queued operations. This cannot be undone.',
+                confirmLabel: 'Reset',
+            });
+            if (!ok) return;
             const res = await API.post('/api/maintenance/reset-queues');
             if (res.ok) {
-                alert(`Reset complete. ${res.data.opsCancelled} operation(s) cancelled, ${res.data.tempFilesRemoved} temporary file(s) removed.`);
+                await ConfirmModal.open({
+                    title: 'Reset Complete',
+                    message: `${res.data.opsCancelled} operation(s) cancelled, ${res.data.tempFilesRemoved} temporary file(s) removed.`,
+                    alert: true,
+                });
             } else {
-                alert(res.error || 'Failed to reset queues.');
+                await ConfirmModal.open({
+                    title: 'Error',
+                    message: res.error || 'Failed to reset queues.',
+                    alert: true,
+                });
             }
         });
 
@@ -254,9 +267,16 @@ const Settings = {
             btn.addEventListener('click', async () => {
                 const id = parseInt(btn.dataset.id, 10);
                 const user = users.find(u => u.id === id);
-                if (user && confirm(`Delete user "${user.username}"?`)) {
-                    await API.delete(`/api/auth/users/${id}`);
-                    this._render();
+                if (user) {
+                    const ok = await ConfirmModal.open({
+                        title: 'Delete User',
+                        message: `Delete user "${user.username}"?`,
+                        confirmLabel: 'Delete',
+                    });
+                    if (ok) {
+                        await API.delete(`/api/auth/users/${id}`);
+                        this._render();
+                    }
                 }
             });
         });
