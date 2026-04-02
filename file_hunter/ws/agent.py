@@ -35,51 +35,6 @@ def get_agent_capabilities(agent_id: int) -> set[str]:
     return _agent_capabilities.get(agent_id, set())
 
 
-async def _backfill_dup_candidates(agent_id: int, location_id: int):
-    """Background task: find files with hash_partial but no hash_fast that
-    have size+partial matches elsewhere. Queue them for hashing.
-    Loops until no new candidates are found — each hashing pass can reveal
-    new cross-location matches."""
-    from file_hunter.services.activity import register, unregister, update
-    from file_hunter.services.dup_counts import (
-        drain_pending_hashes,
-        hash_candidates_for_location,
-    )
-
-    async with read_db() as db:
-        name_row = await db.execute_fetchall(
-            "SELECT name FROM locations WHERE id = ?", (location_id,)
-        )
-    loc_name = name_row[0]["name"] if name_row else f"location {location_id}"
-
-    act_name = f"backfill-candidates-{location_id}"
-    iteration = 0
-    try:
-        register(act_name, f"Checking duplicates: {loc_name}")
-        while True:
-            iteration += 1
-            total, small, large = await hash_candidates_for_location(
-                location_id=location_id,
-                agent_id=agent_id,
-            )
-            if total == 0:
-                break
-            logger.info(
-                "Reconnect backfill pass %d for %s: %d candidates (%d small, %d queued)",
-                iteration, loc_name, total, small, large,
-            )
-            update(act_name, progress=f"pass {iteration}: {small} resolved, {large} queued")
-            if large > 0:
-                # Drain the queued hashes before checking for more candidates
-                await drain_pending_hashes(agent_id, location_id, loc_name)
-            else:
-                # Only small files handled inline — no more work to drain
-                break
-    except Exception:
-        logger.exception("Reconnect backfill failed for %s", loc_name)
-    finally:
-        unregister(act_name)
-
 
 def get_agent_connection(agent_id: int) -> WebSocket | None:
     return _agent_connections.get(agent_id)
@@ -324,12 +279,13 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
             continue
         async with read_db() as db:
             cursor = await db.execute(
-                "SELECT root_path FROM locations WHERE id = ?", (loc_id,)
+                "SELECT root_path, name FROM locations WHERE id = ?", (loc_id,)
             )
             loc_row = await cursor.fetchone()
         if not loc_row:
             continue
         root_path = loc_row["root_path"]
+        loc_name = loc_row["name"] or f"location {loc_id}"
 
         # Check if there are pending consolidation jobs before draining
         async with read_db() as db:
@@ -363,19 +319,19 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
         if ph_row and ph_row[0]["cnt"] > 0:
             from file_hunter.services.dup_counts import drain_pending_hashes
 
-            loc_name = ""
-            async with read_db() as db:
-                name_row = await db.execute_fetchall(
-                    "SELECT name FROM locations WHERE id = ?", (loc_id,)
-                )
-            if name_row:
-                loc_name = name_row[0]["name"]
-
             asyncio.create_task(drain_pending_hashes(agent_id, loc_id, loc_name))
 
-        # Queue dup candidates for locations that just came online
+        # Backfill dup candidates for locations that genuinely need it
         if loc_id in newly_online:
-            asyncio.create_task(_backfill_dup_candidates(agent_id, loc_id))
+            async with read_db() as db:
+                bf_row = await db.execute_fetchall(
+                    "SELECT backfill_needed FROM locations WHERE id = ?",
+                    (loc_id,),
+                )
+            if bf_row and bf_row[0]["backfill_needed"]:
+                from file_hunter.services.hash_backfill import run_backfill
+
+                asyncio.create_task(run_backfill(agent_id, loc_id, loc_name))
 
     return location_ids
 

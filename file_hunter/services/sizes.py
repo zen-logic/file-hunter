@@ -12,7 +12,7 @@ import logging
 import time
 from collections import Counter, defaultdict
 
-from file_hunter.db import read_db
+from file_hunter.db import open_connection, read_db
 from file_hunter.hashes_db import open_hashes_connection
 from file_hunter.services.activity import register, unregister
 from file_hunter.stats_db import read_stats, stats_writer
@@ -65,7 +65,8 @@ async def recalculate_location_sizes(location_id: int):
     3. Bottom-up accumulation: leaf folders get direct values, parents sum children.
     4. Batch UPDATE folders, then UPDATE the location row (write via db_writer()).
     """
-    async with read_db() as db:
+    db = await open_connection()
+    try:
         # 1a. Direct file sizes and counts per folder
         direct_rows = await db.execute_fetchall(
             "SELECT folder_id, SUM(file_size) AS total, COUNT(*) AS cnt "
@@ -124,6 +125,8 @@ async def recalculate_location_sizes(location_id: int):
             "SELECT id, parent_id FROM folders WHERE location_id = ?",
             (location_id,),
         )
+    finally:
+        await db.close()
 
     direct_size: dict[int, int] = {}
     direct_count: dict[int, int] = {}
@@ -276,7 +279,8 @@ async def recalculate_folder_dup_counts(location_id: int):
     duplicate_count — skips sizes, file counts, hidden counts, and type counts.
     Used after dup recalc to update affected locations without a full rebuild.
     """
-    async with read_db() as db:
+    db = await open_connection()
+    try:
         hconn = await open_hashes_connection()
         try:
             dup_file_rows = await hconn.execute_fetchall(
@@ -305,6 +309,8 @@ async def recalculate_folder_dup_counts(location_id: int):
             "SELECT id, parent_id FROM folders WHERE location_id = ?",
             (location_id,),
         )
+    finally:
+        await db.close()
 
     direct_dup: dict[int, int] = {}
     root_dup_count = 0

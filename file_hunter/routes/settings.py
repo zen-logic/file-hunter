@@ -183,11 +183,15 @@ async def reset_queues(request: Request):
             except OSError:
                 pass
 
-    # Clear operation queue and pending hashes
+    # Clear operation queue, pending hashes, pending backfills, and dead consolidation jobs
     async with db_writer() as db:
         await db.execute("DELETE FROM operation_queue")
     async with db_writer() as db:
         await db.execute("DELETE FROM pending_hashes")
+    async with db_writer() as db:
+        await db.execute("DELETE FROM pending_backfills")
+    async with db_writer() as db:
+        await db.execute("DELETE FROM consolidation_jobs WHERE status = 'pending'")
 
     logger.info(
         "Reset queues: %d ops cancelled, %d temp files removed, queues cleared",
