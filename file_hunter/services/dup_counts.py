@@ -762,12 +762,19 @@ async def find_dup_candidates(
     log.info("find_dup_candidates: starting (scope=%s)", scope)
     t0 = time.monotonic()
 
-    # Step 1-2: find dup groups in hashes.db
+    # Step 1-2: find dup groups in hashes.db using GROUP BY + HAVING (no Python counting)
     conn = await open_hashes_connection()
     try:
         t1 = time.monotonic()
+
+        # Build _dup_groups directly — only pairs with count > 1
+        await conn.execute(
+            "CREATE TEMP TABLE _dup_groups (hash_partial TEXT, file_size INTEGER)"
+        )
+
         if file_ids is not None:
-            # Scoped to specific files — look up their pairs only
+            # Scoped to specific files — find their (hash_partial, file_size) pairs,
+            # then keep only pairs that appear more than once globally
             await conn.execute("CREATE TEMP TABLE _seed_ids (file_id INTEGER)")
             await conn.executemany(
                 "INSERT INTO _seed_ids VALUES (?)",
@@ -787,13 +794,16 @@ async def find_dup_candidates(
             )
             await conn.commit()
 
-            rows = await conn.execute_fetchall(
+            await conn.execute(
+                "INSERT INTO _dup_groups "
                 "SELECT f.hash_partial, f.file_size FROM active_hashes f "
                 "INNER JOIN _dup_pairs p "
-                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size"
+                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size "
+                "GROUP BY f.hash_partial, f.file_size HAVING COUNT(*) > 1"
             )
             await conn.execute("DROP TABLE IF EXISTS _seed_ids")
             await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
+
         elif location_id is not None:
             await conn.execute(
                 "CREATE TEMP TABLE _dup_pairs (hash_partial TEXT, file_size INTEGER)"
@@ -810,53 +820,49 @@ async def find_dup_candidates(
             )
             await conn.commit()
 
-            rows = await conn.execute_fetchall(
+            await conn.execute(
+                "INSERT INTO _dup_groups "
                 "SELECT f.hash_partial, f.file_size FROM active_hashes f "
                 "INNER JOIN _dup_pairs p "
-                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size"
+                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size "
+                "GROUP BY f.hash_partial, f.file_size HAVING COUNT(*) > 1"
             )
             await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
+
         else:
-            rows = await conn.execute_fetchall(
+            await conn.execute(
+                "INSERT INTO _dup_groups "
                 "SELECT hash_partial, file_size FROM active_hashes "
-                "WHERE hash_partial IS NOT NULL AND file_size > 0"
+                "WHERE hash_partial IS NOT NULL AND file_size > 0 "
+                "GROUP BY hash_partial, file_size HAVING COUNT(*) > 1"
             )
 
-        log.info(
-            "find_dup_candidates: hashes query returned %d rows in %.1fs",
-            len(rows),
-            time.monotonic() - t1,
-        )
-
-        pair_counts = Counter((r["hash_partial"], r["file_size"]) for r in rows)
-        dup_pairs = {k for k, v in pair_counts.items() if v > 1}
-        log.info(
-            "find_dup_candidates: %d total pairs, %d with duplicates",
-            len(pair_counts),
-            len(dup_pairs),
-        )
-
-        if not dup_pairs:
-            log.info(
-                "find_dup_candidates: no dup groups, done in %.1fs",
-                time.monotonic() - t0,
-            )
-            return []
-
-        # Step 3: find candidate file_ids (hash_fast IS NULL) in hashes.db
-        t4 = time.monotonic()
-        await conn.execute(
-            "CREATE TEMP TABLE _dup_groups (hash_partial TEXT, file_size INTEGER)"
-        )
-        await conn.executemany(
-            "INSERT INTO _dup_groups VALUES (?, ?)",
-            list(dup_pairs),
-        )
         await conn.execute(
             "CREATE INDEX _dup_groups_idx ON _dup_groups(hash_partial, file_size)"
         )
         await conn.commit()
 
+        dup_count_row = await conn.execute_fetchall(
+            "SELECT COUNT(*) as c FROM _dup_groups"
+        )
+        dup_group_count = dup_count_row[0]["c"] if dup_count_row else 0
+
+        log.info(
+            "find_dup_candidates: %d dup groups found in %.1fs",
+            dup_group_count,
+            time.monotonic() - t1,
+        )
+
+        if dup_group_count == 0:
+            log.info(
+                "find_dup_candidates: no dup groups, done in %.1fs",
+                time.monotonic() - t0,
+            )
+            await conn.execute("DROP TABLE IF EXISTS _dup_groups")
+            return []
+
+        # Step 3: find candidate file_ids (hash_fast IS NULL) in hashes.db
+        t4 = time.monotonic()
         candidate_rows = await conn.execute_fetchall(
             "SELECT f.file_id, f.location_id, f.file_size, f.hash_partial "
             "FROM active_hashes f "

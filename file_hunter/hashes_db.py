@@ -42,6 +42,8 @@ CREATE INDEX IF NOT EXISTS idx_hashes_strong
     ON file_hashes(hash_strong);
 CREATE INDEX IF NOT EXISTS idx_hashes_location
     ON file_hashes(location_id);
+CREATE INDEX IF NOT EXISTS idx_hashes_active
+    ON file_hashes(excluded, stale, hash_partial, file_size);
 
 CREATE VIEW IF NOT EXISTS active_hashes AS
     SELECT * FROM file_hashes WHERE excluded = 0 AND stale = 0;
