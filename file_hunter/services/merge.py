@@ -14,6 +14,7 @@ from file_hunter.hashes_db import (
 )
 from file_hunter.helpers import parse_mtime, parse_prefixed_id
 from file_hunter.services import fs
+from file_hunter.services.activity import register as activity_register, unregister as activity_unregister, update as activity_update
 from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
 from file_hunter.services.sizes import recalculate_location_sizes
@@ -181,6 +182,9 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
     last_broadcast = 0.0
 
     affected_hashes: set[str] = set()
+
+    act_name = f"merge_{source_label}_{dest_label}"
+    activity_register(act_name, f"Merging {source_label} → {dest_label}")
 
     try:
         await broadcast(
@@ -680,6 +684,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
             now = time.monotonic()
             if now - last_broadcast >= 0.5:
                 last_broadcast = now
+                activity_update(act_name, progress=f"{processed}/{total_files}")
                 await broadcast(
                     {
                         "type": "merge_progress",
@@ -746,6 +751,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
         )
 
     finally:
+        activity_unregister(act_name)
         _merge_running = False
         _merge_cancel_requested = False
 

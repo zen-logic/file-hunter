@@ -17,6 +17,7 @@ from file_hunter.helpers import (
     resolve_target,
 )
 from file_hunter.services import fs
+from file_hunter.services.activity import register as activity_register, unregister as activity_unregister, update as activity_update
 from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
 from file_hunter.stats_db import update_stats_for_files
@@ -103,6 +104,8 @@ async def run_consolidation(
     filename = None
     stubs_written = 0
     stubs_queued = 0
+    act_name = f"consolidate_{file_id}"
+    activity_register(act_name, "Consolidating")
     try:
         async with read_db() as db:
             # Load the selected file
@@ -672,6 +675,7 @@ async def run_consolidation(
         )
 
     finally:
+        activity_unregister(act_name)
         if effective_hash:
             _active_consolidations.discard(effective_hash)
 
@@ -753,6 +757,8 @@ async def run_batch_consolidation(
     skipped = len(file_ids) - len(unique_ids)
     completed = 0
     errors = 0
+    batch_act = f"batch_consolidate_{len(file_ids)}"
+    activity_register(batch_act, f"Batch consolidate ({len(unique_ids)} files)")
 
     for file_id in unique_ids:
         try:
@@ -768,7 +774,9 @@ async def run_batch_consolidation(
             completed += 1
         except Exception:
             errors += 1
+        activity_update(batch_act, progress=f"{completed + errors}/{len(unique_ids)}")
 
+    activity_unregister(batch_act)
     await add_to_catalog(csv_path, dest_loc_id, csv_folder_id)
 
     # Post-processing once for the entire batch
