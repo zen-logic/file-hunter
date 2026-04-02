@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 
 from file_hunter.config import load_config
-from file_hunter.db import open_connection
+from file_hunter.db import open_connection, read_db
 from file_hunter.hashes_db import get_file_hashes, read_hashes
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.settings import get_setting
@@ -22,6 +22,106 @@ from file_hunter.stats_db import _stats_db_path
 logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 120
+
+SORT_COLUMNS = {
+    "name": "f.filename",
+    "type": "f.file_type_low",
+    "size": "f.file_size",
+    "date": "f.modified_date",
+    "dups": "dup_count",
+}
+
+
+async def search_by_hash(hash_val: str, *, page=0, sort="name", sort_dir="asc") -> dict:
+    """Fast path for dup badge clicks. No temp DB, no search pipeline."""
+    # Find file IDs — UNION lets each branch use its own index
+    async with read_hashes() as hdb:
+        hash_rows = await hdb.execute_fetchall(
+            "SELECT file_id FROM active_hashes WHERE hash_strong = ? "
+            "UNION "
+            "SELECT file_id FROM active_hashes WHERE hash_fast = ?",
+            (hash_val, hash_val),
+        )
+    if not hash_rows:
+        return {"items": [], "folders": [], "total": 0, "page": 0, "pageSize": PAGE_SIZE}
+
+    file_ids = [r["file_id"] for r in hash_rows]
+    total = len(file_ids)
+
+    # Fetch file details from catalog (paged)
+    col = SORT_COLUMNS.get(sort, "f.filename")
+    direction = "DESC" if sort_dir == "desc" else "ASC"
+    # Sort by dup_count needs the hash data — sort in Python for that case
+    sort_in_sql = sort != "dups"
+
+    ph = ",".join("?" for _ in file_ids)
+    async with read_db() as db:
+        if sort_in_sql:
+            rows = await db.execute_fetchall(
+                f"SELECT f.id, f.filename, f.file_type_high, f.file_type_low, "
+                f"f.file_size, f.modified_date, f.stale, f.hidden, "
+                f"f.location_id, l.name as location_name "
+                f"FROM files f JOIN locations l ON l.id = f.location_id "
+                f"WHERE f.id IN ({ph}) "
+                f"ORDER BY {col} {direction}",
+                file_ids,
+            )
+        else:
+            rows = await db.execute_fetchall(
+                f"SELECT f.id, f.filename, f.file_type_high, f.file_type_low, "
+                f"f.file_size, f.modified_date, f.stale, f.hidden, "
+                f"f.location_id, l.name as location_name "
+                f"FROM files f JOIN locations l ON l.id = f.location_id "
+                f"WHERE f.id IN ({ph})",
+                file_ids,
+            )
+
+    # Fetch hashes and dup counts for all results
+    page_ids = [r["id"] for r in rows]
+    hash_map = await get_file_hashes(page_ids)
+
+    strong_list = [h["hash_strong"] for h in hash_map.values() if h.get("hash_strong")]
+    fast_list = [
+        h["hash_fast"]
+        for h in hash_map.values()
+        if not h.get("hash_strong") and h.get("hash_fast")
+    ]
+    live_dups = await batch_dup_counts(strong_hashes=strong_list, fast_hashes=fast_list)
+
+    items = []
+    for r in rows:
+        h = hash_map.get(r["id"], {})
+        hs = h.get("hash_strong")
+        hf = h.get("hash_fast")
+        items.append({
+            "id": r["id"],
+            "name": r["filename"],
+            "typeHigh": r["file_type_high"],
+            "typeLow": r["file_type_low"],
+            "size": r["file_size"],
+            "date": r["modified_date"],
+            "dups": live_dups.get(hs or hf, 0),
+            "hashStrong": hs,
+            "hashFast": hf,
+            "stale": bool(r["stale"]),
+            "missing": False,
+            "hidden": bool(r["hidden"]),
+            "location": r["location_name"],
+            "locationId": r["location_id"],
+        })
+
+    # Page the results
+    offset = page * PAGE_SIZE
+    paged = items[offset : offset + PAGE_SIZE]
+
+    return {
+        "items": paged,
+        "folders": [],
+        "total": total,
+        "page": page,
+        "pageSize": PAGE_SIZE,
+    }
+
 
 # Active search cache state
 _search_id: str | None = None

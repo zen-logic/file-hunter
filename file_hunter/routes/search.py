@@ -7,6 +7,7 @@ from file_hunter.services.activity import register as _act_reg, unregister as _a
 from file_hunter.services.search import (
     search_files,
     search_files_advanced,
+    search_by_hash,
     parse_conditions_from_params,
 )
 
@@ -50,6 +51,15 @@ async def search(request: Request):
 
 
 async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
+    # Fast path: hash-only search (dup badge click)
+    hash_val = request.query_params.get("hash")
+    if hash_val and not any(
+        request.query_params.get(k)
+        for k in ("name", "type", "description", "tags", "sizeMin", "sizeMax",
+                   "dateFrom", "dateTo", "dupes", "mode")
+    ):
+        return json_ok(await search_by_hash(hash_val, page=page, sort=sort, sort_dir=sort_dir))
+
     async with read_db() as db:
         if request.query_params.get("mode") == "advanced":
             conditions = parse_conditions_from_params(request.query_params)
