@@ -759,7 +759,9 @@ async def find_dup_candidates(
     else:
         scope = "global"
 
-    log.info("find_dup_candidates: starting (scope=%s)", scope)
+    log.info(
+        "find_dup_candidates: starting (scope=%s) — querying hashes.db", scope
+    )
     t0 = time.monotonic()
 
     # Step 1-2: find dup groups in hashes.db using GROUP BY + HAVING (no Python counting)

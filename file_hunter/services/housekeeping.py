@@ -194,10 +194,14 @@ async def _run():
                     (_now(), task_id),
                 )
 
-            await broadcast({"type": "activity", "message": "Housekeeping..."})
-            logger.info("Housekeeping: starting %s (id=%d)", task_type, task_id)
+            act_label = f"Housekeeping: {task_type}"
+            loc_name = params.get("location_name")
+            if loc_name:
+                act_label = f"Housekeeping: {task_type} — {loc_name}"
+            await broadcast({"type": "activity", "message": act_label})
+            logger.info("Housekeeping: starting %s (id=%d) %s", task_type, task_id, params)
 
-            _act_reg(f"housekeeping-{task_id}", f"Housekeeping: {task_type}")
+            _act_reg(f"housekeeping-{task_id}", act_label)
 
             try:
                 await _execute(task_type, task_id, task["agent_id"], params)
@@ -392,7 +396,8 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
 
     file_ids = [r["file_id"] for r in rows]
     logger.info(
-        "Housekeeping dup candidates: %d unprocessed files for %s",
+        "Housekeeping dup candidates: %d unprocessed files for %s — "
+        "finding dup groups in hashes.db",
         len(file_ids),
         location_name,
     )
@@ -403,6 +408,10 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
         location_name,
         file_ids=file_ids,
         broadcast_scan_progress=False,
+    )
+
+    logger.info(
+        "Housekeeping dup candidates: completed for %s", location_name
     )
 
 
