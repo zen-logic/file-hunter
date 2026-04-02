@@ -17,7 +17,6 @@ from file_hunter.helpers import (
     resolve_target,
 )
 from file_hunter.services import fs
-from file_hunter.services.activity import register as activity_register, unregister as activity_unregister, update as activity_update
 from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
 from file_hunter.stats_db import update_stats_for_files
@@ -104,9 +103,6 @@ async def run_consolidation(
     filename = None
     stubs_written = 0
     stubs_queued = 0
-    act_name = f"consolidate_{file_id}"
-    activity_register(act_name, "Consolidating")
-
     try:
         async with read_db() as db:
             # Load the selected file
@@ -458,13 +454,13 @@ async def run_consolidation(
             c for c in all_copies if c["id"] != canonical_id and not c["dup_exclude"]
         ]
         total_dups = len(duplicates)
-        pending_stubs: list[dict] = []
+        writable_cache: dict[str, bool] = {}
 
         for idx, copy in enumerate(duplicates, 1):
             original_path = copy["full_path"]
+            loc_root = copy["root_path"]
             copy_loc_id = copy["location_id"]
 
-            activity_update(act_name, label=f"Consolidating {filename}", progress=f"{idx}/{total_dups}")
             await broadcast(
                 {
                     "type": "consolidate_progress",
@@ -478,23 +474,160 @@ async def run_consolidation(
                 }
             )
 
-            # ── Accumulate for deferred stub writing ──
-            pending_stubs.append(
-                {
-                    "original_path": original_path,
-                    "filename": copy["filename"],
-                    "rel_path": copy["rel_path"],
-                    "canonical_path": canonical_path,
-                    "location_id": copy_loc_id,
-                    "location_name": copy["location_name"],
-                    "loc_root": copy["root_path"],
-                    "dest_loc_name": dest_loc_name,
-                    "file_id": copy["id"],
-                    "folder_id": copy["folder_id"],
-                    "file_size": copy["file_size"] or 0,
-                    "file_type_high": copy["file_type_high"],
-                }
-            )
+            # Check if location is online
+            try:
+                location_online = await fs.dir_exists(loc_root, copy_loc_id)
+            except ConnectionError:
+                location_online = False
+
+            if not location_online:
+                # Offline — queue for later
+                stubs_queued += 1
+                async with db_writer() as wdb:
+                    await wdb.execute(
+                        """INSERT INTO consolidation_jobs
+                           (source_file, source_location_id, source_path,
+                            destination_path, status, date_created)
+                           VALUES (?, ?, ?, ?, 'pending', ?)""",
+                        (
+                            copy["filename"],
+                            copy_loc_id,
+                            original_path,
+                            canonical_path,
+                            now_iso,
+                        ),
+                    )
+                await append_row(
+                    csv_path,
+                    csv_loc_id,
+                    copy["location_name"],
+                    original_path,
+                    dest_loc_name,
+                    canonical_path,
+                    "offline - queued",
+                )
+                continue
+
+            file_on_disk = await fs.file_exists(original_path, copy_loc_id)
+            if not file_on_disk:
+                stubs_queued += 1
+                async with db_writer() as wdb:
+                    await wdb.execute(
+                        """INSERT INTO consolidation_jobs
+                           (source_file, source_location_id, source_path,
+                            destination_path, status, date_created)
+                           VALUES (?, ?, ?, ?, 'pending', ?)""",
+                        (
+                            copy["filename"],
+                            copy_loc_id,
+                            original_path,
+                            canonical_path,
+                            now_iso,
+                        ),
+                    )
+                await append_row(
+                    csv_path,
+                    csv_loc_id,
+                    copy["location_name"],
+                    original_path,
+                    dest_loc_name,
+                    canonical_path,
+                    "file missing - queued",
+                )
+                continue
+
+            # Check folder writability (cached per directory)
+            copy_dir = os.path.dirname(original_path)
+            if copy_dir not in writable_cache:
+                try:
+                    test_path = os.path.join(copy_dir, ".fh-write-test")
+                    await fs.file_write_text(test_path, "", copy_loc_id)
+                    await fs.file_delete(test_path, copy_loc_id)
+                    writable_cache[copy_dir] = True
+                except Exception:
+                    writable_cache[copy_dir] = False
+
+            if writable_cache[copy_dir]:
+                try:
+                    await fs.write_moved_stub(
+                        original_path,
+                        copy["filename"],
+                        canonical_path,
+                        now_iso,
+                        copy_loc_id,
+                        dest_location_name=dest_loc_name,
+                    )
+                    # Replace the original file record with the .moved stub
+                    stub_path = original_path + ".moved"
+                    stub_name = copy["filename"] + ".moved"
+                    stub_rel = copy["rel_path"] + ".moved"
+                    st = await fs.file_stat(stub_path, copy_loc_id)
+                    stub_size = st["size"] if st else 0
+                    async with db_writer() as wdb:
+                        await wdb.execute(
+                            """UPDATE files SET
+                                filename=?, full_path=?, rel_path=?,
+                                file_type_high='text', file_type_low='moved',
+                                file_size=?,
+                                modified_date=?, date_last_seen=?
+                               WHERE id=?""",
+                            (
+                                stub_name,
+                                stub_path,
+                                stub_rel,
+                                stub_size,
+                                now_iso,
+                                now_iso,
+                                copy["id"],
+                            ),
+                        )
+                    await remove_file_hashes([copy["id"]])
+                    await update_stats_for_files(
+                        copy_loc_id,
+                        removed=[
+                            (
+                                copy["folder_id"],
+                                copy["file_size"] or 0,
+                                copy["file_type_high"],
+                                0,
+                            )
+                        ],
+                        added=[(copy["folder_id"], stub_size, "text", 0)],
+                    )
+                    stubs_written += 1
+                    await append_row(
+                        csv_path,
+                        csv_loc_id,
+                        copy["location_name"],
+                        original_path,
+                        dest_loc_name,
+                        canonical_path,
+                        "stubbed",
+                    )
+                except Exception as e:
+                    logger.warning("Stub write failed for %s: %s", original_path, e)
+                    await append_row(
+                        csv_path,
+                        csv_loc_id,
+                        copy["location_name"],
+                        original_path,
+                        dest_loc_name,
+                        canonical_path,
+                        "stub failed",
+                        str(e),
+                    )
+            else:
+                # Read-only folder — skip stub, don't queue
+                await append_row(
+                    csv_path,
+                    csv_loc_id,
+                    copy["location_name"],
+                    original_path,
+                    dest_loc_name,
+                    canonical_path,
+                    "stub failed (read-only)",
+                    copy_dir,
+                )
 
         # Add result CSV to catalog (only if this consolidation owns it)
         if owns_csv:
@@ -526,99 +659,6 @@ async def run_consolidation(
                 source=f"consolidate {filename}",
             )
 
-        # ── Stub writing phase: disk first, then catalog ──
-        for stub_info in pending_stubs:
-            original_path = stub_info["original_path"]
-            file_id_stub = stub_info["file_id"]
-            stub_path = original_path + ".moved"
-            stub_name = stub_info["filename"] + ".moved"
-            stub_rel = stub_info["rel_path"] + ".moved"
-
-            try:
-                await fs.write_moved_stub(
-                    original_path,
-                    stub_info["filename"],
-                    stub_info["canonical_path"],
-                    now_iso,
-                    stub_info["location_id"],
-                    dest_location_name=stub_info["dest_loc_name"],
-                )
-                st = await fs.file_stat(stub_path, stub_info["location_id"])
-                stub_size = st["size"] if st else 0
-
-                # Stub written — now update catalog to match
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        """UPDATE files SET
-                            filename=?, full_path=?, rel_path=?,
-                            file_type_high='text', file_type_low='moved',
-                            file_size=?, modified_date=?, date_last_seen=?
-                           WHERE id=?""",
-                        (
-                            stub_name,
-                            stub_path,
-                            stub_rel,
-                            stub_size,
-                            now_iso,
-                            now_iso,
-                            file_id_stub,
-                        ),
-                    )
-                await remove_file_hashes([file_id_stub])
-                await update_stats_for_files(
-                    stub_info["location_id"],
-                    removed=[
-                        (
-                            stub_info["folder_id"],
-                            stub_info["file_size"],
-                            stub_info["file_type_high"],
-                            0,
-                        )
-                    ],
-                    added=[(stub_info["folder_id"], stub_size, "text", 0)],
-                )
-                stubs_written += 1
-                await append_row(
-                    csv_path,
-                    csv_loc_id,
-                    stub_info["location_name"],
-                    original_path,
-                    stub_info["dest_loc_name"],
-                    stub_info["canonical_path"],
-                    "stubbed",
-                )
-            except Exception as e:
-                logger.warning(
-                    "Stub write failed for %s: %s — queued",
-                    original_path,
-                    e,
-                )
-                stubs_queued += 1
-                await append_row(
-                    csv_path,
-                    csv_loc_id,
-                    stub_info["location_name"],
-                    original_path,
-                    stub_info["dest_loc_name"],
-                    stub_info["canonical_path"],
-                    "queued",
-                    str(e),
-                )
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        """INSERT INTO consolidation_jobs
-                           (source_file, source_location_id, source_path,
-                            destination_path, status, date_created)
-                           VALUES (?, ?, ?, ?, 'pending', ?)""",
-                        (
-                            stub_info["filename"],
-                            stub_info["location_id"],
-                            original_path,
-                            stub_info["canonical_path"],
-                            now_iso,
-                        ),
-                    )
-
     except Exception as exc:
         await broadcast(
             {
@@ -632,7 +672,6 @@ async def run_consolidation(
         )
 
     finally:
-        activity_unregister(act_name)
         if effective_hash:
             _active_consolidations.discard(effective_hash)
 
@@ -714,8 +753,6 @@ async def run_batch_consolidation(
     skipped = len(file_ids) - len(unique_ids)
     completed = 0
     errors = 0
-    batch_act = f"batch_consolidate_{len(file_ids)}"
-    activity_register(batch_act, f"Batch consolidate ({len(unique_ids)} files)")
 
     for file_id in unique_ids:
         try:
@@ -731,9 +768,7 @@ async def run_batch_consolidation(
             completed += 1
         except Exception:
             errors += 1
-        activity_update(batch_act, progress=f"{completed + errors}/{len(unique_ids)}")
 
-    activity_unregister(batch_act)
     await add_to_catalog(csv_path, dest_loc_id, csv_folder_id)
 
     # Post-processing once for the entire batch

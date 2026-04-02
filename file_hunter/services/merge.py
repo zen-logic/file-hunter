@@ -14,7 +14,6 @@ from file_hunter.hashes_db import (
 )
 from file_hunter.helpers import parse_mtime, parse_prefixed_id
 from file_hunter.services import fs
-from file_hunter.services.activity import register as activity_register, unregister as activity_unregister, update as activity_update
 from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
 from file_hunter.services.sizes import recalculate_location_sizes
@@ -182,10 +181,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
     last_broadcast = 0.0
 
     affected_hashes: set[str] = set()
-    pending_stubs: list[dict] = []
-
-    act_name = f"merge_{source_label}_{dest_label}"
-    activity_register(act_name, f"Merging {source_label} → {dest_label}")
 
     try:
         await broadcast(
@@ -225,7 +220,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
         csv_path = await create_log(dest_info["abs_path"], dest_loc_id, "merge")
         csv_folder_id = dest_info["folder_id"]
 
-        created_dirs: set[str] = set()
+        # Cache per-folder writability to avoid repeated probes
+        writable_cache: dict[str, bool] = {}
 
         for src_file in source_files:
             if _merge_cancel_requested:
@@ -233,7 +229,37 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
 
             processed += 1
 
+            # Check source file exists on disk
             src_path = src_file["full_path"]
+            exists = await fs.file_exists(src_path, src_loc_id)
+            if not exists:
+                files_skipped += 1
+                await append_row(
+                    csv_path,
+                    dest_loc_id,
+                    source_label,
+                    src_path,
+                    dest_label,
+                    "",
+                    "skipped (file missing)",
+                )
+                # Throttled progress
+                now = time.monotonic()
+                if now - last_broadcast >= 0.5:
+                    last_broadcast = now
+                    await broadcast(
+                        {
+                            "type": "merge_progress",
+                            "source": source_label,
+                            "destination": dest_label,
+                            "processed": processed,
+                            "total": total_files,
+                            "copied": files_copied,
+                            "stubbed": files_stubbed,
+                            "skipped": files_skipped,
+                        }
+                    )
+                continue
 
             # Compute relative path within source
             src_rel = os.path.relpath(src_path, source_info["abs_path"])
@@ -270,46 +296,123 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         "skipped (hash failed)",
                         str(e),
                     )
-                    now = time.monotonic()
-                    if now - last_broadcast >= 0.5:
-                        last_broadcast = now
-                        await broadcast(
-                            {
-                                "type": "merge_progress",
-                                "source": source_label,
-                                "destination": dest_label,
-                                "processed": processed,
-                                "total": total_files,
-                                "copied": files_copied,
-                                "stubbed": files_stubbed,
-                                "skipped": files_skipped,
-                            }
-                        )
                     continue
 
+            # Check if duplicate exists in destination location
             if effective_hash in dest_hash_index:
-                # ── Duplicate — accumulate for deferred stub writing ──
+                # Duplicate — already at destination
                 dest_entry = dest_hash_index[effective_hash]
+                dest_canonical = dest_entry["full_path"]
                 affected_hashes.add(effective_hash)
                 files_stubbed += 1
 
-                pending_stubs.append(
-                    {
-                        "src_path": src_path,
-                        "src_filename": src_file["filename"],
-                        "src_rel_path": src_file["rel_path"],
-                        "src_file_id": src_file["id"],
-                        "src_loc_id": src_loc_id,
-                        "src_loc_name": src_file["location_name"],
-                        "src_folder_id": src_file["folder_id"],
-                        "src_file_size": src_file["file_size"] or 0,
-                        "src_file_type_high": src_file["file_type_high"],
-                        "src_hidden": src_file["hidden"],
-                        "dest_path": dest_entry["full_path"],
-                        "dest_file_id": dest_entry.get("id"),
-                        "dest_loc_id": dest_loc_id,
-                    }
-                )
+                # Best-effort: stub at source, .sources at destination
+                stub_result = "duplicate"
+                src_dir = os.path.dirname(src_path)
+                if src_dir not in writable_cache:
+                    try:
+                        test_path = os.path.join(src_dir, ".fh-write-test")
+                        await fs.file_write_text(test_path, "", src_loc_id)
+                        await fs.file_delete(test_path, src_loc_id)
+                        writable_cache[src_dir] = True
+                    except Exception:
+                        writable_cache[src_dir] = False
+
+                if writable_cache[src_dir]:
+                    try:
+                        stub_path = src_path + ".moved"
+                        stub_name = src_file["filename"] + ".moved"
+                        stub_rel = src_file["rel_path"] + ".moved"
+
+                        async with db_writer() as wdb:
+                            _replaced = await wdb.execute_fetchall(
+                                "SELECT id FROM files WHERE location_id=? AND rel_path=? AND id!=?",
+                                (src_file["location_id"], stub_rel, src_file["id"]),
+                            )
+                            await wdb.execute(
+                                "DELETE FROM files WHERE location_id=? AND rel_path=? AND id!=?",
+                                (src_file["location_id"], stub_rel, src_file["id"]),
+                            )
+                            await wdb.execute(
+                                """UPDATE files SET
+                                    filename=?, full_path=?, rel_path=?,
+                                    file_type_high='text', file_type_low='moved',
+                                    file_size=0, modified_date=?, date_last_seen=?
+                                   WHERE id=?""",
+                                (
+                                    stub_name,
+                                    stub_path,
+                                    stub_rel,
+                                    now_iso,
+                                    now_iso,
+                                    src_file["id"],
+                                ),
+                            )
+
+                        _del_ids = [r["id"] for r in _replaced] + [src_file["id"]]
+                        await remove_file_hashes(_del_ids)
+                        await update_stats_for_files(
+                            src_file["location_id"],
+                            removed=[
+                                (
+                                    src_file["folder_id"],
+                                    src_file["file_size"] or 0,
+                                    src_file["file_type_high"],
+                                    src_file["hidden"],
+                                )
+                            ],
+                            added=[(src_file["folder_id"], 0, "text", 0)],
+                        )
+
+                        await fs.write_moved_stub(
+                            src_path,
+                            src_file["filename"],
+                            dest_canonical,
+                            now_iso,
+                            src_loc_id,
+                            dest_location_name=dest_label,
+                        )
+                        st = await fs.file_stat(stub_path, src_loc_id)
+                        if st:
+                            async with db_writer() as wdb:
+                                await wdb.execute(
+                                    "UPDATE files SET file_size=? WHERE id=?",
+                                    (st["size"], src_file["id"]),
+                                )
+                        stub_result = "duplicate + stubbed"
+                    except Exception as e:
+                        logger.warning("Stub write failed for %s: %s", src_path, e)
+                        stub_result = "duplicate (stub failed)"
+                else:
+                    stub_result = "duplicate (source read-only)"
+
+                # Best-effort: .sources at destination
+                try:
+                    await fs.write_or_append_sources(
+                        dest_canonical,
+                        src_file["location_name"],
+                        src_file["rel_path"],
+                        now_iso,
+                        dest_loc_id,
+                    )
+                    dest_file_id = dest_entry.get("id")
+                    if dest_file_id:
+                        async with read_db() as db:
+                            drows = await db.execute_fetchall(
+                                "SELECT folder_id, rel_path FROM files WHERE id = ?",
+                                (dest_file_id,),
+                            )
+                        if drows:
+                            d_rel_dir = os.path.dirname(drows[0]["rel_path"])
+                            await _upsert_sources_record(
+                                dest_canonical,
+                                dest_loc_id,
+                                drows[0]["folder_id"],
+                                d_rel_dir,
+                                now_iso,
+                            )
+                except Exception as e:
+                    logger.warning("Sources write failed for %s: %s", dest_canonical, e)
 
                 await append_row(
                     csv_path,
@@ -317,46 +420,18 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     source_label,
                     src_path,
                     dest_label,
-                    dest_entry["full_path"],
-                    "duplicate",
+                    dest_canonical,
+                    stub_result,
                 )
             else:
                 # Unique — copy to destination
                 dest_rel_path = os.path.join(dest_info["abs_path"], src_rel)
                 dest_dir = os.path.dirname(dest_rel_path)
 
-                # DB-based collision check (fast), filesystem fallback (safe)
-                actual_dest = dest_rel_path
-                async with read_db() as db:
-                    collision = await db.execute_fetchall(
-                        "SELECT id FROM files WHERE location_id=? AND full_path=?",
-                        (dest_loc_id, actual_dest),
-                    )
-                if collision:
-                    base, ext = os.path.splitext(dest_rel_path)
-                    counter = 2
-                    while True:
-                        actual_dest = f"{base} ({counter}){ext}"
-                        async with read_db() as db:
-                            collision = await db.execute_fetchall(
-                                "SELECT id FROM files WHERE location_id=? AND full_path=?",
-                                (dest_loc_id, actual_dest),
-                            )
-                        if not collision:
-                            break
-                        counter += 1
-                # Final filesystem check — catch files on disk not in catalog
-                if await fs.path_exists(actual_dest, dest_loc_id):
-                    actual_dest = await fs.unique_dest_path(
-                        actual_dest, dest_loc_id
-                    )
-
-                # Agent calls: dir_create (cached) + copy + hash
+                # Phase 1: Copy and register at destination
                 try:
-                    if dest_dir not in created_dirs:
-                        await fs.dir_create(dest_dir, dest_loc_id, exist_ok=True)
-                        created_dirs.add(dest_dir)
-
+                    await fs.dir_create(dest_dir, dest_loc_id, exist_ok=True)
+                    actual_dest = await fs.unique_dest_path(dest_rel_path, dest_loc_id)
                     await fs.copy_file(
                         src_path,
                         src_loc_id,
@@ -379,49 +454,105 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                             actual_dest,
                             "skipped (hash mismatch)",
                         )
-                        now = time.monotonic()
-                        if now - last_broadcast >= 0.5:
-                            last_broadcast = now
-                            await broadcast(
-                                {
-                                    "type": "merge_progress",
-                                    "source": source_label,
-                                    "destination": dest_label,
-                                    "processed": processed,
-                                    "total": total_files,
-                                    "copied": files_copied,
-                                    "stubbed": files_stubbed,
-                                    "skipped": files_skipped,
-                                }
-                            )
                         continue
-                except FileNotFoundError:
-                    files_skipped += 1
-                    await append_row(
-                        csv_path,
-                        dest_loc_id,
-                        source_label,
-                        src_path,
-                        dest_label,
-                        "",
-                        "skipped (file missing)",
+
+                    dest_file_rel_dir = os.path.relpath(
+                        os.path.dirname(actual_dest), dest_info["root_path"]
                     )
-                    now = time.monotonic()
-                    if now - last_broadcast >= 0.5:
-                        last_broadcast = now
-                        await broadcast(
-                            {
-                                "type": "merge_progress",
-                                "source": source_label,
-                                "destination": dest_label,
-                                "processed": processed,
-                                "total": total_files,
-                                "copied": files_copied,
-                                "stubbed": files_stubbed,
-                                "skipped": files_skipped,
-                            }
+                    if dest_file_rel_dir == ".":
+                        dest_file_rel_dir = ""
+
+                    dest_file_name = os.path.basename(actual_dest)
+                    if dest_info["rel_prefix"]:
+                        full_rel_dir = dest_info["rel_prefix"]
+                        if dest_file_rel_dir:
+                            raw_rel = os.path.relpath(
+                                os.path.dirname(actual_dest), dest_info["abs_path"]
+                            )
+                            if raw_rel == ".":
+                                full_rel_dir = dest_info["rel_prefix"]
+                            else:
+                                full_rel_dir = os.path.join(
+                                    dest_info["rel_prefix"], raw_rel
+                                )
+                    else:
+                        full_rel_dir = dest_file_rel_dir
+
+                    dest_folder_id = dest_info["folder_id"]
+                    if full_rel_dir:
+                        dest_folder_id = await _ensure_folder_hierarchy(
+                            dest_loc_id, full_rel_dir, folder_cache
                         )
-                    continue
+
+                    dest_file_rel = (
+                        os.path.join(full_rel_dir, dest_file_name)
+                        if full_rel_dir
+                        else dest_file_name
+                    )
+                    type_high, type_low = classify_file(dest_file_name)
+                    st = await fs.file_stat(actual_dest, dest_loc_id)
+                    file_size = st["size"] if st else 0
+
+                    async with db_writer() as wdb:
+                        await wdb.execute(
+                            """INSERT OR IGNORE INTO files
+                               (filename, full_path, rel_path, location_id, folder_id,
+                                file_type_high, file_type_low, file_size,
+                                description, tags,
+                                created_date, modified_date, date_cataloged, date_last_seen,
+                                scan_id, hidden)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, NULL, ?)""",
+                            (
+                                dest_file_name,
+                                actual_dest,
+                                dest_file_rel,
+                                dest_loc_id,
+                                dest_folder_id,
+                                type_high,
+                                type_low,
+                                file_size,
+                                src_file.get("created_date", now_iso),
+                                src_file.get("modified_date", now_iso),
+                                now_iso,
+                                now_iso,
+                                is_hidden,
+                            ),
+                        )
+                        new_rows = await wdb.execute_fetchall(
+                            "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
+                            (dest_loc_id, dest_file_rel),
+                        )
+                        new_dest_file_id = new_rows[0]["id"] if new_rows else None
+
+                    # Register hashes in hashes.db for the new file record
+                    if new_dest_file_id and (copy_fast or copy_strong):
+                        async with hashes_writer() as hdb:
+                            await hdb.execute(
+                                "INSERT INTO file_hashes "
+                                "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+                                "VALUES (?, ?, ?, NULL, ?, ?) "
+                                "ON CONFLICT(file_id) DO UPDATE SET "
+                                "hash_fast=excluded.hash_fast, hash_strong=excluded.hash_strong",
+                                (
+                                    new_dest_file_id,
+                                    dest_loc_id,
+                                    file_size,
+                                    copy_fast,
+                                    copy_strong,
+                                ),
+                            )
+
+                    await update_stats_for_files(
+                        dest_loc_id,
+                        added=[(dest_folder_id, file_size, type_high, is_hidden)],
+                    )
+
+                    dest_hash_index[copy_fast] = {
+                        "id": new_dest_file_id,
+                        "full_path": actual_dest,
+                    }
+                    affected_hashes.add(effective_hash)
+                    files_copied += 1
                 except Exception as e:
                     files_skipped += 1
                     await append_row(
@@ -434,138 +565,106 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                         "error",
                         str(e),
                     )
-                    now = time.monotonic()
-                    if now - last_broadcast >= 0.5:
-                        last_broadcast = now
-                        await broadcast(
-                            {
-                                "type": "merge_progress",
-                                "source": source_label,
-                                "destination": dest_label,
-                                "processed": processed,
-                                "total": total_files,
-                                "copied": files_copied,
-                                "stubbed": files_stubbed,
-                                "skipped": files_skipped,
-                            }
-                        )
                     continue
 
-                # ── Catalog registration (DB only) ──
-                dest_file_rel_dir = os.path.relpath(
-                    os.path.dirname(actual_dest), dest_info["root_path"]
-                )
-                if dest_file_rel_dir == ".":
-                    dest_file_rel_dir = ""
+                # Phase 2: Stub source + .sources (best-effort)
+                stub_result = "copied"
+                src_dir = os.path.dirname(src_path)
+                if src_dir not in writable_cache:
+                    try:
+                        test_path = os.path.join(src_dir, ".fh-write-test")
+                        await fs.file_write_text(test_path, "", src_loc_id)
+                        await fs.file_delete(test_path, src_loc_id)
+                        writable_cache[src_dir] = True
+                    except Exception:
+                        writable_cache[src_dir] = False
 
-                dest_file_name = os.path.basename(actual_dest)
-                if dest_info["rel_prefix"]:
-                    full_rel_dir = dest_info["rel_prefix"]
-                    if dest_file_rel_dir:
-                        raw_rel = os.path.relpath(
-                            os.path.dirname(actual_dest), dest_info["abs_path"]
-                        )
-                        if raw_rel == ".":
-                            full_rel_dir = dest_info["rel_prefix"]
-                        else:
-                            full_rel_dir = os.path.join(
-                                dest_info["rel_prefix"], raw_rel
+                if writable_cache[src_dir]:
+                    try:
+                        stub_path = src_path + ".moved"
+                        stub_name = src_file["filename"] + ".moved"
+                        stub_rel = src_file["rel_path"] + ".moved"
+
+                        async with db_writer() as wdb:
+                            _replaced = await wdb.execute_fetchall(
+                                "SELECT id FROM files WHERE location_id=? AND rel_path=? AND id!=?",
+                                (src_file["location_id"], stub_rel, src_file["id"]),
                             )
-                else:
-                    full_rel_dir = dest_file_rel_dir
+                            await wdb.execute(
+                                "DELETE FROM files WHERE location_id=? AND rel_path=? AND id!=?",
+                                (src_file["location_id"], stub_rel, src_file["id"]),
+                            )
+                            await wdb.execute(
+                                """UPDATE files SET
+                                    filename=?, full_path=?, rel_path=?,
+                                    file_type_high='text', file_type_low='moved',
+                                    file_size=0, modified_date=?, date_last_seen=?
+                                   WHERE id=?""",
+                                (
+                                    stub_name,
+                                    stub_path,
+                                    stub_rel,
+                                    now_iso,
+                                    now_iso,
+                                    src_file["id"],
+                                ),
+                            )
 
-                dest_folder_id = dest_info["folder_id"]
-                if full_rel_dir:
-                    dest_folder_id = await _ensure_folder_hierarchy(
-                        dest_loc_id, full_rel_dir, folder_cache
-                    )
-
-                dest_file_rel = (
-                    os.path.join(full_rel_dir, dest_file_name)
-                    if full_rel_dir
-                    else dest_file_name
-                )
-                type_high, type_low = classify_file(dest_file_name)
-                file_size = src_file["file_size"] or 0
-
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        """INSERT OR IGNORE INTO files
-                           (filename, full_path, rel_path, location_id, folder_id,
-                            file_type_high, file_type_low, file_size,
-                            description, tags,
-                            created_date, modified_date, date_cataloged, date_last_seen,
-                            scan_id, hidden)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, NULL, ?)""",
-                        (
-                            dest_file_name,
-                            actual_dest,
-                            dest_file_rel,
-                            dest_loc_id,
-                            dest_folder_id,
-                            type_high,
-                            type_low,
-                            file_size,
-                            src_file.get("created_date", now_iso),
-                            src_file.get("modified_date", now_iso),
-                            now_iso,
-                            now_iso,
-                            is_hidden,
-                        ),
-                    )
-                    new_rows = await wdb.execute_fetchall(
-                        "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
-                        (dest_loc_id, dest_file_rel),
-                    )
-                    new_dest_file_id = new_rows[0]["id"] if new_rows else None
-
-                if new_dest_file_id and (copy_fast or copy_strong):
-                    async with hashes_writer() as hdb:
-                        await hdb.execute(
-                            "INSERT INTO file_hashes "
-                            "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
-                            "VALUES (?, ?, ?, NULL, ?, ?) "
-                            "ON CONFLICT(file_id) DO UPDATE SET "
-                            "hash_fast=excluded.hash_fast, hash_strong=excluded.hash_strong",
-                            (
-                                new_dest_file_id,
-                                dest_loc_id,
-                                file_size,
-                                copy_fast,
-                                copy_strong,
-                            ),
+                        _del_ids = [r["id"] for r in _replaced] + [src_file["id"]]
+                        await remove_file_hashes(_del_ids)
+                        await update_stats_for_files(
+                            src_file["location_id"],
+                            removed=[
+                                (
+                                    src_file["folder_id"],
+                                    src_file["file_size"] or 0,
+                                    src_file["file_type_high"],
+                                    src_file["hidden"],
+                                )
+                            ],
+                            added=[(src_file["folder_id"], 0, "text", 0)],
                         )
 
-                await update_stats_for_files(
-                    dest_loc_id,
-                    added=[(dest_folder_id, file_size, type_high, is_hidden)],
-                )
+                        await fs.write_moved_stub(
+                            src_path,
+                            src_file["filename"],
+                            actual_dest,
+                            now_iso,
+                            src_loc_id,
+                            dest_location_name=dest_label,
+                        )
+                        st_stub = await fs.file_stat(stub_path, src_loc_id)
+                        if st_stub:
+                            async with db_writer() as wdb:
+                                await wdb.execute(
+                                    "UPDATE files SET file_size=? WHERE id=?",
+                                    (st_stub["size"], src_file["id"]),
+                                )
+                        stub_result = "copied + stubbed"
+                    except Exception as e:
+                        logger.warning("Stub write failed for %s: %s", src_path, e)
+                        stub_result = "copied (stub failed)"
+                else:
+                    stub_result = "copied (source read-only)"
 
-                dest_hash_index[copy_fast] = {
-                    "id": new_dest_file_id,
-                    "full_path": actual_dest,
-                }
-                affected_hashes.add(effective_hash)
-                files_copied += 1
-
-                # ── Accumulate for deferred stub writing ──
-                pending_stubs.append(
-                    {
-                        "src_path": src_path,
-                        "src_filename": src_file["filename"],
-                        "src_rel_path": src_file["rel_path"],
-                        "src_file_id": src_file["id"],
-                        "src_loc_id": src_loc_id,
-                        "src_loc_name": src_file["location_name"],
-                        "src_folder_id": src_file["folder_id"],
-                        "src_file_size": src_file["file_size"] or 0,
-                        "src_file_type_high": src_file["file_type_high"],
-                        "src_hidden": src_file["hidden"],
-                        "dest_path": actual_dest,
-                        "dest_file_id": new_dest_file_id,
-                        "dest_loc_id": dest_loc_id,
-                    }
-                )
+                # Best-effort: .sources at destination
+                try:
+                    await fs.write_or_append_sources(
+                        actual_dest,
+                        src_file["location_name"],
+                        src_file["rel_path"],
+                        now_iso,
+                        dest_loc_id,
+                    )
+                    await _upsert_sources_record(
+                        actual_dest,
+                        dest_loc_id,
+                        dest_folder_id,
+                        full_rel_dir,
+                        now_iso,
+                    )
+                except Exception as e:
+                    logger.warning("Sources write failed for %s: %s", actual_dest, e)
 
                 await append_row(
                     csv_path,
@@ -574,14 +673,13 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                     src_path,
                     dest_label,
                     actual_dest,
-                    "copied",
+                    stub_result,
                 )
 
             # Throttled progress
             now = time.monotonic()
             if now - last_broadcast >= 0.5:
                 last_broadcast = now
-                activity_update(act_name, progress=f"{processed}/{total_files}")
                 await broadcast(
                     {
                         "type": "merge_progress",
@@ -612,7 +710,16 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
                 }
             )
         else:
-            activity_update(act_name, progress="writing stubs")
+            await broadcast(
+                {
+                    "type": "merge_completed",
+                    "source": source_label,
+                    "destination": dest_label,
+                    "filesCopied": files_copied,
+                    "filesStubbed": files_stubbed,
+                    "filesSkipped": files_skipped,
+                }
+            )
         invalidate_stats_cache()
         for lid in {src_loc_id, dest_loc_id}:
             try:
@@ -628,139 +735,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
             source=f"merge {source_label} → {dest_label}",
         )
 
-        # ── Stub writing phase: disk first, then catalog ──
-        total_stubs = len(pending_stubs)
-        stubs_done = 0
-        for stub_info in pending_stubs:
-            src_path = stub_info["src_path"]
-            src_file_id = stub_info["src_file_id"]
-            stub_path = src_path + ".moved"
-            stub_name = stub_info["src_filename"] + ".moved"
-            stub_rel = stub_info["src_rel_path"] + ".moved"
-
-            try:
-                await fs.write_moved_stub(
-                    src_path,
-                    stub_info["src_filename"],
-                    stub_info["dest_path"],
-                    now_iso,
-                    stub_info["src_loc_id"],
-                    dest_location_name=dest_label,
-                )
-                st = await fs.file_stat(stub_path, stub_info["src_loc_id"])
-                stub_size = st["size"] if st else 0
-
-                # Stub written — now update catalog to match
-                async with db_writer() as wdb:
-                    _replaced = await wdb.execute_fetchall(
-                        "SELECT id FROM files WHERE location_id=? AND rel_path=? AND id!=?",
-                        (stub_info["src_loc_id"], stub_rel, src_file_id),
-                    )
-                    if _replaced:
-                        await wdb.execute(
-                            "DELETE FROM files WHERE location_id=? AND rel_path=? AND id!=?",
-                            (stub_info["src_loc_id"], stub_rel, src_file_id),
-                        )
-                    await wdb.execute(
-                        """UPDATE files SET
-                            filename=?, full_path=?, rel_path=?,
-                            file_type_high='text', file_type_low='moved',
-                            file_size=?, modified_date=?, date_last_seen=?
-                           WHERE id=?""",
-                        (
-                            stub_name,
-                            stub_path,
-                            stub_rel,
-                            stub_size,
-                            now_iso,
-                            now_iso,
-                            src_file_id,
-                        ),
-                    )
-                _del_ids = [r["id"] for r in _replaced] + [src_file_id]
-                await remove_file_hashes(_del_ids)
-                await update_stats_for_files(
-                    stub_info["src_loc_id"],
-                    removed=[
-                        (
-                            stub_info["src_folder_id"],
-                            stub_info["src_file_size"],
-                            stub_info["src_file_type_high"],
-                            stub_info["src_hidden"],
-                        )
-                    ],
-                    added=[(stub_info["src_folder_id"], stub_size, "text", 0)],
-                )
-            except Exception as e:
-                logger.warning(
-                    "Stub write failed for %s: %s — queued",
-                    src_path,
-                    e,
-                )
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        """INSERT INTO consolidation_jobs
-                           (source_file, source_location_id, source_path,
-                            destination_path, status, date_created)
-                           VALUES (?, ?, ?, ?, 'pending', ?)""",
-                        (
-                            stub_info["src_filename"],
-                            stub_info["src_loc_id"],
-                            src_path,
-                            stub_info["dest_path"],
-                            now_iso,
-                        ),
-                    )
-
-            # .sources metadata at destination (best-effort)
-            try:
-                await fs.write_or_append_sources(
-                    stub_info["dest_path"],
-                    stub_info["src_loc_name"],
-                    stub_info["src_rel_path"],
-                    now_iso,
-                    stub_info["dest_loc_id"],
-                )
-                dest_file_id = stub_info.get("dest_file_id")
-                if dest_file_id:
-                    async with read_db() as db:
-                        drows = await db.execute_fetchall(
-                            "SELECT folder_id, rel_path FROM files WHERE id = ?",
-                            (dest_file_id,),
-                        )
-                    if drows:
-                        d_rel_dir = os.path.dirname(drows[0]["rel_path"])
-                        await _upsert_sources_record(
-                            stub_info["dest_path"],
-                            stub_info["dest_loc_id"],
-                            drows[0]["folder_id"],
-                            d_rel_dir,
-                            now_iso,
-                        )
-            except Exception as e:
-                logger.warning(
-                    "Sources write failed for %s: %s",
-                    stub_info["dest_path"],
-                    e,
-                )
-
-            stubs_done += 1
-            if stubs_done % 100 == 0 or stubs_done == total_stubs:
-                activity_update(act_name, progress=f"stubs {stubs_done}/{total_stubs}")
-
-        await broadcast(
-            {
-                "type": "merge_completed",
-                "source": source_label,
-                "destination": dest_label,
-                "filesCopied": files_copied,
-                "filesStubbed": files_stubbed,
-                "filesSkipped": files_skipped,
-            }
-        )
-
     except Exception as exc:
-        logger.exception("Merge failed: %s", exc)
         await broadcast(
             {
                 "type": "merge_error",
@@ -771,7 +746,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info):
         )
 
     finally:
-        activity_unregister(act_name)
         _merge_running = False
         _merge_cancel_requested = False
 
@@ -904,7 +878,8 @@ async def _ensure_folder_hierarchy(
     folder_cache: dict[str, int],
 ) -> int:
     """Create/find folder records for a full relative directory path."""
-    parts = rel_dir_path.split("/")
+    async with read_db() as db:
+        parts = rel_dir_path.split("/")
     current_path = ""
     parent_id = None
 
@@ -915,11 +890,10 @@ async def _ensure_folder_hierarchy(
             parent_id = folder_cache[current_path]
             continue
 
-        async with read_db() as db:
-            row = await db.execute_fetchall(
-                "SELECT id FROM folders WHERE location_id = ? AND rel_path = ?",
-                (location_id, current_path),
-            )
+        row = await db.execute_fetchall(
+            "SELECT id FROM folders WHERE location_id = ? AND rel_path = ?",
+            (location_id, current_path),
+        )
         if row:
             folder_id = row[0]["id"]
         else:
