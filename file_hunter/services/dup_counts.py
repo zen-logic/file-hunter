@@ -16,6 +16,7 @@ writes target file_hashes directly.
 
 import asyncio
 import logging
+import os
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -31,7 +32,7 @@ from file_hunter.services.activity import (
     unregister as _act_unreg,
     update as _act_upd,
 )
-from file_hunter.services.agent_ops import dispatch, hash_fast_batch
+from file_hunter.services.agent_ops import dispatch, hash_fast_batch, hash_partial_batch
 from file_hunter.services.sizes import recalculate_folder_dup_counts
 from file_hunter.stats_db import stats_writer
 from file_hunter.ws.scan import broadcast
@@ -1356,6 +1357,210 @@ async def hash_candidates_for_location(
     )
 
     return total, len(small_files), len(large_files)
+
+
+async def write_hash_partials(
+    result: dict,
+    location_id: int,
+    root_path: str,
+):
+    """Write hash_partial results from agent to hashes.db.
+
+    Resolves file_ids from catalog by rel_path, then updates hash_partial
+    in hashes.db. Shared by rescan, quick scan, and recovery paths.
+    """
+    hash_results = result.get("results", [])
+    if not hash_results:
+        return
+
+    updates = []
+    for hr in hash_results:
+        hp = hr.get("hash_partial")
+        if hp:
+            rel = os.path.relpath(hr["path"], root_path)
+            updates.append((rel, hp))
+
+    if not updates:
+        return
+
+    rel_paths = [u[0] for u in updates]
+    hash_by_rel = {u[0]: u[1] for u in updates}
+
+    async with read_db() as rdb:
+        ph = ",".join("?" for _ in rel_paths)
+        id_rows = await rdb.execute_fetchall(
+            f"SELECT id, rel_path, file_size FROM files "
+            f"WHERE location_id = ? AND rel_path IN ({ph})",
+            [location_id] + rel_paths,
+        )
+
+    if id_rows:
+        h_updates = []
+        for ir in id_rows:
+            hp = hash_by_rel.get(ir["rel_path"])
+            if hp:
+                h_updates.append((hp, ir["id"]))
+        if h_updates:
+            async with hashes_writer() as hdb:
+                await hdb.executemany(
+                    "UPDATE file_hashes SET hash_partial = ? WHERE file_id = ?",
+                    h_updates,
+                )
+
+
+async def recover_missing_hash_partials(
+    location_id: int,
+    agent_id: int,
+    root_path: str,
+    location_name: str,
+    *,
+    folder_id: int | None = None,
+    scan_prefix: str | None = None,
+) -> list[int]:
+    """Find files in the catalog with no hash_partial and hash them via agent.
+
+    Files may exist in the catalog but have no hash_partial if a previous scan
+    was interrupted. This ensures a user-initiated scan leaves things correct
+    regardless of prior history.
+
+    Scoping: folder_id (quick scan), scan_prefix (subfolder rescan), or
+    neither (full location).
+
+    Returns list of recovered file IDs (for inclusion in affected_file_ids).
+    """
+    scope_filter = ""
+    scope_params: list = [location_id]
+    if folder_id:
+        scope_filter = " AND f.folder_id = ?"
+        scope_params.append(folder_id)
+    elif scan_prefix:
+        scope_filter = " AND f.rel_path LIKE ?"
+        scope_params.append(scan_prefix + "%")
+
+    async with read_db() as rdb:
+        catalog_rows = await rdb.execute_fetchall(
+            "SELECT f.id, f.full_path, f.file_size, f.inode "
+            "FROM files f "
+            "WHERE f.location_id = ? AND f.stale = 0 "
+            f"AND f.file_size > 0{scope_filter}",
+            scope_params,
+        )
+
+    if not catalog_rows:
+        return []
+
+    catalog_ids = [r["id"] for r in catalog_rows]
+
+    hconn = await open_hashes_connection()
+    try:
+        has_partial: set[int] = set()
+        for i in range(0, len(catalog_ids), 500):
+            batch = catalog_ids[i : i + 500]
+            ph = ",".join("?" for _ in batch)
+            rows = await hconn.execute_fetchall(
+                f"SELECT file_id FROM file_hashes "
+                f"WHERE file_id IN ({ph}) AND hash_partial IS NOT NULL",
+                batch,
+            )
+            has_partial.update(r["file_id"] for r in rows)
+    finally:
+        await hconn.close()
+
+    missing = [r for r in catalog_rows if r["id"] not in has_partial]
+    if not missing:
+        return []
+
+    missing.sort(key=lambda r: r["inode"] or 0)
+
+    log.info(
+        "Scan recovery: %d files missing hash_partial for %s — sending to agent",
+        len(missing),
+        location_name,
+    )
+
+    # Ensure file_hashes rows exist
+    async with hashes_writer() as hdb:
+        await hdb.executemany(
+            "INSERT INTO file_hashes "
+            "(file_id, location_id, file_size) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(file_id) DO NOTHING",
+            [(r["id"], location_id, r["file_size"]) for r in missing],
+        )
+
+    recovery_ids = [r["id"] for r in missing]
+    batch_paths: list[str] = []
+    batch_bytes = 0
+
+    for r in missing:
+        batch_paths.append(r["full_path"])
+        batch_bytes += r["file_size"]
+
+        if batch_bytes >= HASH_BATCH_BYTES:
+            result = await hash_partial_batch(agent_id, batch_paths)
+            await write_hash_partials(result, location_id, root_path)
+            batch_paths = []
+            batch_bytes = 0
+
+    if batch_paths:
+        result = await hash_partial_batch(agent_id, batch_paths)
+        await write_hash_partials(result, location_id, root_path)
+
+    log.info(
+        "Scan recovery: %d hash partials recovered for %s",
+        len(recovery_ids),
+        location_name,
+    )
+
+    return recovery_ids
+
+
+async def recover_unprocessed_dup_candidates(
+    location_id: int,
+    agent_id: int,
+    location_name: str,
+    *,
+    exclude_file_ids: list[int] | None = None,
+) -> int:
+    """Find files with hash_partial but no hash_fast and run dup processing.
+
+    Catches files left unprocessed by interrupted scans. Returns the number
+    of candidates found.
+    """
+    hconn = await open_hashes_connection()
+    try:
+        unprocessed = await hconn.execute_fetchall(
+            "SELECT file_id FROM active_hashes "
+            "WHERE location_id = ? AND hash_fast IS NULL "
+            "AND hash_partial IS NOT NULL",
+            (location_id,),
+        )
+    finally:
+        await hconn.close()
+
+    already_processed = set(exclude_file_ids) if exclude_file_ids else set()
+    unprocessed_ids = [
+        r["file_id"] for r in unprocessed if r["file_id"] not in already_processed
+    ]
+
+    if not unprocessed_ids:
+        return 0
+
+    log.info(
+        "Scan recovery: %d unprocessed files (hash_partial, no hash_fast) "
+        "for %s — running dup processing",
+        len(unprocessed_ids),
+        location_name,
+    )
+
+    await post_ingest_dup_processing(
+        location_id,
+        agent_id,
+        location_name,
+        file_ids=unprocessed_ids,
+    )
+
+    return len(unprocessed_ids)
 
 
 async def post_ingest_dup_processing(

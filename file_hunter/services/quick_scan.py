@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db
-from file_hunter.hashes_db import hashes_writer, open_hashes_connection
+from file_hunter.hashes_db import hashes_writer
 from file_hunter.helpers import post_op_stats
 from file_hunter.services.activity import (
     register,
@@ -20,7 +20,13 @@ from file_hunter.services.activity import (
     update as activity_update,
 )
 from file_hunter.services.agent_ops import dispatch, hash_partial_batch
-from file_hunter.services.dup_counts import HASH_BATCH_BYTES, post_ingest_dup_processing
+from file_hunter.services.dup_counts import (
+    HASH_BATCH_BYTES,
+    post_ingest_dup_processing,
+    recover_missing_hash_partials,
+    recover_unprocessed_dup_candidates,
+    write_hash_partials,
+)
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
@@ -276,75 +282,14 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             await post_op_stats()
 
         # Recover files missing hash_partial from interrupted scans
-        folder_filter = "AND f.folder_id = ?" if folder_id else ""
-        folder_params = [folder_id] if folder_id else []
-
-        async with read_db() as rdb:
-            folder_files = await rdb.execute_fetchall(
-                "SELECT f.id, f.full_path, f.file_size, f.inode "
-                "FROM files f "
-                "WHERE f.location_id = ? AND f.stale = 0 "
-                f"AND f.file_size > 0 {folder_filter}",
-                [location_id] + folder_params,
-            )
-
-        if folder_files:
-            folder_file_ids = [r["id"] for r in folder_files]
-
-            hconn = await open_hashes_connection()
-            try:
-                has_partial: set[int] = set()
-                for i in range(0, len(folder_file_ids), 500):
-                    batch = folder_file_ids[i : i + 500]
-                    ph = ",".join("?" for _ in batch)
-                    rows = await hconn.execute_fetchall(
-                        f"SELECT file_id FROM file_hashes "
-                        f"WHERE file_id IN ({ph}) AND hash_partial IS NOT NULL",
-                        batch,
-                    )
-                    has_partial.update(r["file_id"] for r in rows)
-            finally:
-                await hconn.close()
-
-            missing_partial = [r for r in folder_files if r["id"] not in has_partial]
-
-            if missing_partial:
-                missing_partial.sort(key=lambda r: r["inode"] or 0)
-                logger.info(
-                    "Quick scan: %d files missing hash_partial for %s — "
-                    "sending to agent",
-                    len(missing_partial),
-                    label,
-                )
-
-                # Ensure file_hashes rows exist
-                async with hashes_writer() as hdb:
-                    await hdb.executemany(
-                        "INSERT INTO file_hashes "
-                        "(file_id, location_id, file_size) "
-                        "VALUES (?, ?, ?) "
-                        "ON CONFLICT(file_id) DO NOTHING",
-                        [
-                            (r["id"], location_id, r["file_size"])
-                            for r in missing_partial
-                        ],
-                    )
-
-                batch_paths: list[str] = []
-                batch_bytes = 0
-                for r in missing_partial:
-                    batch_paths.append(r["full_path"])
-                    batch_bytes += r["file_size"]
-                    if batch_bytes >= HASH_BATCH_BYTES:
-                        result = await hash_partial_batch(agent_id, batch_paths)
-                        await _write_hash_partials(result, location_id, root_path)
-                        batch_paths = []
-                        batch_bytes = 0
-                if batch_paths:
-                    result = await hash_partial_batch(agent_id, batch_paths)
-                    await _write_hash_partials(result, location_id, root_path)
-
-                new_file_ids.extend(r["id"] for r in missing_partial)
+        recovery_ids = await recover_missing_hash_partials(
+            location_id,
+            agent_id,
+            root_path,
+            label,
+            folder_id=folder_id,
+        )
+        new_file_ids.extend(recovery_ids)
 
         # Dup processing for new + recovered files
         affected_ids = new_file_ids + recovered_file_ids
@@ -359,35 +304,12 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             )
 
         # Catch files with hash_partial but no hash_fast
-        hconn = await open_hashes_connection()
-        try:
-            unprocessed = await hconn.execute_fetchall(
-                "SELECT file_id FROM active_hashes "
-                "WHERE location_id = ? AND hash_fast IS NULL "
-                "AND hash_partial IS NOT NULL",
-                (location_id,),
-            )
-        finally:
-            await hconn.close()
-
-        unprocessed_ids = [
-            r["file_id"] for r in unprocessed if r["file_id"] not in set(affected_ids)
-        ]
-        if unprocessed_ids:
-            logger.info(
-                "Quick scan: %d unprocessed files (hash_partial, no hash_fast) "
-                "for %s — running dup processing",
-                len(unprocessed_ids),
-                label,
-            )
-            activity_update(act_name, progress="checking duplicates")
-            await post_ingest_dup_processing(
-                location_id,
-                agent_id,
-                label,
-                file_ids=unprocessed_ids,
-                broadcast_scan_progress=False,
-            )
+        await recover_unprocessed_dup_candidates(
+            location_id,
+            agent_id,
+            label,
+            exclude_file_ids=affected_ids,
+        )
 
         logger.info(
             "Quick scan complete: %s — %d new folders, %d new files, "
@@ -483,51 +405,10 @@ async def _hash_new_files_partial(
 
         if batch_bytes >= HASH_BATCH_BYTES:
             result = await hash_partial_batch(agent_id, batch_paths)
-            await _write_hash_partials(result, location_id, root_path)
+            await write_hash_partials(result, location_id, root_path)
             batch_paths = []
             batch_bytes = 0
 
     if batch_paths:
         result = await hash_partial_batch(agent_id, batch_paths)
-        await _write_hash_partials(result, location_id, root_path)
-
-
-async def _write_hash_partials(result: dict, location_id: int, root_path: str):
-    """Write hash_partial results from agent to hashes.db."""
-    hash_results = result.get("results", [])
-    if not hash_results:
-        return
-
-    updates = []
-    for hr in hash_results:
-        hp = hr.get("hash_partial")
-        if hp:
-            rel = os.path.relpath(hr["path"], root_path)
-            updates.append((rel, hp))
-
-    if not updates:
-        return
-
-    rel_paths = [u[0] for u in updates]
-    hash_by_rel = {u[0]: u[1] for u in updates}
-
-    async with read_db() as rdb:
-        ph = ",".join("?" for _ in rel_paths)
-        id_rows = await rdb.execute_fetchall(
-            f"SELECT id, rel_path FROM files "
-            f"WHERE location_id = ? AND rel_path IN ({ph})",
-            [location_id] + rel_paths,
-        )
-
-    if id_rows:
-        h_updates = []
-        for ir in id_rows:
-            hp = hash_by_rel.get(ir["rel_path"])
-            if hp:
-                h_updates.append((hp, ir["id"]))
-        if h_updates:
-            async with hashes_writer() as hdb:
-                await hdb.executemany(
-                    "UPDATE file_hashes SET hash_partial = ? WHERE file_id = ?",
-                    h_updates,
-                )
+        await write_hash_partials(result, location_id, root_path)
