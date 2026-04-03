@@ -791,9 +791,11 @@ async def find_dup_candidates(
             )
             await conn.execute(
                 "INSERT INTO _dup_pairs "
-                "SELECT DISTINCT f.hash_partial, f.file_size FROM active_hashes f "
-                "INNER JOIN _seed_ids s ON f.file_id = s.file_id "
-                "WHERE f.hash_partial IS NOT NULL AND f.file_size > 0"
+                "SELECT DISTINCT f.hash_partial, f.file_size FROM _seed_ids s "
+                "CROSS JOIN file_hashes f "
+                "WHERE f.file_id = s.file_id "
+                "AND f.excluded = 0 AND f.stale = 0 "
+                "AND f.hash_partial IS NOT NULL AND f.file_size > 0"
             )
             await conn.execute(
                 "CREATE INDEX _dup_pairs_idx ON _dup_pairs(hash_partial, file_size)"
@@ -819,8 +821,9 @@ async def find_dup_candidates(
             )
             await conn.execute(
                 "INSERT INTO _dup_pairs "
-                "SELECT DISTINCT hash_partial, file_size FROM active_hashes "
-                "WHERE location_id = ? AND hash_partial IS NOT NULL "
+                "SELECT DISTINCT hash_partial, file_size FROM file_hashes "
+                "WHERE excluded = 0 AND stale = 0 "
+                "AND location_id = ? AND hash_partial IS NOT NULL "
                 "AND file_size > 0",
                 (location_id,),
             )
@@ -1450,9 +1453,11 @@ async def drain_pending_hashes(
     on_progress: async callback(done, total) for UI updates. Scan broadcasts
                  via WebSocket, import updates the _progress dict.
 
-    Always scoped to location_id — the drainer only processes pending_hashes
-    for the location being scanned/imported. Leftover cleanup for other
-    locations is a housekeeping concern, not a scan/import concern.
+    Scoped to agent_id — processes all pending_hashes accessible to this
+    agent, including cross-location candidates from dup detection. When a
+    scan finds duplicates spanning multiple locations, all candidates must
+    be hashed so the user sees correct dup counts everywhere, not just
+    on the scanned location.
     """
     FETCH_LIMIT = 2000
     total_hashed = 0
@@ -1460,8 +1465,8 @@ async def drain_pending_hashes(
     all_affected_locs: set[int] = set()
     drainer_act = f"hash-drainer-{location_id}"
 
-    where_clause = "WHERE agent_id = ? AND location_id = ?"
-    where_params: tuple = (agent_id, location_id)
+    where_clause = "WHERE agent_id = ?"
+    where_params: tuple = (agent_id,)
 
     async def _process_batch(batch_rows):
         nonlocal total_hashed
