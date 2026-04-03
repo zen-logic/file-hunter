@@ -22,6 +22,7 @@ from file_hunter.services.activity import (
 from file_hunter.services.agent_ops import dispatch, hash_partial_batch
 from file_hunter.services.dup_counts import (
     HASH_BATCH_BYTES,
+    drain_pending_hashes,
     post_ingest_dup_processing,
     recover_missing_hash_partials,
     recover_unprocessed_dup_candidates,
@@ -309,6 +310,13 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             agent_id,
             label,
             exclude_file_ids=affected_ids,
+        )
+
+        # Drain pending_hashes — large dup candidates need hash_fast from agent
+        await drain_pending_hashes(
+            agent_id,
+            location_id,
+            label,
         )
 
         logger.info(
