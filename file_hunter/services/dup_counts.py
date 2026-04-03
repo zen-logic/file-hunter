@@ -175,8 +175,10 @@ async def _batched_recalc(
         await conn.commit()
 
         rows = await conn.execute_fetchall(
-            f"SELECT f.{hash_column} FROM active_hashes f "
-            f"INNER JOIN _recalc_hashes h ON f.{hash_column} = h.hash_val"
+            f"SELECT f.{hash_column} FROM _recalc_hashes h "
+            f"CROSS JOIN file_hashes f "
+            f"WHERE f.excluded = 0 AND f.stale = 0 "
+            f"AND f.{hash_column} = h.hash_val"
         )
     finally:
         try:
@@ -309,8 +311,10 @@ async def full_dup_recount(
 
                 rows = await conn.execute_fetchall(
                     f"SELECT f.{hash_column} as hash_val, COUNT(*) as cnt "
-                    f"FROM active_hashes f "
-                    f"INNER JOIN _recount_hashes h ON f.{hash_column} = h.hash_val "
+                    f"FROM _recount_hashes h "
+                    f"CROSS JOIN file_hashes f "
+                    f"WHERE f.excluded = 0 AND f.stale = 0 "
+                    f"AND f.{hash_column} = h.hash_val "
                     f"GROUP BY f.{hash_column}"
                 )
                 await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
@@ -472,8 +476,10 @@ async def optimized_dup_recount(
                 await conn.commit()
 
                 rows = await conn.execute_fetchall(
-                    f"SELECT f.{hash_column} FROM active_hashes f "
-                    f"INNER JOIN _recount_hashes h ON f.{hash_column} = h.hash_val"
+                    f"SELECT f.{hash_column} FROM _recount_hashes h "
+                    f"CROSS JOIN file_hashes f "
+                    f"WHERE f.excluded = 0 AND f.stale = 0 "
+                    f"AND f.{hash_column} = h.hash_val"
                 )
                 await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
             else:
@@ -759,9 +765,7 @@ async def find_dup_candidates(
     else:
         scope = "global"
 
-    log.info(
-        "find_dup_candidates: starting (scope=%s) — querying hashes.db", scope
-    )
+    log.info("find_dup_candidates: starting (scope=%s) — querying hashes.db", scope)
     t0 = time.monotonic()
 
     # Step 1-2: find dup groups in hashes.db using GROUP BY + HAVING (no Python counting)
@@ -798,10 +802,13 @@ async def find_dup_candidates(
 
             await conn.execute(
                 "INSERT INTO _dup_groups "
-                "SELECT f.hash_partial, f.file_size FROM active_hashes f "
-                "INNER JOIN _dup_pairs p "
-                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size "
-                "GROUP BY f.hash_partial, f.file_size HAVING COUNT(*) > 1"
+                "SELECT p.hash_partial, p.file_size FROM _dup_pairs p "
+                "WHERE ("
+                "  SELECT COUNT(*) FROM file_hashes f "
+                "  WHERE f.excluded = 0 AND f.stale = 0 "
+                "  AND f.hash_partial = p.hash_partial "
+                "  AND f.file_size = p.file_size"
+                ") > 1"
             )
             await conn.execute("DROP TABLE IF EXISTS _seed_ids")
             await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
@@ -824,10 +831,13 @@ async def find_dup_candidates(
 
             await conn.execute(
                 "INSERT INTO _dup_groups "
-                "SELECT f.hash_partial, f.file_size FROM active_hashes f "
-                "INNER JOIN _dup_pairs p "
-                "ON f.hash_partial = p.hash_partial AND f.file_size = p.file_size "
-                "GROUP BY f.hash_partial, f.file_size HAVING COUNT(*) > 1"
+                "SELECT p.hash_partial, p.file_size FROM _dup_pairs p "
+                "WHERE ("
+                "  SELECT COUNT(*) FROM file_hashes f "
+                "  WHERE f.excluded = 0 AND f.stale = 0 "
+                "  AND f.hash_partial = p.hash_partial "
+                "  AND f.file_size = p.file_size"
+                ") > 1"
             )
             await conn.execute("DROP TABLE IF EXISTS _dup_pairs")
 
@@ -867,10 +877,12 @@ async def find_dup_candidates(
         t4 = time.monotonic()
         candidate_rows = await conn.execute_fetchall(
             "SELECT f.file_id, f.location_id, f.file_size, f.hash_partial "
-            "FROM active_hashes f "
-            "INNER JOIN _dup_groups g "
-            "ON f.hash_partial = g.hash_partial AND f.file_size = g.file_size "
-            "WHERE f.hash_fast IS NULL"
+            "FROM _dup_groups g "
+            "CROSS JOIN file_hashes f "
+            "WHERE f.excluded = 0 AND f.stale = 0 "
+            "AND f.hash_partial = g.hash_partial "
+            "AND f.file_size = g.file_size "
+            "AND f.hash_fast IS NULL"
         )
         await conn.execute("DROP TABLE IF EXISTS _dup_groups")
 
@@ -1456,7 +1468,6 @@ async def drain_pending_hashes(
         paths = [r["full_path"] for r in batch_rows]
         path_to_file_id = {r["full_path"]: r["file_id"] for r in batch_rows}
         pending_ids = [r["id"] for r in batch_rows]
-        affected_locs = {r["location_id"] for r in batch_rows}
 
         try:
             result = await hash_fast_batch(agent_id, paths)
