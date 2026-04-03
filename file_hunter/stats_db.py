@@ -335,6 +335,78 @@ async def update_stats_for_files(
     await apply_file_deltas(location_id, folder_parents, added=added, removed=removed)
 
 
+async def apply_dup_deltas(
+    location_id: int,
+    folder_parents: dict[int, int | None],
+    deltas: list[tuple[int | None, int]],
+):
+    """Apply duplicate count deltas to stats.db, cascading up the folder tree.
+
+    deltas: list of (folder_id, delta) where delta is +1 (file became a
+    duplicate) or -1 (file is no longer a duplicate).
+
+    Same cascade strategy as apply_file_deltas but only touches
+    duplicate_count. Also patches the stats cache so the API returns
+    current values immediately.
+    """
+    if not deltas:
+        return
+
+    # Accumulate direct deltas per folder
+    direct: dict[int | None, int] = {}
+    for folder_id, delta in deltas:
+        direct[folder_id] = direct.get(folder_id, 0) + delta
+
+    # Cascade up the tree
+    cumulative: dict[int, int] = {}
+    for folder_id, d in direct.items():
+        if folder_id is None:
+            continue
+        current = folder_id
+        while current is not None:
+            cumulative[current] = cumulative.get(current, 0) + d
+            current = folder_parents.get(current)
+
+    # Location delta = sum of all direct deltas
+    loc_delta = sum(direct.values())
+
+    if not cumulative and loc_delta == 0:
+        return
+
+    # Write to stats.db
+    async with stats_writer() as sdb:
+        for fid, delta in cumulative.items():
+            if delta == 0:
+                continue
+            await sdb.execute(
+                "UPDATE folder_stats SET duplicate_count = MAX(0, duplicate_count + ?) "
+                "WHERE folder_id = ?",
+                (delta, fid),
+            )
+
+        if loc_delta != 0:
+            await sdb.execute(
+                "UPDATE location_stats SET duplicate_count = MAX(0, duplicate_count + ?) "
+                "WHERE location_id = ?",
+                (loc_delta, location_id),
+            )
+
+    # Patch the stats cache
+    from file_hunter.services.stats import _cache
+
+    loc_entry = _cache.get(f"loc:{location_id}")
+    if loc_entry is not None:
+        loc_entry["duplicateFiles"] = max(
+            0, loc_entry.get("duplicateFiles", 0) + loc_delta
+        )
+    for fid, delta in cumulative.items():
+        fld_entry = _cache.get(f"folder:{fid}")
+        if fld_entry is not None:
+            fld_entry["duplicateFiles"] = max(
+                0, fld_entry.get("duplicateFiles", 0) + delta
+            )
+
+
 async def remove_folder_stats(folder_ids: list[int]):
     """Remove folder_stats entries for deleted folders."""
     if not folder_ids:

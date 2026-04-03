@@ -54,6 +54,7 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     config = load_config()
     host = args.host or config.get("host", "127.0.0.1")

@@ -35,7 +35,6 @@ def get_agent_capabilities(agent_id: int) -> set[str]:
     return _agent_capabilities.get(agent_id, set())
 
 
-
 def get_agent_connection(agent_id: int) -> WebSocket | None:
     return _agent_connections.get(agent_id)
 
@@ -227,8 +226,8 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
                     )
             else:
                 cursor = await conn.execute(
-                    "INSERT INTO locations (name, root_path, agent_id, date_added, total_size) "
-                    "VALUES (?, ?, ?, ?, 0)",
+                    "INSERT INTO locations (name, root_path, agent_id, date_added, total_size, backfill_needed) "
+                    "VALUES (?, ?, ?, ?, 0, 0)",
                     (name, path, aid, now),
                 )
                 loc_id = cursor.lastrowid
@@ -397,6 +396,7 @@ async def agent_ws_endpoint(websocket: WebSocket):
     }
 
     from file_hunter.services.agent_ops import open_agent_client
+
     await open_agent_client(agent_id)
 
     # Update agent status in DB
@@ -586,6 +586,7 @@ async def agent_ws_endpoint(websocket: WebSocket):
                 ]
 
                 from file_hunter.services.agent_ops import close_agent_client
+
                 await close_agent_client(agent_id)
 
                 _agent_connections.pop(agent_id, None)
@@ -637,6 +638,7 @@ async def agent_ws_endpoint(websocket: WebSocket):
             # DB will be corrected on next startup (_recover_interrupted)
             logger.info("Agent #%d cleanup skipped (shutdown)", agent_id)
             from file_hunter.services.agent_ops import close_agent_client
+
             await close_agent_client(agent_id)
             _agent_connections.pop(agent_id, None)
             _agent_tokens.pop(agent_id, None)

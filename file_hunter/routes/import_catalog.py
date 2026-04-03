@@ -120,8 +120,8 @@ async def import_catalog_run(request: Request):
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         async with db_writer() as wdb:
             cursor = await wdb.execute(
-                "INSERT INTO locations (name, root_path, agent_id, date_added, total_size) "
-                "VALUES (?, ?, ?, ?, 0)",
+                "INSERT INTO locations (name, root_path, agent_id, date_added, total_size, backfill_needed) "
+                "VALUES (?, ?, ?, ?, 0, 0)",
                 (location_name, root_path, agent_id, now),
             )
             location_id = cursor.lastrowid

@@ -33,8 +33,7 @@ from file_hunter.services.activity import (
     update as _act_upd,
 )
 from file_hunter.services.agent_ops import dispatch, hash_fast_batch, hash_partial_batch
-from file_hunter.services.sizes import recalculate_folder_dup_counts
-from file_hunter.stats_db import stats_writer
+from file_hunter.stats_db import apply_dup_deltas, stats_writer
 from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger(__name__)
@@ -65,14 +64,17 @@ def get_active_recalc_locations() -> set[int]:
 async def update_dup_counts_inline(fast_hashes: set[str]) -> set[int]:
     """Update dup_count for files sharing the given hashes. Returns affected location_ids.
 
-    Inline alternative to the background recalc queue — queries active_hashes
-    for actual duplicate counts, updates only hashes with count > 1, and syncs
-    the denormalized dup_count in the catalog files table.
+    Queries active_hashes for actual duplicate counts, updates file_hashes and
+    the denormalized catalog dup_count. Applies incremental dup deltas to
+    stats.db so folder and location duplicate counts update in real time.
     """
     if not fast_hashes:
         return set()
 
     affected_locs: set[int] = set()
+    # Collect dup deltas per location: {location_id: [(folder_id, delta), ...]}
+    dup_deltas_by_loc: dict[int, list[tuple[int | None, int]]] = defaultdict(list)
+
     h_list = list(fast_hashes)
 
     for i in range(0, len(h_list), SQL_VAR_LIMIT):
@@ -91,37 +93,88 @@ async def update_dup_counts_inline(fast_hashes: set[str]) -> set[int]:
         if not rows:
             continue
 
-        # Update dup_count for hashes that have duplicates
         for r in rows:
             hf = r["hash_fast"]
             cnt = r["cnt"]
             dc = cnt - 1 if cnt > 1 else 0
 
+            # Read current dup_count before update
             async with hashes_writer() as wdb:
+                old_rows_cur = await wdb.execute(
+                    "SELECT file_id, location_id, dup_count FROM file_hashes "
+                    "WHERE hash_fast = ? AND hash_strong IS NULL",
+                    (hf,),
+                )
+                old_rows = await old_rows_cur.fetchall()
+
                 await wdb.execute(
                     "UPDATE file_hashes SET dup_count = ? "
                     "WHERE hash_fast = ? AND hash_strong IS NULL",
                     (dc, hf),
                 )
-                fid_rows = await wdb.execute(
-                    "SELECT file_id, location_id FROM file_hashes "
-                    "WHERE hash_fast = ? AND hash_strong IS NULL",
-                    (hf,),
-                )
-                file_rows = await fid_rows.fetchall()
 
-            # Sync denormalized dup_count in catalog + collect locations
-            if file_rows:
-                fids = [fr[0] for fr in file_rows]
-                affected_locs.update(fr[1] for fr in file_rows)
-                for j in range(0, len(fids), 500):
-                    id_batch = fids[j : j + 500]
-                    id_ph = ",".join("?" for _ in id_batch)
-                    async with db_writer() as cdb:
-                        await cdb.execute(
-                            f"UPDATE files SET dup_count = ? WHERE id IN ({id_ph})",
-                            [dc] + id_batch,
-                        )
+            if not old_rows:
+                continue
+
+            fids = [fr["file_id"] for fr in old_rows]
+            affected_locs.update(fr["location_id"] for fr in old_rows)
+
+            # Get folder_ids from catalog
+            fid_to_old_dc = {fr["file_id"]: fr["dup_count"] for fr in old_rows}
+            fid_to_loc = {fr["file_id"]: fr["location_id"] for fr in old_rows}
+
+            for j in range(0, len(fids), 500):
+                id_batch = fids[j : j + 500]
+                id_ph = ",".join("?" for _ in id_batch)
+
+                async with db_writer() as cdb:
+                    await cdb.execute(
+                        f"UPDATE files SET dup_count = ? WHERE id IN ({id_ph})",
+                        [dc] + id_batch,
+                    )
+
+                async with read_db() as rdb:
+                    folder_rows = await rdb.execute_fetchall(
+                        f"SELECT id, folder_id FROM files WHERE id IN ({id_ph})",
+                        id_batch,
+                    )
+
+                for fr in folder_rows:
+                    fid = fr["id"]
+                    old_dc = fid_to_old_dc.get(fid, 0)
+                    loc_id = fid_to_loc.get(fid)
+                    was_dup = old_dc > 0
+                    is_dup = dc > 0
+                    if was_dup != is_dup:
+                        delta = 1 if is_dup else -1
+                        dup_deltas_by_loc[loc_id].append((fr["folder_id"], delta))
+
+    # Apply accumulated dup deltas per location
+    if dup_deltas_by_loc:
+        loc_ids = list(dup_deltas_by_loc.keys())
+        async with read_db() as rdb:
+            ph = ",".join("?" for _ in loc_ids)
+            loc_names = await rdb.execute_fetchall(
+                f"SELECT id, name FROM locations WHERE id IN ({ph})", loc_ids
+            )
+        name_map = {r["id"]: r["name"] for r in loc_names}
+
+        for loc_id, deltas in dup_deltas_by_loc.items():
+            net = sum(d for _, d in deltas)
+            async with read_db() as rdb:
+                fp_rows = await rdb.execute_fetchall(
+                    "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                    (loc_id,),
+                )
+            folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+            await apply_dup_deltas(loc_id, folder_parents, deltas)
+            loc_name = name_map.get(loc_id, f"location {loc_id}")
+            log.info(
+                "Dup delta: %s %+d (%d files changed)",
+                loc_name,
+                net,
+                len(deltas),
+            )
 
     return affected_locs
 
@@ -200,37 +253,67 @@ async def _batched_recalc(
     # Write phase: batched UPDATEs via hashes_writer()
     processed = 0
     effective_batch = batch_size if batch_size > 0 else RECALC_BATCH
+    dup_deltas_by_loc: dict[int, list[tuple[int | None, int]]] = defaultdict(list)
+
     for dc, dc_hashes in by_dup_count.items():
         for i in range(0, len(dc_hashes), effective_batch):
             batch = dc_hashes[i : i + effective_batch]
             ph = ",".join("?" for _ in batch)
-            # Source of truth: hashes.db
+
+            # Read old dup_count before update
             async with hashes_writer() as wdb:
+                old_cur = await wdb.execute(
+                    f"SELECT file_id, location_id, dup_count FROM file_hashes "
+                    f"WHERE {hash_column} IN ({ph})"
+                    f"{update_extra}",
+                    batch,
+                )
+                old_rows = await old_cur.fetchall()
+
                 await wdb.execute(
                     f"UPDATE file_hashes SET dup_count = ? "
                     f"WHERE {hash_column} IN ({ph})"
                     f"{update_extra}",
                     [dc] + batch,
                 )
-                # Get affected file_ids for catalog sync
-                affected_rows = await wdb.execute(
-                    f"SELECT file_id FROM file_hashes "
-                    f"WHERE {hash_column} IN ({ph})"
-                    f"{update_extra}",
-                    batch,
-                )
-                affected_ids = [r[0] for r in await affected_rows.fetchall()]
 
-            # Denormalized copy: catalog files.dup_count (for search/sort indexing)
-            if affected_ids:
-                for j in range(0, len(affected_ids), 500):
-                    id_batch = affected_ids[j : j + 500]
-                    id_ph = ",".join("?" for _ in id_batch)
-                    async with db_writer() as cdb:
-                        await cdb.execute(
-                            f"UPDATE files SET dup_count = ? WHERE id IN ({id_ph})",
-                            [dc] + id_batch,
-                        )
+            if not old_rows:
+                processed += len(batch)
+                if on_progress:
+                    await on_progress(processed, total)
+                await asyncio.sleep(0)
+                continue
+
+            affected_ids = [r["file_id"] for r in old_rows]
+            fid_to_old_dc = {r["file_id"]: r["dup_count"] for r in old_rows}
+            fid_to_loc = {r["file_id"]: r["location_id"] for r in old_rows}
+
+            # Sync catalog + compute folder deltas
+            for j in range(0, len(affected_ids), 500):
+                id_batch = affected_ids[j : j + 500]
+                id_ph = ",".join("?" for _ in id_batch)
+
+                async with db_writer() as cdb:
+                    await cdb.execute(
+                        f"UPDATE files SET dup_count = ? WHERE id IN ({id_ph})",
+                        [dc] + id_batch,
+                    )
+
+                async with read_db() as rdb:
+                    folder_rows = await rdb.execute_fetchall(
+                        f"SELECT id, folder_id FROM files WHERE id IN ({id_ph})",
+                        id_batch,
+                    )
+
+                for fr in folder_rows:
+                    fid = fr["id"]
+                    old_dc = fid_to_old_dc.get(fid, 0)
+                    loc_id = fid_to_loc.get(fid)
+                    was_dup = old_dc > 0
+                    is_dup = dc > 0
+                    if was_dup != is_dup:
+                        delta = 1 if is_dup else -1
+                        dup_deltas_by_loc[loc_id].append((fr["folder_id"], delta))
 
             processed += len(batch)
 
@@ -238,6 +321,33 @@ async def _batched_recalc(
                 await on_progress(processed, total)
 
             await asyncio.sleep(0)
+
+    # Apply accumulated dup deltas
+    if dup_deltas_by_loc:
+        loc_ids = list(dup_deltas_by_loc.keys())
+        async with read_db() as rdb:
+            ph = ",".join("?" for _ in loc_ids)
+            loc_names = await rdb.execute_fetchall(
+                f"SELECT id, name FROM locations WHERE id IN ({ph})", loc_ids
+            )
+        name_map = {r["id"]: r["name"] for r in loc_names}
+
+        for loc_id, deltas in dup_deltas_by_loc.items():
+            net = sum(d for _, d in deltas)
+            async with read_db() as rdb:
+                fp_rows = await rdb.execute_fetchall(
+                    "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                    (loc_id,),
+                )
+            folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+            await apply_dup_deltas(loc_id, folder_parents, deltas)
+            loc_name = name_map.get(loc_id, f"location {loc_id}")
+            log.info(
+                "Dup delta: %s %+d (%d files changed)",
+                loc_name,
+                net,
+                len(deltas),
+            )
 
     log.info(
         "_batched_recalc: %s — %d hashes counted from %d rows",
@@ -727,8 +837,6 @@ async def _dup_recalc_writer():
                 len(all_affected),
             )
             await update_location_dup_counts(all_affected)
-            for lid in all_affected:
-                await recalculate_folder_dup_counts(lid)
 
         _active_recalc_locations.difference_update(all_affected)
         await broadcast(
@@ -1306,9 +1414,7 @@ async def hash_candidates_for_location(
             len(small_files),
         )
         # Inline dup count update for small files
-        small_affected = await update_dup_counts_inline(small_fast_hashes)
-        for lid in small_affected | {location_id}:
-            await recalculate_folder_dup_counts(lid)
+        await update_dup_counts_inline(small_fast_hashes)
 
     # Large files: insert into pending_hashes for the drainer
     if large_files:
@@ -1635,9 +1741,7 @@ async def run_hash_file(op_id: int, agent_id: int, params: dict):
             (hash_fast, file_id),
         )
 
-    affected = await update_dup_counts_inline({hash_fast})
-    for lid in affected | {location_id}:
-        await recalculate_folder_dup_counts(lid)
+    await update_dup_counts_inline({hash_fast})
 
 
 async def drain_pending_hashes(
@@ -1749,13 +1853,10 @@ async def drain_pending_hashes(
             if not rows:
                 if scan_done is None or scan_done.is_set():
                     # Rebuild folder dup counts for all affected locations
-                    all_affected_locs.add(location_id)
-                    for lid in all_affected_locs:
-                        await recalculate_folder_dup_counts(lid)
                     log.info(
-                        "Hash drainer: done for %s (%d locations updated)",
+                        "Hash drainer: done for %s (%d locations affected)",
                         location_name,
-                        len(all_affected_locs),
+                        len(all_affected_locs) + 1,
                     )
                     _act_unreg(drainer_act)
                     return
