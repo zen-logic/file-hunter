@@ -18,10 +18,10 @@ _broadcast_task: asyncio.Task | None = None
 
 # Labels for queue operation types
 _OP_LABELS = {
-    "scan_dir": "Scanning",
-    "backfill_location": "Hashing",
-    "rehash_partial": "Re-hashing",
-    "hash_file": "Hashing file",
+    "scan_dir": "Scanning:",
+    "backfill_location": "Hashing:",
+    "rehash_partial": "Re-hashing:",
+    "hash_file": "Hashing file:",
 }
 
 

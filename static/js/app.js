@@ -1152,12 +1152,21 @@ WS.on('scan_progress', (msg) => {
         statusDetail = `Saving hashes: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
         logText = `${msg.location} — ${done.toLocaleString()} / ${total.toLocaleString()} hashes saved`;
     } else if (msg.phase === 'checking_duplicates') {
-        const total = msg.checksTotal || 0;
-        const done = msg.checksDone || 0;
+        const candidates = msg.candidates || 0;
+        if (candidates > 0) {
+            statusDetail = `Checking duplicates: ${candidates.toLocaleString()} candidates`;
+            logText = `${msg.location} — ${candidates.toLocaleString()} candidates found`;
+        } else {
+            statusDetail = 'Checking duplicates...';
+            logText = `${msg.location} — checking duplicates`;
+        }
+    } else if (msg.phase === 'confirming_duplicates') {
+        const total = msg.dupsTotal || 0;
+        const done = msg.dupsProcessed || 0;
+        const confirmed = msg.dupsConfirmed || 0;
         const pct = total > 0 ? ` (${Math.round(done / total * 100)}%)` : '';
-        const progress = total > 0 ? `: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}` : '...';
-        statusDetail = `Confirming duplicates${progress}`;
-        logText = `${msg.location} — confirming duplicates${progress}`;
+        statusDetail = `confirming duplicates: ${done.toLocaleString()} / ${total.toLocaleString()}${pct}`;
+        logText = null; // no activity log spam — indicator only
     } else if (msg.phase === 'recounting') {
         const total = msg.checksTotal || 0;
         const done = msg.checksDone || 0;

@@ -77,7 +77,7 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             label = location_name
 
     act_name = f"quick-scan-{location_id}-{folder_id or 'root'}"
-    register(act_name, f"Quick scan {label}")
+    register(act_name, f"Quick scan: {label}")
 
     try:
         await broadcast(
@@ -295,13 +295,12 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         # Dup processing for new + recovered files
         affected_ids = new_file_ids + recovered_file_ids
         if affected_ids:
-            activity_update(act_name, progress="checking duplicates")
             await post_ingest_dup_processing(
                 location_id,
                 agent_id,
                 label,
                 file_ids=affected_ids,
-                broadcast_scan_progress=False,
+                activity_name=act_name,
             )
 
         # Catch files with hash_partial but no hash_fast

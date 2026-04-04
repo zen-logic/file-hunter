@@ -24,8 +24,8 @@ const Activity = {
      * @param {number} [opts.locationId] - associated location
      * @param {string|false} [opts.log] - activity log text, or false to suppress
      */
-    started(name, { label, detail, locationId, log } = {}) {
-        this._ops.set(name, { label, detail: detail || '', locationId });
+    started(name, { label, detail, locationId, log, background } = {}) {
+        this._ops.set(name, { label, detail: detail || '', locationId, background: !!background });
         this._render();
         if (log !== false) ActivityLog.add(log || label);
     },
@@ -88,12 +88,14 @@ const Activity = {
         // Add/update ops the server knows about
         for (const a of serverOps) {
             const existing = this._ops.get(a.name);
+            const isBg = a.name.startsWith('hash-drainer-') || a.name.startsWith('dup-recalc');
             if (!existing) {
                 // Server has an op we don't — we missed the started message
                 this._ops.set(a.name, {
                     label: a.label,
                     detail: a.progress || '',
                     locationId: null,
+                    background: isBg,
                 });
             } else if (a.progress) {
                 // Update progress from server (real-time may be more current,
@@ -132,9 +134,14 @@ const Activity = {
             StatusBar.renderActivity('idle');
             return;
         }
-        // Primary = last added operation
+        // Primary = last foreground op, or last op if all are background
         let primary = null;
-        for (const op of this._ops.values()) primary = op;
+        for (const op of this._ops.values()) {
+            if (!op.background) primary = op;
+        }
+        if (!primary) {
+            for (const op of this._ops.values()) primary = op;
+        }
         const text = primary.detail
             ? `${primary.label} — ${primary.detail}`
             : primary.label;

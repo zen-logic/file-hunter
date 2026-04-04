@@ -13,7 +13,11 @@ from file_hunter.core import ProgressTracker
 from file_hunter.db import db_writer, open_connection, read_db
 from file_hunter.hashes_db import hashes_writer, open_hashes_connection
 from file_hunter.helpers import post_op_stats
-from file_hunter.services.dup_counts import SQL_VAR_LIMIT, _batched_recalc, stop_writer
+from file_hunter.services.dup_counts import (
+    SQL_VAR_LIMIT,
+    update_dup_counts_inline,
+    stop_writer,
+)
 from file_hunter.services.queue_manager import pause, resume
 from file_hunter.services.settings import get_setting
 from file_hunter.services.sizes import recalculate_location_sizes
@@ -282,16 +286,15 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
         recalculated = 0
         if total_hashes > 0:
 
-            async def _on_progress(processed, _batch_total):
+            async def _on_progress(processed, _batch_total, _dups_confirmed):
                 nonlocal recalculated
                 recalculated = processed
                 _progress["hashes_done"] = processed
-                # Invalidate stats periodically for real-time UI
                 if processed % 1000 < SQL_VAR_LIMIT:
                     await post_op_stats()
 
             if all_strong:
-                await _batched_recalc(
+                await update_dup_counts_inline(
                     all_strong,
                     hash_column="hash_strong",
                     on_progress=_on_progress,
@@ -302,14 +305,14 @@ async def toggle_dup_exclude(folder_id: int, exclude: bool):
             if all_fast:
                 strong_offset = len(all_strong)
 
-                async def _on_fast_progress(processed, _batch_total):
+                async def _on_fast_progress(processed, _batch_total, _dups_confirmed):
                     nonlocal recalculated
                     recalculated = strong_offset + processed
                     _progress["hashes_done"] = recalculated
                     if processed % 1000 < SQL_VAR_LIMIT:
                         await post_op_stats()
 
-                await _batched_recalc(
+                await update_dup_counts_inline(
                     all_fast,
                     hash_column="hash_fast",
                     on_progress=_on_fast_progress,

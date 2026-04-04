@@ -207,7 +207,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             _act_name = f"op-{op_id}"
 
             activity_update(
-                _act_name, label=f"Scanning {location_name}", progress="tree walk"
+                _act_name, label=f"Scanning: {location_name}", progress="tree walk"
             )
 
             # --- Phase 1: stream metadata only into temp DB ---
@@ -263,29 +263,27 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
 
             # --- Phase 3: find dup candidates for new/changed/recovered files ---
             if affected_file_ids:
-                activity_update(_act_name, progress="checking duplicates")
                 candidates_total = await post_ingest_dup_processing(
                     location_id,
                     agent_id,
                     location_name,
                     file_ids=affected_file_ids,
+                    activity_name=_act_name,
                 )
 
             # --- Phase 3b: catch unprocessed files from interrupted scans ---
-            unprocessed = await recover_unprocessed_dup_candidates(
+            await recover_unprocessed_dup_candidates(
                 location_id,
                 agent_id,
                 location_name,
                 exclude_file_ids=affected_file_ids,
             )
-            if unprocessed:
-                activity_update(_act_name, progress="checking duplicates")
 
         else:
             # === FIRST SCAN PATH ===
             _act_name = f"op-{op_id}"
             activity_update(
-                _act_name, label=f"Scanning {location_name}", progress="tree walk"
+                _act_name, label=f"Scanning: {location_name}", progress="tree walk"
             )
 
             # --- Phase 1: stream metadata + hashes into temp DB ---
@@ -328,13 +326,11 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             await _broadcast_location_children(location_id)
 
             # --- Phase 3: find dup candidates and queue for hashing ---
-            activity_update(
-                _act_name, progress=f"{files_found:,} files, checking duplicates"
-            )
             candidates_total = await post_ingest_dup_processing(
                 location_id,
                 agent_id,
                 location_name,
+                activity_name=_act_name,
             )
 
         # --- Finalization ---

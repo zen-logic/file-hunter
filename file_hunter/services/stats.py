@@ -134,6 +134,7 @@ async def _refresh_dashboard(db):
                   s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
            FROM scans s
            JOIN locations l ON l.id = s.location_id
+           WHERE l.name NOT LIKE '__deleting_%'
            ORDER BY s.started_at DESC
            LIMIT 5"""
     )
@@ -274,6 +275,7 @@ async def get_stats(db):
                   s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
            FROM scans s
            JOIN locations l ON l.id = s.location_id
+           WHERE l.name NOT LIKE '__deleting_%'
            ORDER BY s.started_at DESC
            LIMIT 5"""
     )
