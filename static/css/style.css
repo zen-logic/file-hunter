@@ -2301,13 +2301,15 @@ select.modal-input {
 
 .repair-option {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
-    gap: 0.4rem;
+    gap: 0 0.4rem;
     cursor: pointer;
 }
 
 .repair-option input[type="checkbox"] {
     flex-shrink: 0;
+    width: 1rem;
 }
 
 .repair-option strong {
@@ -2315,7 +2317,8 @@ select.modal-input {
 }
 
 .repair-option .settings-hint {
-    margin-left: 0.25rem;
+    flex-basis: 100%;
+    padding-left: calc(1rem + 0.4rem);
 }
 
 .repair-error-toggle {

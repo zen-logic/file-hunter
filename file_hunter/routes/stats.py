@@ -46,8 +46,10 @@ _repair_progress = ProgressTracker(
     query_done=0,
     query_total=0,
     # duplicates phase
-    dup_hashes_done=0,
-    dup_hashes_total=0,
+    dup_step="",
+    dup_step_done=0,
+    dup_step_total=0,
+    dup_groups=0,
     # shared
     error_details=[],
     # sizes phase
@@ -519,17 +521,17 @@ async def _bg_repair(phases: list[str] | None = None):
                 log.info("Catalog repair: skipping phase 2 (duplicates)")
             else:
                 _repair_progress["phase"] = "dup_recount"
-                log.info("Catalog repair: phase 2 — full dup recount")
+                log.info("Catalog repair: full dup recount")
 
-                async def _on_dup_total(t):
-                    _repair_progress["dup_hashes_total"] = t
-
-                async def _on_dup_progress(total_processed):
-                    _repair_progress["dup_hashes_done"] = total_processed
+                async def _on_recount_progress(step, done, total):
+                    _repair_progress["dup_step"] = step
+                    _repair_progress["dup_step_done"] = done
+                    _repair_progress["dup_step_total"] = total
 
                 dup_total = await optimized_dup_recount(
-                    on_progress=_on_dup_progress, on_total=_on_dup_total
+                    on_progress=_on_recount_progress
                 )
+                _repair_progress["dup_groups"] = dup_total
 
                 rdb = await open_connection()
                 try:

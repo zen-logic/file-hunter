@@ -596,10 +596,10 @@
                     <div class="modal-field">
                         <div class="modal-text" style="margin-bottom:0.75rem">Select which repairs to run. All operations pause the queue while running.</div>
                         <div class="repair-options">
-                            <label class="repair-option"><input type="checkbox" id="repair-opt-partials" checked> <strong>Missing partials</strong> <span class="settings-hint">Find files missing from hash database and compute partial hashes</span></label>
-                            <label class="repair-option"><input type="checkbox" id="repair-opt-hashes" checked> <strong>Missing hashes</strong> <span class="settings-hint">Compute full hashes for files with partial matches</span></label>
-                            <label class="repair-option"><input type="checkbox" id="repair-opt-duplicates" checked> <strong>Duplicate files</strong> <span class="settings-hint">Recount all duplicate file groups</span></label>
-                            <label class="repair-option"><input type="checkbox" id="repair-opt-sizes" checked> <strong>Sizes</strong> <span class="settings-hint">Recalculate file counts and sizes for all locations</span></label>
+                            <label class="repair-option"><input type="checkbox" id="repair-opt-partials" checked> <strong>Incomplete scans</strong> <span class="settings-hint">Find files the system doesn't know about and get their fingerprint</span></label>
+                            <label class="repair-option"><input type="checkbox" id="repair-opt-hashes" checked> <strong>Missing hashes</strong> <span class="settings-hint">Find files with matching fingerprints and get their full hash</span></label>
+                            <label class="repair-option"><input type="checkbox" id="repair-opt-duplicates" checked> <strong>Duplicate counts</strong> <span class="settings-hint">Count how many copies of each file exist</span></label>
+                            <label class="repair-option"><input type="checkbox" id="repair-opt-sizes" checked> <strong>Folder totals</strong> <span class="settings-hint">Add up the numbers for every folder and location</span></label>
                         </div>
                     </div>
                     <div class="modal-actions">

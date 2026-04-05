@@ -370,164 +370,253 @@ async def full_dup_recount(
     return total_processed
 
 
-async def optimized_dup_recount(
-    *, location_id: int | None = None, on_progress=None, on_total=None
-):
-    """Recount dup_count using two-pass, only touching actual duplicate groups.
+RECOUNT_BATCH_ROWS = 1_500_000
 
-    Unlike full_dup_recount which processes every hash, this only writes
-    updates for hashes with COUNT > 1. Faster when most files are unique.
+
+async def optimized_dup_recount(*, on_progress=None):
+    """Recount dup_count for all hashes using bulk SQL operations.
+
+    Uses batched GROUP BY for discovery, bulk UPDATE for writes, and
+    batched catalog sync. All operations report progress via on_progress
+    so the UI stays responsive (no silent period exceeds ~15 seconds).
 
     Args:
-        location_id: When set, only find hashes present on this location.
-            The UPDATE still targets all rows with those hashes (dups span
-            locations). None = all hashes globally.
-        on_progress: Optional async callback(total_processed) called after
-            each write batch.
-        on_total: Optional async callback(total) called once after discovery,
-            before writes.
+        on_progress: Optional async callback(step, done, total) called
+            between batches. step is one of: "discovery", "reset",
+            "write", "catalog".
 
     Returns:
-        int: Number of duplicate hash groups written.
+        int: Number of duplicate hash groups found.
 
     Side effects:
-        - Writes dup_count to hashes.db via hashes_writer().
-        - Writes denormalized dup_count to catalog files table via db_writer().
+        - Creates/drops temporary tables in hashes.db (_partial_strong,
+          _partial_fast, _dup_strong, _dup_fast).
+        - Resets all dup_count to 0 then writes correct values.
+        - Writes denormalized dup_count to catalog files table.
 
-    Callers: routes/stats.py catalog repair (optimized variant).
-
-    Implementation: SQL GROUP BY with HAVING COUNT > 1 to find duplicate groups
-    directly, resets all dup_counts to 0, then writes per-hash UPDATEs in
-    SQL_VAR_LIMIT (500) batches with catalog sync.
+    Callers: routes/stats.py catalog repair.
     """
-    scope_label = f"location #{location_id}" if location_id else "all"
-    log.info("optimized_dup_recount (%s): finding duplicate hashes", scope_label)
+    log.info("optimized_dup_recount: starting")
 
-    hash_configs = [
-        ("hash_strong", ""),
-        ("hash_fast", " AND hash_strong IS NULL"),
-    ]
-    all_dup_hashes: list[tuple[str, str, int]] = []  # (hash_col, hash_val, dup_count)
-
-    # Discovery: SQL GROUP BY to find duplicate groups directly
+    # Get file_id boundaries for equal-row batches
     conn = await open_hashes_connection()
     try:
-        for hash_column, update_extra in hash_configs:
-            if location_id:
-                await conn.execute("CREATE TEMP TABLE _recount_hashes (hash_val TEXT)")
-                await conn.execute(
-                    f"INSERT INTO _recount_hashes "
-                    f"SELECT DISTINCT {hash_column} FROM active_hashes "
-                    f"WHERE location_id = ? AND {hash_column} IS NOT NULL "
-                    f"AND {hash_column} != ''",
-                    (location_id,),
-                )
-                await conn.execute(
-                    "CREATE INDEX _recount_hashes_idx ON _recount_hashes(hash_val)"
-                )
-                await conn.commit()
+        row = await conn.execute_fetchall(
+            "SELECT COUNT(*) as c, MIN(file_id) as mn, "
+            "MAX(file_id) as mx FROM file_hashes"
+        )
+        total_rows = row[0]["c"]
+        min_fid = row[0]["mn"] or 0
+        max_fid = row[0]["mx"] or 0
 
-                rows = await conn.execute_fetchall(
-                    f"SELECT f.{hash_column}, COUNT(*) as cnt "
-                    f"FROM _recount_hashes h "
-                    f"CROSS JOIN file_hashes f "
-                    f"WHERE f.excluded = 0 AND f.stale = 0 "
-                    f"AND f.{hash_column} = h.hash_val "
-                    f"GROUP BY f.{hash_column} HAVING COUNT(*) > 1"
-                )
-                await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
-            else:
-                rows = await conn.execute_fetchall(
-                    f"SELECT {hash_column}, COUNT(*) as cnt FROM active_hashes "
-                    f"WHERE {hash_column} IS NOT NULL AND {hash_column} != ''"
-                    f"{update_extra} "
-                    f"GROUP BY {hash_column} HAVING COUNT(*) > 1"
-                )
-
-            for r in rows:
-                all_dup_hashes.append((hash_column, r[hash_column], r["cnt"] - 1))
-
-            log.info(
-                "optimized_dup_recount (%s): %s — %d duplicate groups",
-                scope_label,
-                hash_column,
-                sum(1 for dh in all_dup_hashes if dh[0] == hash_column),
+        boundaries = []
+        for offset in range(
+            RECOUNT_BATCH_ROWS, total_rows, RECOUNT_BATCH_ROWS
+        ):
+            brow = await conn.execute_fetchall(
+                "SELECT file_id FROM file_hashes "
+                "ORDER BY file_id LIMIT 1 OFFSET ?",
+                (offset,),
             )
-            await asyncio.sleep(0)
+            if brow:
+                boundaries.append(brow[0]["file_id"])
     finally:
-        try:
-            await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
-        except Exception:
-            pass
         await conn.close()
 
-    total = len(all_dup_hashes)
-    log.info(
-        "optimized_dup_recount (%s): %d total duplicate hash groups", scope_label, total
-    )
-    if on_total:
-        await on_total(total)
+    ranges = []
+    prev = min_fid
+    for b in boundaries:
+        ranges.append((prev, b))
+        prev = b
+    ranges.append((prev, max_fid + 1))
+    num_batches = len(ranges)
 
-    # Reset all dup_counts to 0 before recounting
-    log.info("optimized_dup_recount (%s): resetting dup_counts", scope_label)
+    log.info(
+        "optimized_dup_recount: %d rows, %d batches of ~%d",
+        total_rows,
+        num_batches,
+        RECOUNT_BATCH_ROWS,
+    )
+
+    # Clean up from any previous failed run
+    async with hashes_writer() as wdb:
+        await wdb.execute("DROP TABLE IF EXISTS _partial_strong")
+        await wdb.execute("DROP TABLE IF EXISTS _partial_fast")
+        await wdb.execute("DROP TABLE IF EXISTS _dup_strong")
+        await wdb.execute("DROP TABLE IF EXISTS _dup_fast")
+        await wdb.execute(
+            "CREATE TABLE _partial_strong (hash_val TEXT, cnt INTEGER)"
+        )
+        await wdb.execute(
+            "CREATE TABLE _partial_fast (hash_val TEXT, cnt INTEGER)"
+        )
+
+    # Discovery: batched partial GROUP BY
+    if on_progress:
+        await on_progress("discovery", 0, num_batches)
+
+    for batch_idx, (start, end) in enumerate(ranges):
+        async with hashes_writer() as wdb:
+            await wdb.execute(
+                "INSERT INTO _partial_strong "
+                "SELECT hash_strong, COUNT(*) FROM file_hashes "
+                "WHERE excluded = 0 AND stale = 0 "
+                "AND hash_strong IS NOT NULL AND hash_strong != '' "
+                "AND file_id >= ? AND file_id < ? "
+                "GROUP BY hash_strong",
+                (start, end),
+            )
+            await wdb.execute(
+                "INSERT INTO _partial_fast "
+                "SELECT hash_fast, COUNT(*) FROM file_hashes "
+                "WHERE excluded = 0 AND stale = 0 "
+                "AND hash_fast IS NOT NULL AND hash_fast != '' "
+                "AND hash_strong IS NULL "
+                "AND file_id >= ? AND file_id < ? "
+                "GROUP BY hash_fast",
+                (start, end),
+            )
+        if on_progress:
+            await on_progress("discovery", batch_idx + 1, num_batches)
+        await asyncio.sleep(0)
+
+    # Aggregate partial counts into final dup tables
     async with hashes_writer() as wdb:
         await wdb.execute(
-            "UPDATE file_hashes SET dup_count = 0 WHERE dup_count != 0"
+            "CREATE TABLE _dup_strong "
+            "(hash_val TEXT PRIMARY KEY, dc INTEGER)"
         )
-    async with db_writer() as cdb:
-        await cdb.execute(
-            "UPDATE files SET dup_count = 0 WHERE dup_count != 0"
+        await wdb.execute(
+            "INSERT INTO _dup_strong "
+            "SELECT hash_val, SUM(cnt) - 1 FROM _partial_strong "
+            "GROUP BY hash_val HAVING SUM(cnt) > 1"
         )
+        await wdb.execute(
+            "CREATE TABLE _dup_fast "
+            "(hash_val TEXT PRIMARY KEY, dc INTEGER)"
+        )
+        await wdb.execute(
+            "INSERT INTO _dup_fast "
+            "SELECT hash_val, SUM(cnt) - 1 FROM _partial_fast "
+            "GROUP BY hash_val HAVING SUM(cnt) > 1"
+        )
+        await wdb.execute("DROP TABLE _partial_strong")
+        await wdb.execute("DROP TABLE _partial_fast")
 
-    # Write correct dup_counts in batches
-    processed = 0
+        cur_s = await wdb.execute("SELECT COUNT(*) as c FROM _dup_strong")
+        strong_count = (await cur_s.fetchone())["c"]
+        cur_f = await wdb.execute("SELECT COUNT(*) as c FROM _dup_fast")
+        fast_count = (await cur_f.fetchone())["c"]
 
-    for i in range(0, total, SQL_VAR_LIMIT):
-        batch = all_dup_hashes[i : i + SQL_VAR_LIMIT]
+    total_groups = strong_count + fast_count
+    log.info(
+        "optimized_dup_recount: %d dup groups "
+        "(hash_strong=%d, hash_fast=%d)",
+        total_groups,
+        strong_count,
+        fast_count,
+    )
 
-        # Set dup_count in hashes.db and collect catalog updates in one pass
-        catalog_updates: list[tuple[int, int]] = []
+    # Reset all dup_counts to 0, batched for progress
+    log.info("optimized_dup_recount: resetting dup_counts")
+    if on_progress:
+        await on_progress("reset", 0, num_batches * 2)
+
+    for batch_idx, (start, end) in enumerate(ranges):
         async with hashes_writer() as wdb:
-            for hash_column, h, dc in batch:
-                update_extra = (
-                    " AND hash_strong IS NULL" if hash_column == "hash_fast" else ""
-                )
-                await wdb.execute(
-                    f"UPDATE file_hashes SET dup_count = ? "
-                    f"WHERE {hash_column} = ?{update_extra}",
-                    (dc, h),
-                )
-                rows = await wdb.execute(
-                    f"SELECT file_id FROM file_hashes "
-                    f"WHERE {hash_column} = ?{update_extra}",
-                    (h,),
-                )
-                for r in await rows.fetchall():
-                    catalog_updates.append((dc, r["file_id"]))
-
-        if catalog_updates:
-            async with db_writer() as cdb:
-                await cdb.executemany(
-                    "UPDATE files SET dup_count = ? WHERE id = ?",
-                    catalog_updates,
-                )
-
-        processed += len(batch)
+            await wdb.execute(
+                "UPDATE file_hashes SET dup_count = 0 "
+                "WHERE file_id >= ? AND file_id < ? AND dup_count != 0",
+                (start, end),
+            )
+        async with db_writer() as cdb:
+            await cdb.execute(
+                "UPDATE files SET dup_count = 0 "
+                "WHERE id >= ? AND id < ? AND dup_count != 0",
+                (start, end),
+            )
         if on_progress:
-            await on_progress(processed)
-        if processed % 5000 < SQL_VAR_LIMIT:
+            await on_progress("reset", (batch_idx + 1) * 2, num_batches * 2)
+        await asyncio.sleep(0)
+
+    # Batched bulk UPDATE on file_hashes
+    if on_progress:
+        await on_progress("write", 0, total_rows)
+
+    rows_updated = 0
+    for batch_idx, (start, end) in enumerate(ranges):
+        async with hashes_writer() as wdb:
+            if strong_count > 0:
+                await wdb.execute(
+                    "UPDATE file_hashes SET dup_count = ("
+                    "  SELECT dc FROM _dup_strong "
+                    "  WHERE hash_val = file_hashes.hash_strong"
+                    ") WHERE file_id >= ? AND file_id < ? "
+                    "AND hash_strong IN "
+                    "(SELECT hash_val FROM _dup_strong)",
+                    (start, end),
+                )
+            cur = await wdb.execute(
+                "UPDATE file_hashes SET dup_count = ("
+                "  SELECT dc FROM _dup_fast "
+                "  WHERE hash_val = file_hashes.hash_fast"
+                ") WHERE file_id >= ? AND file_id < ? "
+                "AND hash_fast IN "
+                "(SELECT hash_val FROM _dup_fast) "
+                "AND hash_strong IS NULL",
+                (start, end),
+            )
+            rows_updated += cur.rowcount
+
+        if on_progress:
+            await on_progress(
+                "write",
+                min((batch_idx + 1) * RECOUNT_BATCH_ROWS, total_rows),
+                total_rows,
+            )
+        if (batch_idx + 1) % 3 == 0 or batch_idx == num_batches - 1:
             log.info(
-                "optimized_dup_recount (%s): %d / %d hashes written",
-                scope_label,
-                processed,
-                total,
+                "optimized_dup_recount: write %d/%d batches",
+                batch_idx + 1,
+                num_batches,
             )
         await asyncio.sleep(0)
 
+    # Cleanup dup tables
+    async with hashes_writer() as wdb:
+        await wdb.execute("DROP TABLE IF EXISTS _dup_strong")
+        await wdb.execute("DROP TABLE IF EXISTS _dup_fast")
+
+    # Catalog sync: read dup_counts from hashes.db, batch write to catalog
+    if on_progress:
+        await on_progress("catalog", 0, rows_updated)
+
+    synced = 0
+    for batch_idx, (start, end) in enumerate(ranges):
+        async with read_hashes() as rdb:
+            rows = await rdb.execute_fetchall(
+                "SELECT file_id, dup_count FROM file_hashes "
+                "WHERE file_id >= ? AND file_id < ? AND dup_count > 0",
+                (start, end),
+            )
+        if rows:
+            async with db_writer() as cdb:
+                await cdb.executemany(
+                    "UPDATE files SET dup_count = ? WHERE id = ?",
+                    [(r["dup_count"], r["file_id"]) for r in rows],
+                )
+            synced += len(rows)
+        if on_progress:
+            await on_progress("catalog", synced, rows_updated)
+        await asyncio.sleep(0)
+
     log.info(
-        "optimized_dup_recount (%s): complete — %d duplicate hashes", scope_label, total
+        "optimized_dup_recount: complete — %d groups, %d rows, %d catalog",
+        total_groups,
+        rows_updated,
+        synced,
     )
-    return total
+    return total_groups
 
 
 def submit_hashes_for_recalc(

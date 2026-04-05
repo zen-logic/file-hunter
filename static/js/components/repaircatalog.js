@@ -120,13 +120,27 @@ const RepairCatalog = {
                 textEl.textContent = parts.join(' \u00b7 ');
             } else if (p.phase === 'dup_recount') {
                 phaseEl.textContent = 'Recounting duplicates';
-                const pct = p.dup_hashes_total > 0
-                    ? Math.round((p.dup_hashes_done / p.dup_hashes_total) * 100)
-                    : 0;
-                fillEl.style.width = pct + '%';
-                textEl.textContent = p.dup_hashes_total > 0
-                    ? `${p.dup_hashes_done.toLocaleString()} / ${p.dup_hashes_total.toLocaleString()} hashes`
-                    : 'Querying hash counts...';
+                const step = p.dup_step || '';
+                if (step === 'discovery') {
+                    const pct = p.dup_step_total > 0 ? Math.round((p.dup_step_done / p.dup_step_total) * 100) : 0;
+                    fillEl.style.width = pct + '%';
+                    textEl.textContent = `Counting duplicate groups: ${p.dup_step_done} / ${p.dup_step_total}`;
+                } else if (step === 'reset') {
+                    const pct = p.dup_step_total > 0 ? Math.round((p.dup_step_done / p.dup_step_total) * 100) : 0;
+                    fillEl.style.width = pct + '%';
+                    textEl.textContent = `Resetting counts: ${p.dup_step_done} / ${p.dup_step_total}`;
+                } else if (step === 'write') {
+                    const pct = p.dup_step_total > 0 ? Math.round((p.dup_step_done / p.dup_step_total) * 100) : 0;
+                    fillEl.style.width = pct + '%';
+                    textEl.textContent = `Writing: ${p.dup_step_done.toLocaleString()} / ${p.dup_step_total.toLocaleString()} rows`;
+                } else if (step === 'catalog') {
+                    const pct = p.dup_step_total > 0 ? Math.round((p.dup_step_done / p.dup_step_total) * 100) : 0;
+                    fillEl.style.width = pct + '%';
+                    textEl.textContent = `Syncing catalog: ${p.dup_step_done.toLocaleString()} / ${p.dup_step_total.toLocaleString()} files`;
+                } else {
+                    fillEl.style.width = '0%';
+                    textEl.textContent = 'Starting...';
+                }
             } else if (p.phase === 'sizes') {
                 phaseEl.textContent = 'Recalculating sizes';
                 const pct = p.locations_total > 0
@@ -170,8 +184,8 @@ const RepairCatalog = {
                     (p.errors > 0 ? `, <a href="#" class="repair-error-toggle">${p.errors.toLocaleString()} errors</a>` : '')
                 );
             }
-            if (p.dup_hashes_total > 0) {
-                lines.push(`Duplicates: ${p.dup_hashes_total.toLocaleString()} hashes recounted`);
+            if (p.dup_groups > 0) {
+                lines.push(`Duplicates: ${p.dup_groups.toLocaleString()} groups recounted`);
             }
             if (p.locations_total > 0) {
                 lines.push(`Sizes: ${p.locations_total} locations recalculated`);
