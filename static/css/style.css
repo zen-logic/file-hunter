@@ -2310,8 +2310,32 @@ select.modal-input {
     flex-shrink: 0;
 }
 
+.repair-option strong {
+    white-space: nowrap;
+}
+
 .repair-option .settings-hint {
     margin-left: 0.25rem;
+}
+
+.repair-error-toggle {
+    color: var(--color-status-error);
+}
+
+.repair-error-details {
+    margin-top: 0.75rem;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+}
+
+.repair-error-line {
+    padding: 0.25rem 0;
+    word-break: break-all;
+}
+
+.repair-error-line + .repair-error-line {
+    border-top: 1px solid var(--color-border);
 }
 
 .import-progress-bar {

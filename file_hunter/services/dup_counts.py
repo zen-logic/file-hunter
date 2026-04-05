@@ -18,7 +18,7 @@ import asyncio
 import logging
 import os
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
 
@@ -396,9 +396,9 @@ async def optimized_dup_recount(
 
     Callers: routes/stats.py catalog repair (optimized variant).
 
-    Implementation: reads all rows per hash type into a Counter on a dedicated
-    connection, filters to groups with count > 1, then writes per-hash UPDATEs
-    in SQL_VAR_LIMIT (500) batches with catalog sync.
+    Implementation: SQL GROUP BY with HAVING COUNT > 1 to find duplicate groups
+    directly, resets all dup_counts to 0, then writes per-hash UPDATEs in
+    SQL_VAR_LIMIT (500) batches with catalog sync.
     """
     scope_label = f"location #{location_id}" if location_id else "all"
     log.info("optimized_dup_recount (%s): finding duplicate hashes", scope_label)
@@ -409,6 +409,7 @@ async def optimized_dup_recount(
     ]
     all_dup_hashes: list[tuple[str, str, int]] = []  # (hash_col, hash_val, dup_count)
 
+    # Discovery: SQL GROUP BY to find duplicate groups directly
     conn = await open_hashes_connection()
     try:
         for hash_column, update_extra in hash_configs:
@@ -427,31 +428,32 @@ async def optimized_dup_recount(
                 await conn.commit()
 
                 rows = await conn.execute_fetchall(
-                    f"SELECT f.{hash_column} FROM _recount_hashes h "
+                    f"SELECT f.{hash_column}, COUNT(*) as cnt "
+                    f"FROM _recount_hashes h "
                     f"CROSS JOIN file_hashes f "
                     f"WHERE f.excluded = 0 AND f.stale = 0 "
-                    f"AND f.{hash_column} = h.hash_val"
+                    f"AND f.{hash_column} = h.hash_val "
+                    f"GROUP BY f.{hash_column} HAVING COUNT(*) > 1"
                 )
                 await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
             else:
                 rows = await conn.execute_fetchall(
-                    f"SELECT {hash_column} FROM active_hashes "
+                    f"SELECT {hash_column}, COUNT(*) as cnt FROM active_hashes "
                     f"WHERE {hash_column} IS NOT NULL AND {hash_column} != ''"
-                    f"{update_extra}"
+                    f"{update_extra} "
+                    f"GROUP BY {hash_column} HAVING COUNT(*) > 1"
                 )
 
-            hash_counts = Counter(r[hash_column] for r in rows)
-            for h, cnt in hash_counts.items():
-                if cnt > 1:
-                    all_dup_hashes.append((hash_column, h, cnt - 1))
+            for r in rows:
+                all_dup_hashes.append((hash_column, r[hash_column], r["cnt"] - 1))
 
             log.info(
-                "optimized_dup_recount (%s): %s — %d duplicate groups from %d rows",
+                "optimized_dup_recount (%s): %s — %d duplicate groups",
                 scope_label,
                 hash_column,
                 sum(1 for dh in all_dup_hashes if dh[0] == hash_column),
-                len(rows),
             )
+            await asyncio.sleep(0)
     finally:
         try:
             await conn.execute("DROP TABLE IF EXISTS _recount_hashes")
@@ -466,10 +468,25 @@ async def optimized_dup_recount(
     if on_total:
         await on_total(total)
 
+    # Reset all dup_counts to 0 before recounting
+    log.info("optimized_dup_recount (%s): resetting dup_counts", scope_label)
+    async with hashes_writer() as wdb:
+        await wdb.execute(
+            "UPDATE file_hashes SET dup_count = 0 WHERE dup_count != 0"
+        )
+    async with db_writer() as cdb:
+        await cdb.execute(
+            "UPDATE files SET dup_count = 0 WHERE dup_count != 0"
+        )
+
+    # Write correct dup_counts in batches
     processed = 0
+
     for i in range(0, total, SQL_VAR_LIMIT):
         batch = all_dup_hashes[i : i + SQL_VAR_LIMIT]
-        catalog_updates: list[tuple[int, int]] = []  # (dc, file_id)
+
+        # Set dup_count in hashes.db and collect catalog updates in one pass
+        catalog_updates: list[tuple[int, int]] = []
         async with hashes_writer() as wdb:
             for hash_column, h, dc in batch:
                 update_extra = (
@@ -486,17 +503,14 @@ async def optimized_dup_recount(
                     (h,),
                 )
                 for r in await rows.fetchall():
-                    catalog_updates.append((dc, r[0]))
+                    catalog_updates.append((dc, r["file_id"]))
 
-        # Sync to catalog
         if catalog_updates:
-            for j in range(0, len(catalog_updates), 500):
-                sub = catalog_updates[j : j + 500]
-                async with db_writer() as cdb:
-                    await cdb.executemany(
-                        "UPDATE files SET dup_count = ? WHERE id = ?",
-                        sub,
-                    )
+            async with db_writer() as cdb:
+                await cdb.executemany(
+                    "UPDATE files SET dup_count = ? WHERE id = ?",
+                    catalog_updates,
+                )
 
         processed += len(batch)
         if on_progress:
@@ -693,6 +707,7 @@ async def _dup_recalc_writer():
 async def find_dup_candidates(
     location_id: int | None = None,
     file_ids: list[int] | None = None,
+    on_progress=None,
 ) -> list[dict]:
     """Find files needing hash_fast that are in duplicate (hash_partial, file_size) groups.
 
@@ -825,17 +840,33 @@ async def find_dup_candidates(
             await conn.execute("DROP TABLE IF EXISTS _dup_groups")
             return []
 
-        # Step 3: find candidate file_ids (hash_fast IS NULL) in hashes.db
+        # Step 3: find candidate file_ids (hash_fast IS NULL) in hashes.db,
+        # batched by dup_group rowid for progress reporting
         t4 = time.monotonic()
-        candidate_rows = await conn.execute_fetchall(
-            "SELECT f.file_id, f.location_id, f.file_size, f.hash_partial "
-            "FROM _dup_groups g "
-            "CROSS JOIN file_hashes f "
-            "WHERE f.excluded = 0 AND f.stale = 0 "
-            "AND f.hash_partial = g.hash_partial "
-            "AND f.file_size = g.file_size "
-            "AND f.hash_fast IS NULL"
-        )
+        DUP_CANDIDATE_BATCH = 100_000
+        candidate_rows = []
+
+        if on_progress:
+            await on_progress(0, dup_group_count)
+
+        for batch_start in range(1, dup_group_count + 1, DUP_CANDIDATE_BATCH):
+            batch_end = min(batch_start + DUP_CANDIDATE_BATCH - 1, dup_group_count)
+            batch_rows = await conn.execute_fetchall(
+                "SELECT f.file_id, f.location_id, f.file_size, f.hash_partial "
+                "FROM _dup_groups g "
+                "CROSS JOIN file_hashes f "
+                "WHERE g.rowid BETWEEN ? AND ? "
+                "AND f.excluded = 0 AND f.stale = 0 "
+                "AND f.hash_partial = g.hash_partial "
+                "AND f.file_size = g.file_size "
+                "AND f.hash_fast IS NULL",
+                (batch_start, batch_end),
+            )
+            candidate_rows.extend(batch_rows)
+            if on_progress:
+                await on_progress(batch_end, dup_group_count)
+            await asyncio.sleep(0)
+
         await conn.execute("DROP TABLE IF EXISTS _dup_groups")
 
         log.info(
@@ -865,7 +896,7 @@ async def find_dup_candidates(
             batch = file_ids[i : i + 500]
             ph = ",".join("?" for _ in batch)
             rows = await cat_conn.execute_fetchall(
-                f"SELECT id, full_path, inode FROM files WHERE id IN ({ph})",
+                f"SELECT id, full_path, inode FROM files WHERE id IN ({ph}) AND stale = 0",
                 batch,
             )
             for r in rows:

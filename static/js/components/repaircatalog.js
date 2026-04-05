@@ -13,6 +13,7 @@ const RepairCatalog = {
     },
 
     open() {
+        document.getElementById('repair-opt-partials').checked = true;
         document.getElementById('repair-opt-hashes').checked = true;
         document.getElementById('repair-opt-duplicates').checked = true;
         document.getElementById('repair-opt-sizes').checked = true;
@@ -22,6 +23,7 @@ const RepairCatalog = {
 
     _startFromChoices() {
         const phases = [];
+        if (document.getElementById('repair-opt-partials').checked) phases.push('partials');
         if (document.getElementById('repair-opt-hashes').checked) phases.push('hashes');
         if (document.getElementById('repair-opt-duplicates').checked) phases.push('duplicates');
         if (document.getElementById('repair-opt-sizes').checked) phases.push('sizes');
@@ -75,21 +77,47 @@ const RepairCatalog = {
                 phaseEl.textContent = 'Pausing operations...';
                 fillEl.style.width = '0%';
                 textEl.textContent = 'Waiting for running operations to finish';
+            } else if (p.phase === 'finding_partials') {
+                phaseEl.textContent = 'Finding missing files';
+                const pct = p.partials_scan_total > 0
+                    ? Math.round((p.partials_scan_done / p.partials_scan_total) * 100)
+                    : 0;
+                fillEl.style.width = pct + '%';
+                const parts = [`${p.partials_scan_done} / ${p.partials_scan_total} locations`];
+                if (p.partials_found > 0) parts.push(`${p.partials_found.toLocaleString()} files found`);
+                textEl.textContent = parts.join(' \u00b7 ');
+            } else if (p.phase === 'hashing_partials') {
+                phaseEl.textContent = 'Computing missing partials';
+                const done = (p.partials_hashed || 0) + (p.partials_stale || 0) + (p.partials_errors || 0) + (p.partials_skipped || 0);
+                const pct = p.partials_total > 0 ? Math.round((done / p.partials_total) * 100) : 0;
+                fillEl.style.width = pct + '%';
+                const parts = [`${done.toLocaleString()} / ${p.partials_total.toLocaleString()}`];
+                if (p.partials_hashed > 0) parts.push(`${p.partials_hashed.toLocaleString()} hashed`);
+                if (p.partials_stale > 0) parts.push(`${p.partials_stale.toLocaleString()} marked stale`);
+                if (p.partials_skipped > 0) parts.push(`${p.partials_skipped.toLocaleString()} skipped (offline)`);
+                if (p.partials_errors > 0) parts.push(`${p.partials_errors.toLocaleString()} error${p.partials_errors === 1 ? '' : 's'}`);
+                textEl.textContent = parts.join(' \u00b7 ');
             } else if (p.phase === 'querying') {
-                phaseEl.textContent = 'Phase 1: Finding files to hash';
-                fillEl.style.width = '0%';
-                textEl.textContent = 'Querying database...';
+                phaseEl.textContent = 'Finding duplicate group candidates';
+                if (p.query_total > 0) {
+                    const pct = Math.round((p.query_done / p.query_total) * 100);
+                    fillEl.style.width = pct + '%';
+                    textEl.textContent = `Searching ${p.query_done.toLocaleString()} / ${p.query_total.toLocaleString()} duplicate groups`;
+                } else {
+                    fillEl.style.width = '0%';
+                    textEl.textContent = 'Querying database...';
+                }
             } else if (p.phase === 'hashing') {
-                phaseEl.textContent = 'Phase 1: Computing missing hashes';
-                const done = p.hashed + p.errors + (p.skipped || 0);
+                phaseEl.textContent = 'Computing missing hashes';
+                const done = p.hashed + (p.stale || 0) + p.errors + (p.skipped || 0);
                 const pct = p.total > 0 ? Math.round((done / p.total) * 100) : 0;
                 fillEl.style.width = pct + '%';
-                const parts = [];
-                parts.push(`${done.toLocaleString()} / ${p.total.toLocaleString()}`);
+                const parts = [`${done.toLocaleString()} / ${p.total.toLocaleString()}`];
                 if (p.hashed > 0) parts.push(`${p.hashed.toLocaleString()} hashed`);
+                if (p.stale > 0) parts.push(`${p.stale.toLocaleString()} marked stale`);
                 if (p.skipped > 0) parts.push(`${p.skipped.toLocaleString()} skipped (offline)`);
-                if (p.errors > 0) parts.push(`${p.errors.toLocaleString()} errors`);
-                textEl.textContent = parts.join(' \u2014 ');
+                if (p.errors > 0) parts.push(`${p.errors.toLocaleString()} error${p.errors === 1 ? '' : 's'}`);
+                textEl.textContent = parts.join(' \u00b7 ');
             } else if (p.phase === 'dup_recount') {
                 phaseEl.textContent = 'Recounting duplicates';
                 const pct = p.dup_hashes_total > 0
@@ -126,11 +154,20 @@ const RepairCatalog = {
             el.innerHTML = `<span style="color:var(--color-status-error)">Repair failed: ${p.error || 'Unknown error'}</span>`;
         } else {
             const lines = ['Repair complete.'];
-            if (p.hashed > 0 || p.skipped > 0 || p.errors > 0) {
+            if (p.partials_hashed > 0 || p.partials_stale > 0 || p.partials_skipped > 0 || p.partials_errors > 0) {
                 lines.push(
-                    `Hashing: ${p.hashed.toLocaleString()} computed` +
+                    `Partials: ${p.partials_hashed.toLocaleString()} computed` +
+                    (p.partials_stale > 0 ? `, ${p.partials_stale.toLocaleString()} marked stale` : '') +
+                    (p.partials_skipped > 0 ? `, ${p.partials_skipped.toLocaleString()} skipped (offline)` : '') +
+                    (p.partials_errors > 0 ? `, <a href="#" class="repair-error-toggle">${p.partials_errors.toLocaleString()} errors</a>` : '')
+                );
+            }
+            if (p.hashed > 0 || p.stale > 0 || p.skipped > 0 || p.errors > 0) {
+                lines.push(
+                    `Hashes: ${p.hashed.toLocaleString()} computed` +
+                    (p.stale > 0 ? `, ${p.stale.toLocaleString()} marked stale` : '') +
                     (p.skipped > 0 ? `, ${p.skipped.toLocaleString()} skipped (offline)` : '') +
-                    (p.errors > 0 ? `, ${p.errors.toLocaleString()} errors` : '')
+                    (p.errors > 0 ? `, <a href="#" class="repair-error-toggle">${p.errors.toLocaleString()} errors</a>` : '')
                 );
             }
             if (p.dup_hashes_total > 0) {
@@ -139,7 +176,27 @@ const RepairCatalog = {
             if (p.locations_total > 0) {
                 lines.push(`Sizes: ${p.locations_total} locations recalculated`);
             }
-            el.innerHTML = lines.join('<br>');
+
+            // Error details expandable
+            const errors = p.error_details || [];
+            let errorHtml = '';
+            if (errors.length > 0) {
+                const errorLines = errors.map(e =>
+                    `<div class="repair-error-line">${e.path}<br><span class="settings-hint">${e.error}</span></div>`
+                ).join('');
+                errorHtml = `<div class="repair-error-details hidden">${errorLines}</div>`;
+            }
+
+            el.innerHTML = lines.join('<br>') + errorHtml;
+
+            // Wire up toggle
+            el.querySelectorAll('.repair-error-toggle').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const details = el.querySelector('.repair-error-details');
+                    if (details) details.classList.toggle('hidden');
+                });
+            });
         }
         this._showStep('done');
     },
