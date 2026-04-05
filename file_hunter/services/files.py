@@ -5,7 +5,7 @@ import os
 
 from file_hunter.core import classify_file
 from file_hunter.db import execute_write
-from file_hunter.hashes_db import get_file_hashes, read_hashes
+from file_hunter.hashes_db import get_file_hashes, hashes_writer, read_hashes
 from file_hunter.helpers import (
     parse_folder_id,
     parse_location_id,
@@ -638,6 +638,14 @@ async def move_file(
         ),
     )
     await db.commit()
+
+    # Sync hashes.db location_id for cross-location moves
+    if final_location_id != src_loc_id:
+        async with hashes_writer() as hdb:
+            await hdb.execute(
+                "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
+                (final_location_id, file_id),
+            )
 
     if not skip_post_processing:
         loc_ids = (

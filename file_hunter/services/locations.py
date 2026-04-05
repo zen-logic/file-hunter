@@ -12,6 +12,7 @@ from file_hunter.helpers import (
     parse_mtime,
     post_op_stats,
 )
+from file_hunter.hashes_db import hashes_writer
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.online_check import (
@@ -1193,6 +1194,12 @@ async def move_folder(
                     "UPDATE files SET full_path = ?, rel_path = ?, location_id = ? WHERE id = ?",
                     update_params + [dest_loc_id, fr["id"]],
                 )
+                # Sync hashes.db location_id
+                async with hashes_writer() as hdb:
+                    await hdb.execute(
+                        "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
+                        (dest_loc_id, fr["id"]),
+                    )
             else:
                 await db.execute(
                     "UPDATE files SET full_path = ?, rel_path = ? WHERE id = ?",

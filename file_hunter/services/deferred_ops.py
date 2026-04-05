@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
 from file_hunter.db import db_writer, read_db
-from file_hunter.hashes_db import get_file_hashes, remove_file_hashes, update_file_hash
+from file_hunter.hashes_db import (
+    get_file_hashes,
+    hashes_writer,
+    remove_file_hashes,
+    update_file_hash,
+)
 from file_hunter.helpers import parse_mtime, post_op_stats
 from file_hunter.services import fs
 from file_hunter.stats_db import update_stats_for_files
@@ -285,6 +290,14 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
             "date_completed = ? WHERE id = ?",
             (now_iso, op_id),
         )
+
+    # Sync hashes.db location_id for cross-location moves
+    if cross_location:
+        async with hashes_writer() as hdb:
+            await hdb.execute(
+                "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
+                (dst_location_id, file_id),
+            )
 
     return dst_location_id if cross_location else None
 
