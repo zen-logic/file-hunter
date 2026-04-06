@@ -12,31 +12,35 @@ This application was developed with the assistance of AI tools (Claude Opus, Kim
 
 ## Features
 
-- **Offline catalog** - scan any folder and the full file tree persists in a local SQLite database. Unplug the drive, unmount the share - keep browsing, searching, and planning as if it were still there.
-- **Duplicate detection** - three-gate hashing (size pre-filter, xxHash64 partial, SHA-256 full) identifies byte-identical files across all locations with minimal I/O.
-- **Consolidation** - keep one copy, stub the rest. Two modes: keep in place or copy to a chosen destination. Hash-verified copies, `.moved` stubs, and `.sources` metadata for full provenance.
-- **Merge folders** - merge entire locations or folder trees. Unique files are copied preserving structure, duplicates are stubbed at the source. Background task with cancel support.
-- **Storage treemap** - interactive squarified treemap per location. Drill into folders, see individual large files, click to navigate. Theme-aware colour palette.
-- **Full file management** - move, rename, delete files and folders. Create new folders. Upload via drag-and-drop (duplicates detected on arrival). Download files or entire folders as ZIP.
-- **Batch operations** - multi-select with checkboxes, Shift+click, Ctrl+click. Bulk delete, move, tag, or download as ZIP.
-- **Powerful search** - filter by filename (with match modes: anywhere, starts with, ends with, exact), file type, tags, description, size range, and date range. Search files, folders, or both. Filter to duplicates only. Results span all locations, online and offline. "Show in Folder" jumps to any result.
-- **Inline previews** - images, video, audio, PDFs, and text files render inline in the detail panel.
-- **Scheduled scans** - per-location schedules: pick days of the week and a time. Scans enqueue automatically. Offline locations are silently skipped.
-- **Background scanning** - scans run as server-side tasks. Close the browser, come back later. Incremental rescans skip unchanged files.
-- **Multi-user auth** - token-based authentication with PBKDF2 password hashing. First-run setup wizard. All users share full access.
-- **Tags & descriptions** - add metadata to any file. Searchable and persistent, even when drives are offline.
-- **17 themes** - switch at runtime: Cyber, C64, Neon, Solaris, Amber Monitor, Green Monitor, Blue, Aqua, Light Blue, Corporate, Default Light, and more. Every theme includes custom treemap colours.
-- **Keyboard navigation** - full keyboard support across all panels. Arrow keys, Tab cycling, Enter to activate, shortcuts for search and filters.
-- **Scan queue** - queue up multiple location scans and they run one after another. Close the browser, come back - the queue kept going.
-- **Stale file detection** - rescans detect files that have disappeared and mark them stale. Your catalog stays honest about what's actually on disk.
-- **Real-time updates** - WebSocket connection streams scan progress, upload status, and mutations to every connected browser.
+| Feature | Description |
+|---|---|
+| **Offline catalog** | Scan any folder and the full file tree persists in a local SQLite database. Unplug the drive, unmount the share - keep browsing, searching, and planning as if it were still there. |
+| **Duplicate detection** | Three-gate hashing (size pre-filter, xxHash64 partial, SHA-256 full) identifies byte-identical files across all locations with minimal I/O. |
+| **Consolidation** | Keep one copy, stub the rest. Two modes: keep in place or copy to a chosen destination. Hash-verified copies, `.moved` stubs, and `.sources` metadata for full provenance. |
+| **Merge folders** | Merge entire locations or folder trees. Move or copy mode. Unique files are copied preserving structure, duplicates are handled at the source. Background task with cancel support. |
+| **Storage treemap** | Interactive squarified treemap per location. Drill into folders, see individual large files, click to navigate. Theme-aware colour palette. |
+| **Full file management** | Move, rename, delete files and folders. Create new folders. Upload via drag-and-drop (duplicates detected on arrival). Download files or entire folders as ZIP. |
+| **Batch operations** | Multi-select with checkboxes, Shift+click, Ctrl+click. Bulk delete, move, tag, or download as ZIP. |
+| **Powerful search** | Filter by filename (with match modes: anywhere, starts with, ends with, exact), file type, tags, description, size range, and date range. Search files, folders, or both. Filter to duplicates only. Results span all locations, online and offline. "Show in Folder" jumps to any result. |
+| **Inline previews** | Images, video, audio, PDFs, and text files render inline in the detail panel. |
+| **Scheduled scans** | Per-location schedules: pick days of the week and a time. Scans enqueue automatically. Offline locations are silently skipped. |
+| **Background scanning** | Scans run as server-side tasks. Close the browser, come back later. Incremental rescans skip unchanged files. |
+| **Multi-user auth** | Token-based authentication with PBKDF2 password hashing. First-run setup wizard. All users share full access. |
+| **Tags & descriptions** | Add metadata to any file. Searchable and persistent, even when drives are offline. |
+| **17 themes** | Switch at runtime: Cyber, C64, Neon, Solaris, Amber Monitor, Green Monitor, Blue, Aqua, Light Blue, Corporate, Default Light, and more. Every theme includes custom treemap colours. |
+| **Keyboard navigation** | Full keyboard support across all panels. Arrow keys, Tab cycling, Enter to activate, shortcuts for search and filters. |
+| **Scan queue** | Queue up multiple location scans and they run one after another. Close the browser, come back - the queue kept going. |
+| **Stale file detection** | Rescans detect files that have disappeared and mark them stale. Your catalog stays honest about what's actually on disk. |
+| **Real-time updates** | WebSocket connection streams scan progress, upload status, and mutations to every connected browser. |
 
 ## Who is it for
 
-- **Home lab operators** - manage files on a headless server from any browser. No desktop environment needed.
-- **Photographers & videographers** - catalog shoots across dozens of external drives. Find that one file even when the drive is in a drawer.
-- **Data hoarders** - see what you have, where it is, and how much of it is duplicated. Reclaim terabytes.
-- **Sysadmins** - audit storage usage across backup drives and archive media. Schedule scans, review from anywhere.
+| | |
+|---|---|
+| **Home lab operators** | Manage files on a headless server from any browser. No desktop environment needed. |
+| **Photographers & videographers** | Catalog shoots across dozens of external drives. Find that one file even when the drive is in a drawer. |
+| **Data hoarders** | See what you have, where it is, and how much of it is duplicated. Reclaim terabytes. |
+| **Sysadmins** | Audit storage usage across backup drives and archive media. Schedule scans, review from anywhere. |
 
 ## Requirements
 
