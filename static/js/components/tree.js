@@ -34,6 +34,7 @@ const Tree = {
     _queuedLocations: new Map(),  // node id -> queue_id
     _backfillingLocations: new Set(),
     _deletingLocations: new Set(),
+    _mergingLocations: new Map(),  // node id -> badge label
     _paused: false,
 
     init(onSelect, onDeselect) {
@@ -191,6 +192,19 @@ const Tree = {
         if (!this._scanningLocations.has(key)) return;
         this._scanningLocations.delete(key);
         this._scanningPhases.delete(key);
+        this._updateLocationBadges(key);
+    },
+
+    setMergingLocation(locationId, label) {
+        const key = 'loc-' + locationId;
+        this._mergingLocations.set(key, label);
+        this._updateLocationBadges(key);
+    },
+
+    clearMergingLocation(locationId) {
+        const key = 'loc-' + locationId;
+        if (!this._mergingLocations.has(key)) return;
+        this._mergingLocations.delete(key);
         this._updateLocationBadges(key);
     },
 
@@ -487,7 +501,7 @@ const Tree = {
         if (!node || node.type !== 'location') return;
 
         // Remove existing operational badges and cancel buttons
-        el.querySelectorAll('.tree-badge.scanning, .tree-badge.queued, .tree-badge.backfilling, .tree-badge.deleting, .tree-badge.cancel').forEach(b => b.remove());
+        el.querySelectorAll('.tree-badge.scanning, .tree-badge.queued, .tree-badge.backfilling, .tree-badge.deleting, .tree-badge.merging, .tree-badge.cancel').forEach(b => b.remove());
 
         // Re-add the appropriate badge
         // Insert point: after the .tree-label, before .tree-location-meta
@@ -560,6 +574,11 @@ const Tree = {
             db.className = 'tree-badge deleting';
             db.textContent = 'deleting';
             el.insertBefore(db, insertBefore);
+        } else if (this._mergingLocations.has(nodeId)) {
+            const mb = document.createElement('span');
+            mb.className = 'tree-badge merging';
+            mb.textContent = this._mergingLocations.get(nodeId);
+            el.insertBefore(mb, insertBefore);
         }
 
         if (this._paused && !this._scanningLocations.has(nodeId) && !this._deletingLocations.has(nodeId)) {
@@ -818,6 +837,11 @@ const Tree = {
                 db.className = 'tree-badge deleting';
                 db.textContent = 'deleting';
                 item.appendChild(db);
+            } else if (this._mergingLocations.has(node.id)) {
+                const mb = document.createElement('span');
+                mb.className = 'tree-badge merging';
+                mb.textContent = this._mergingLocations.get(node.id);
+                item.appendChild(mb);
             }
             if (this._paused && !this._scanningLocations.has(node.id) && !this._deletingLocations.has(node.id)) {
                 const pb = document.createElement('span');

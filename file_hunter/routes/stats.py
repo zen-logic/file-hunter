@@ -188,9 +188,15 @@ async def _bg_repair(phases: list[str] | None = None):
                             "FROM files f "
                             "WHERE f.location_id = ? AND f.file_size > 0 "
                             "AND f.stale = 0 "
-                            "AND NOT EXISTS ("
-                            "  SELECT 1 FROM h.file_hashes fh "
-                            "  WHERE fh.file_id = f.id"
+                            "AND ("
+                            "  NOT EXISTS ("
+                            "    SELECT 1 FROM h.file_hashes fh "
+                            "    WHERE fh.file_id = f.id"
+                            "  ) OR EXISTS ("
+                            "    SELECT 1 FROM h.file_hashes fh "
+                            "    WHERE fh.file_id = f.id "
+                            "    AND fh.hash_partial IS NULL"
+                            "  )"
                             ")",
                             (loc["id"],),
                         )

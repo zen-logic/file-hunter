@@ -168,7 +168,7 @@ const SlideshowTriage = {
 
     _showDeleteDialog() {
         const n = this._deleteItems.length;
-        this._delText.textContent = `Delete ${n} image${n !== 1 ? 's' : ''}? Files will be removed from disk and the catalog.`;
+        this._delText.textContent = `Delete ${n} file${n !== 1 ? 's' : ''}? Files will be removed from disk and the catalog.`;
         this._renderCappedList(this._delList, this._deleteItems);
         this._delDupsCheck.checked = true;
         this._delSubmit.textContent = 'Delete';
@@ -189,7 +189,7 @@ const SlideshowTriage = {
 
         // Fire-and-forget — WS batch_deleted handles UI refresh
         API.post('/api/batch/delete', { file_ids: fileIds, all_duplicates: allDups });
-        Toast.info(`Deleting ${n} image${n !== 1 ? 's' : ''}...`);
+        Toast.info(`Deleting ${n} file${n !== 1 ? 's' : ''}...`);
 
         this._delOverlay.classList.add('hidden');
         this._deleteItems = [];
@@ -200,7 +200,7 @@ const SlideshowTriage = {
 
     async _showConsolidateDialog() {
         const n = this._consolidateItems.length;
-        this._conText.textContent = `Consolidate ${n} image${n !== 1 ? 's' : ''} to a single location.`;
+        this._conText.textContent = `Consolidate ${n} file${n !== 1 ? 's' : ''} to a single location.`;
         this._renderCappedList(this._conList, this._consolidateItems);
 
         this._selectedDest = null;
@@ -243,7 +243,7 @@ const SlideshowTriage = {
 
         // Fire-and-forget — WS consolidate_completed/batch_consolidate_completed handle UI
         API.post('/api/batch/consolidate', payload);
-        Toast.info(`Consolidating ${n} image${n !== 1 ? 's' : ''}...`);
+        Toast.info(`Consolidating ${n} file${n !== 1 ? 's' : ''}...`);
 
         this._conOverlay.classList.add('hidden');
         this._consolidateItems = [];
@@ -254,7 +254,7 @@ const SlideshowTriage = {
 
     _showTagDialog() {
         const n = this._tagItems.length;
-        this._tagText.textContent = `Tag ${n} image${n !== 1 ? 's' : ''}.`;
+        this._tagText.textContent = `Tag ${n} file${n !== 1 ? 's' : ''}.`;
         this._renderCappedList(this._tagList, this._tagItems);
         this._tagInput.value = '';
         this._tagSubmit.textContent = 'Tag';
@@ -277,7 +277,7 @@ const SlideshowTriage = {
         const label = tags.length === 1 ? `"${tags[0]}"` : `${tags.length} tags`;
 
         API.post('/api/batch/tag', { file_ids: fileIds, add_tags: tags });
-        Toast.info(`Tagging ${n} image${n !== 1 ? 's' : ''} with ${label}`);
+        Toast.info(`Tagging ${n} file${n !== 1 ? 's' : ''} with ${label}`);
 
         this._tagOverlay.classList.add('hidden');
         this._tagItems = [];

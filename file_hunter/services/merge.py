@@ -185,7 +185,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
     src_loc_id = source_info["location_id"]
     dest_loc_id = dest_info["location_id"]
     files_copied = 0
-    files_stubbed = 0
     files_skipped = 0
     files_duplicate = 0
     total_files = 0
@@ -204,6 +203,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                 "type": "merge_started",
                 "source": source_label,
                 "destination": dest_label,
+                "srcLocationId": src_loc_id,
+                "destLocationId": dest_loc_id,
                 "mode": mode,
             }
         )
@@ -219,9 +220,10 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                     "type": "merge_completed",
                     "source": source_label,
                     "destination": dest_label,
+                    "srcLocationId": src_loc_id,
+                    "destLocationId": dest_loc_id,
                     "mode": mode,
                     "filesCopied": 0,
-                    "filesStubbed": 0,
                     "filesDuplicate": 0,
                     "filesSkipped": 0,
                 }
@@ -330,7 +332,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                             added=[(src_file["folder_id"], 0, "text", 0)],
                         )
 
-                        files_stubbed += 1
+                        files_duplicate += 1
                         await append_row(
                             csv_path,
                             dest_loc_id,
@@ -497,7 +499,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                                 description, tags,
                                 created_date, modified_date, date_cataloged, date_last_seen,
                                 scan_id, hidden)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, NULL, ?)""",
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)""",
                             (
                                 dest_file_name,
                                 actual_dest,
@@ -507,6 +509,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                                 type_high,
                                 type_low,
                                 file_size,
+                                src_file.get("description") or "",
+                                src_file.get("tags") or "",
                                 src_file.get("created_date", now_iso),
                                 src_file.get("modified_date", now_iso),
                                 now_iso,
@@ -526,13 +530,16 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                             await hdb.execute(
                                 "INSERT INTO file_hashes "
                                 "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
-                                "VALUES (?, ?, ?, NULL, ?, ?) "
+                                "VALUES (?, ?, ?, ?, ?, ?) "
                                 "ON CONFLICT(file_id) DO UPDATE SET "
-                                "hash_fast=excluded.hash_fast, hash_strong=excluded.hash_strong",
+                                "hash_partial=excluded.hash_partial, "
+                                "hash_fast=excluded.hash_fast, "
+                                "hash_strong=excluded.hash_strong",
                                 (
                                     new_dest_file_id,
                                     dest_loc_id,
                                     file_size,
+                                    src_file.get("hash_partial"),
                                     copy_hash,
                                     hash_strong,
                                 ),
@@ -633,7 +640,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                         "processed": processed,
                         "total": total_files,
                         "copied": files_copied,
-                        "stubbed": files_stubbed,
                         "duplicate": files_duplicate,
                         "skipped": files_skipped,
                     }
@@ -648,11 +654,12 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                     "type": "merge_cancelled",
                     "source": source_label,
                     "destination": dest_label,
+                    "srcLocationId": src_loc_id,
+                    "destLocationId": dest_loc_id,
                     "mode": mode,
                     "processed": processed,
                     "total": total_files,
                     "copied": files_copied,
-                    "stubbed": files_stubbed,
                     "duplicate": files_duplicate,
                     "skipped": files_skipped,
                 }
@@ -663,9 +670,10 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                     "type": "merge_completed",
                     "source": source_label,
                     "destination": dest_label,
+                    "srcLocationId": src_loc_id,
+                    "destLocationId": dest_loc_id,
                     "mode": mode,
                     "filesCopied": files_copied,
-                    "filesStubbed": files_stubbed,
                     "filesDuplicate": files_duplicate,
                     "filesSkipped": files_skipped,
                 }
@@ -694,6 +702,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                 "type": "merge_error",
                 "source": source_label,
                 "destination": dest_label,
+                "srcLocationId": src_loc_id,
+                "destLocationId": dest_loc_id,
                 "error": str(exc),
             }
         )
@@ -828,6 +838,7 @@ async def _load_source_files(db, source_id, source_info):
         rows = await db.execute_fetchall(
             """SELECT fi.id, fi.filename, fi.full_path, fi.rel_path, fi.location_id,
                       fi.folder_id, fi.file_type_high, fi.file_type_low, fi.file_size,
+                      fi.description, fi.tags,
                       fi.created_date, fi.modified_date,
                       fi.hidden, l.name as location_name
                FROM files fi
@@ -846,6 +857,7 @@ async def _load_source_files(db, source_id, source_info):
                )
                SELECT fi.id, fi.filename, fi.full_path, fi.rel_path, fi.location_id,
                       fi.folder_id, fi.file_type_high, fi.file_type_low, fi.file_size,
+                      fi.description, fi.tags,
                       fi.created_date, fi.modified_date,
                       fi.hidden, l.name as location_name
                FROM files fi
@@ -867,6 +879,7 @@ async def _load_source_files(db, source_id, source_info):
         h_map = await get_file_hashes(file_ids)
         for r in result:
             h = h_map.get(r["id"], {})
+            r["hash_partial"] = h.get("hash_partial")
             r["hash_fast"] = h.get("hash_fast")
             r["hash_strong"] = h.get("hash_strong")
 

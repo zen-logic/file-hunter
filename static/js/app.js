@@ -1772,6 +1772,7 @@ WS.on('consolidate_started', (msg) => {
         detail: msg.filename,
         log: `Consolidation started: <b>${msg.filename}</b>`,
     });
+    if (msg.locationId) Tree.setMergingLocation(msg.locationId, 'consolidating...');
 });
 
 WS.on('consolidate_progress', (msg) => {
@@ -1787,6 +1788,7 @@ WS.on('consolidate_progress', (msg) => {
 });
 
 WS.on('consolidate_completed', async (msg) => {
+    if (msg.destLocationId) Tree.clearMergingLocation(msg.destLocationId);
     if (msg.batch) return; // batch_consolidate_completed handles UI
     Activity.completed('consolidate', {
         log: `Consolidation completed: <b>${msg.filename}</b> — ${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued`,
@@ -1801,6 +1803,7 @@ WS.on('consolidate_completed', async (msg) => {
 });
 
 WS.on('consolidate_error', (msg) => {
+    if (msg.destLocationId) Tree.clearMergingLocation(msg.destLocationId);
     let detail = msg.error;
     if (msg.stubsWritten > 0 || msg.stubsQueued > 0) {
         detail += ` (${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued before error)`;
@@ -1928,11 +1931,13 @@ WS.on('merge_started', (msg) => {
         detail: 'starting...',
         log: `${verb} started: <b>${msg.source}</b> → <b>${msg.destination}</b>`,
     });
+    const badge = msg.mode === 'copy' ? 'copying...' : 'merging...';
+    if (msg.srcLocationId) Tree.setMergingLocation(msg.srcLocationId, badge);
+    if (msg.destLocationId) Tree.setMergingLocation(msg.destLocationId, badge);
 });
 
 WS.on('merge_progress', (msg) => {
     const parts = [`${msg.copied} copied`];
-    if (msg.stubbed > 0) parts.push(`${msg.stubbed} stubbed`);
     if (msg.duplicate > 0) parts.push(`${msg.duplicate} duplicate`);
     if (msg.skipped > 0) parts.push(`${msg.skipped} skipped`);
     Activity.progress('merge', {
@@ -1942,8 +1947,9 @@ WS.on('merge_progress', (msg) => {
 });
 
 WS.on('merge_completed', async (msg) => {
+    if (msg.srcLocationId) Tree.clearMergingLocation(msg.srcLocationId);
+    if (msg.destLocationId) Tree.clearMergingLocation(msg.destLocationId);
     const parts = [`${msg.filesCopied} copied`];
-    if (msg.filesStubbed > 0) parts.push(`${msg.filesStubbed} stubbed`);
     if (msg.filesDuplicate > 0) parts.push(`${msg.filesDuplicate} duplicate`);
     if (msg.filesSkipped > 0) parts.push(`${msg.filesSkipped} skipped`);
     const verb = msg.mode === 'copy' ? 'Copy' : 'Merge';
@@ -1957,9 +1963,11 @@ WS.on('merge_completed', async (msg) => {
 });
 
 WS.on('merge_cancelled', async (msg) => {
+    if (msg.srcLocationId) Tree.clearMergingLocation(msg.srcLocationId);
+    if (msg.destLocationId) Tree.clearMergingLocation(msg.destLocationId);
     const parts = [];
     if (msg.copied > 0) parts.push(`${msg.copied} copied`);
-    if (msg.stubbed > 0) parts.push(`${msg.stubbed} stubbed`);
+    if (msg.duplicate > 0) parts.push(`${msg.duplicate} duplicate`);
     const detail = parts.length > 0 ? ` — ${parts.join(', ')} before cancel` : '';
     Activity.completed('merge', {
         log: `Merge cancelled: <b>${msg.source}</b> → <b>${msg.destination}</b>${detail}`,
@@ -1971,6 +1979,8 @@ WS.on('merge_cancelled', async (msg) => {
 });
 
 WS.on('merge_error', (msg) => {
+    if (msg.srcLocationId) Tree.clearMergingLocation(msg.srcLocationId);
+    if (msg.destLocationId) Tree.clearMergingLocation(msg.destLocationId);
     Activity.error('merge', {
         log: `Merge error: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.error}`,
     });
