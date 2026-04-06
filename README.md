@@ -56,6 +56,12 @@ Downloads the latest release, extracts it, and you're ready to go. Works on macO
 
 Or download the latest release manually from the [releases page](https://github.com/zen-logic/file-hunter/releases/latest), extract it wherever you like, and run `./filehunter`.
 
+### Install via Docker
+
+The following project tracks this repo's releases and updates the images accordingly.  Instructions are in the project repo for setup:
+
+https://github.com/ikidd/file-hunter-dockerized
+
 ### Install from source
 
 ```bash
