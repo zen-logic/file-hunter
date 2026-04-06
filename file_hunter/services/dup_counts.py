@@ -547,7 +547,7 @@ async def optimized_dup_recount(*, on_progress=None):
     for batch_idx, (start, end) in enumerate(ranges):
         async with hashes_writer() as wdb:
             if strong_count > 0:
-                await wdb.execute(
+                cur_s = await wdb.execute(
                     "UPDATE file_hashes SET dup_count = ("
                     "  SELECT dc FROM _dup_strong "
                     "  WHERE hash_val = file_hashes.hash_strong"
@@ -556,6 +556,7 @@ async def optimized_dup_recount(*, on_progress=None):
                     "(SELECT hash_val FROM _dup_strong)",
                     (start, end),
                 )
+                rows_updated += cur_s.rowcount
             cur = await wdb.execute(
                 "UPDATE file_hashes SET dup_count = ("
                 "  SELECT dc FROM _dup_fast "
