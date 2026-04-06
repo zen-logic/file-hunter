@@ -24,7 +24,7 @@ from file_hunter.services.activity import (
 )
 from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
-from file_hunter.stats_db import update_stats_for_files
+from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.agent import get_agent_location_ids
 from file_hunter.ws.scan import broadcast
 
@@ -111,7 +111,24 @@ async def _stub_and_delete(copy, canonical_path, dest_loc_name, now_iso):
                WHERE id=?""",
             (stub_name, stub_path, stub_rel, stub_size, now_iso, now_iso, copy["id"]),
         )
+    # Check dup status before removing hashes
+    _h = await get_file_hashes([copy["id"]])
+    was_dup = (_h.get(copy["id"], {}).get("dup_count") or 0) > 0
+
     await remove_file_hashes([copy["id"]])
+
+    if was_dup:
+
+        async with read_db() as rdb:
+            fp_rows = await rdb.execute_fetchall(
+                "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                (copy_loc_id,),
+            )
+        folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+        await apply_dup_deltas(
+            copy_loc_id, folder_parents, [(copy["folder_id"], -1)]
+        )
+
     await update_stats_for_files(
         copy_loc_id,
         removed=[
@@ -877,7 +894,22 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                             fid,
                         ),
                     )
+                    _h = await get_file_hashes([fid])
+                    was_dup = (_h.get(fid, {}).get("dup_count") or 0) > 0
                     await remove_file_hashes([fid])
+                    if was_dup:
+                
+                        async with read_db() as rdb2:
+                            fp_rows = await rdb2.execute_fetchall(
+                                "SELECT id, parent_id FROM folders "
+                                "WHERE location_id = ?",
+                                (location_id,),
+                            )
+                        fp = {r["id"]: r["parent_id"] for r in fp_rows}
+                        await apply_dup_deltas(
+                            location_id, fp,
+                            [(file_rows[0]["folder_id"], -1)],
+                        )
                     await update_stats_for_files(
                         location_id,
                         removed=[
@@ -897,12 +929,30 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                         "FROM files WHERE full_path = ? AND location_id = ?",
                         (source_path, location_id),
                     )
+                    if del_rows:
+                        del_ids = [r["id"] for r in del_rows]
+                        _h = await get_file_hashes(del_ids)
+                        dup_deltas = [
+                            (r["folder_id"], -1)
+                            for r in del_rows
+                            if (_h.get(r["id"], {}).get("dup_count") or 0) > 0
+                        ]
                     await wdb.execute(
                         "DELETE FROM files WHERE full_path = ? AND location_id = ?",
                         (source_path, location_id),
                     )
                     if del_rows:
-                        await remove_file_hashes([r["id"] for r in del_rows])
+                        await remove_file_hashes(del_ids)
+                        if dup_deltas:
+                    
+                            async with read_db() as rdb2:
+                                fp_rows = await rdb2.execute_fetchall(
+                                    "SELECT id, parent_id FROM folders "
+                                    "WHERE location_id = ?",
+                                    (location_id,),
+                                )
+                            fp = {r["id"]: r["parent_id"] for r in fp_rows}
+                            await apply_dup_deltas(location_id, fp, dup_deltas)
                         await update_stats_for_files(
                             location_id,
                             removed=[

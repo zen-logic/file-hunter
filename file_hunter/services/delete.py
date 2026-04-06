@@ -8,10 +8,11 @@ from file_hunter.hashes_db import (
     read_hashes,
     remove_file_hashes,
 )
+from file_hunter.db import read_db
 from file_hunter.helpers import get_effective_hash, post_op_stats
 from file_hunter.services import fs
 from file_hunter.services.deferred_ops import queue_deferred_op
-from file_hunter.stats_db import remove_folder_stats, update_stats_for_files
+from file_hunter.stats_db import apply_dup_deltas, remove_folder_stats, update_stats_for_files
 
 
 async def delete_file(db, file_id: int) -> dict:
@@ -83,6 +84,9 @@ async def delete_file(db, file_id: int) -> dict:
     except FileNotFoundError:
         pass  # already gone from disk
 
+    # Check if file was a duplicate before removing it
+    dup_count = h.get("dup_count", 0) or 0
+
     await db.execute("DELETE FROM files WHERE id = ?", (file_id,))
     await db.commit()
 
@@ -99,6 +103,19 @@ async def delete_file(db, file_id: int) -> dict:
             )
         ],
     )
+
+    # If the deleted file was a duplicate, apply -1 delta to dup count
+    if dup_count > 0:
+
+        async with read_db() as rdb:
+            fp_rows = await rdb.execute_fetchall(
+                "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                (location_id,),
+            )
+        folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+        await apply_dup_deltas(
+            location_id, folder_parents, [(rec["folder_id"], -1)]
+        )
 
     await post_op_stats(
         strong_hashes={hash_strong} if hash_strong else None,
@@ -217,13 +234,37 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
 
     await db.commit()
 
+    # Read dup_counts before removing hashes so we can apply dup deltas
+    dup_deltas_by_loc: dict[int, list[tuple[int | None, int]]] = {}
     if deleted_ids:
+        h_map = await get_file_hashes(deleted_ids)
+        for rec in all_rows:
+            if rec["id"] in deleted_ids:
+                dc = (h_map.get(rec["id"], {}).get("dup_count") or 0)
+                if dc > 0:
+                    loc_id = rec["location_id"]
+                    if loc_id not in dup_deltas_by_loc:
+                        dup_deltas_by_loc[loc_id] = []
+                    dup_deltas_by_loc[loc_id].append((rec["folder_id"], -1))
+
         await remove_file_hashes(deleted_ids)
 
     # Update stats per affected location
     if removed_by_loc:
         for loc_id, removed_files in removed_by_loc.items():
             await update_stats_for_files(loc_id, removed=removed_files)
+
+    # Apply dup count deltas for deleted duplicates
+    if dup_deltas_by_loc:
+
+        for loc_id, deltas in dup_deltas_by_loc.items():
+            async with read_db() as rdb:
+                fp_rows = await rdb.execute_fetchall(
+                    "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                    (loc_id,),
+                )
+            folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+            await apply_dup_deltas(loc_id, folder_parents, deltas)
 
     affected_loc_ids = {rec["location_id"] for rec in all_rows}
     await post_op_stats(
@@ -308,6 +349,7 @@ async def delete_folder(db, folder_id: int) -> dict:
     )
     affected_strong: set[str] = set()
     affected_fast: set[str] = set()
+    dup_file_ids: set[int] = set()
     if file_id_rows:
         hconn = await open_hashes_connection()
         try:
@@ -316,8 +358,8 @@ async def delete_folder(db, folder_id: int) -> dict:
                 batch = fids[i : i + 500]
                 ph = ",".join("?" for _ in batch)
                 hash_rows = await hconn.execute_fetchall(
-                    f"SELECT hash_strong, hash_fast FROM file_hashes "
-                    f"WHERE file_id IN ({ph})",
+                    f"SELECT file_id, hash_strong, hash_fast, dup_count "
+                    f"FROM file_hashes WHERE file_id IN ({ph})",
                     batch,
                 )
                 for r in hash_rows:
@@ -325,6 +367,8 @@ async def delete_folder(db, folder_id: int) -> dict:
                         affected_strong.add(r["hash_strong"])
                     elif r["hash_fast"]:
                         affected_fast.add(r["hash_fast"])
+                    if (r["dup_count"] or 0) > 0:
+                        dup_file_ids.add(r["file_id"])
         finally:
             await hconn.close()
 
@@ -389,6 +433,23 @@ async def delete_folder(db, folder_id: int) -> dict:
     if removed_deltas:
         await update_stats_for_files(location_id, removed=removed_deltas)
         await remove_folder_stats(deleted_folder_ids)
+
+    # Apply dup count deltas for deleted duplicates
+    if dup_file_ids:
+
+        dup_deltas = [
+            (r["folder_id"], -1)
+            for r in file_info_rows
+            if r["id"] in dup_file_ids
+        ]
+        if dup_deltas:
+            async with read_db() as rdb:
+                fp_rows = await rdb.execute_fetchall(
+                    "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                    (location_id,),
+                )
+            folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+            await apply_dup_deltas(location_id, folder_parents, dup_deltas)
 
     await post_op_stats(
         location_ids={location_id},

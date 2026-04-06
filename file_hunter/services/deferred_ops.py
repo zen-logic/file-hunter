@@ -14,7 +14,7 @@ from file_hunter.hashes_db import (
 )
 from file_hunter.helpers import parse_mtime, post_op_stats
 from file_hunter.services import fs
-from file_hunter.stats_db import update_stats_for_files
+from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -199,7 +199,22 @@ async def _drain_delete(f, op_id: int, now_iso: str):
             (now_iso, op_id),
         )
 
+    # Check dup status before removing hashes
+    _h = await get_file_hashes([file_id])
+    was_dup = (_h.get(file_id, {}).get("dup_count") or 0) > 0
+
     await remove_file_hashes([file_id])
+
+    if was_dup:
+        async with read_db() as rdb:
+            fp_rows = await rdb.execute_fetchall(
+                "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                (location_id,),
+            )
+        folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+        await apply_dup_deltas(
+            location_id, folder_parents, [(f["folder_id"], -1)]
+        )
 
     await update_stats_for_files(
         location_id,
@@ -298,6 +313,20 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
                 "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
                 (dst_location_id, file_id),
             )
+
+    # Update folder stats: file left source folder, arrived at dest folder
+    if dst_folder_id != f["folder_id"]:
+        file_size = f["file_size"] or 0
+        old_type = f["file_type_high"]
+        hidden = f["hidden"]
+        await update_stats_for_files(
+            location_id,
+            removed=[(f["folder_id"], file_size, old_type, hidden)],
+        )
+        await update_stats_for_files(
+            dst_location_id,
+            added=[(dst_folder_id, file_size, new_type_high, hidden)],
+        )
 
     return dst_location_id if cross_location else None
 

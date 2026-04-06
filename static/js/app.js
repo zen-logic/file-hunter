@@ -955,6 +955,13 @@ FileList.init(async (file) => {
     wireBatchActions(items);
 });
 
+FileList.onSelectingAll = () => {
+    Detail.el.innerHTML = `
+        <div class="detail-section">
+            <div class="detail-filename">Selecting...</div>
+        </div>`;
+};
+
 FileList.onBreadcrumbNav = (nodeId) => Tree.navigateTo(nodeId);
 
 Detail.init({

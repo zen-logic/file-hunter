@@ -23,7 +23,7 @@ from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
 from file_hunter.services.sizes import recalculate_location_sizes
 from file_hunter.services.stats import invalidate_stats_cache
-from file_hunter.stats_db import update_stats_for_files
+from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -192,6 +192,7 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
     last_broadcast = 0.0
 
     affected_hashes: set[str] = set()
+    stub_dup_deltas: list[tuple[int | None, int]] = []  # (folder_id, -1) for each stubbed dup
 
     mode_label = "Moving" if is_move else "Copying"
     act_name = f"merge_{source_label}_{dest_label}"
@@ -324,6 +325,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                             now_iso,
                         )
                         await remove_file_hashes([src_file["id"]])
+                        if src_file["dup_count"] > 0:
+                            stub_dup_deltas.append((src_file["folder_id"], -1))
                         await update_stats_for_files(
                             src_file["location_id"],
                             removed=[
@@ -570,6 +573,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                             now_iso,
                         )
                         await remove_file_hashes([src_file["id"]])
+                        if src_file["dup_count"] > 0:
+                            stub_dup_deltas.append((src_file["folder_id"], -1))
                         await update_stats_for_files(
                             src_file["location_id"],
                             removed=[
@@ -692,6 +697,16 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                 await recalculate_location_sizes(lid)
             except Exception:
                 pass
+
+        # Apply dup count deltas for stubbed source files
+        if stub_dup_deltas:
+            async with read_db() as rdb:
+                fp_rows = await rdb.execute_fetchall(
+                    "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                    (src_loc_id,),
+                )
+            folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+            await apply_dup_deltas(src_loc_id, folder_parents, stub_dup_deltas)
 
         affected_strong = {h for h in affected_hashes if len(h) == 64}
         affected_fast = {h for h in affected_hashes if len(h) == 16}
@@ -887,6 +902,7 @@ async def _load_source_files(db, source_id, source_info):
             r["hash_partial"] = h.get("hash_partial")
             r["hash_fast"] = h.get("hash_fast")
             r["hash_strong"] = h.get("hash_strong")
+            r["dup_count"] = h.get("dup_count") or 0
 
     return result
 

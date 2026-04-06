@@ -62,6 +62,7 @@ const FileList = {
     onFolderOpen: null,
     onDeselect: null,
     onMultiSelect: null,
+    onSelectingAll: null,
     onBreadcrumbNav: null,
     currentBreadcrumb: null,
     filterText: '',
@@ -207,12 +208,18 @@ const FileList = {
         items.forEach(item => {
             this.selectedItems.set(itemKey(item), item);
         });
-        this._fireSelectionChange();
-        this.render();
 
         // Fetch remaining pages if multi-page
         const totalPages = this._totalPages();
-        if (totalPages <= 1) return;
+        if (totalPages <= 1) {
+            this._fireSelectionChange();
+            this.render();
+            return;
+        }
+
+        // Multi-page: show "selecting..." state while fetching
+        if (this.onSelectingAll) this.onSelectingAll();
+        this.render();
 
         for (let page = 0; page < totalPages; page++) {
             if (gen !== this._selectAllGen) return;  // selection was cleared — abort

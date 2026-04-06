@@ -11,7 +11,7 @@ from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.delete import delete_folder
 from file_hunter.services.files import move_file, update_file
 from file_hunter.services.locations import move_folder
-from file_hunter.stats_db import update_stats_for_files
+from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -188,6 +188,27 @@ async def batch_delete(
         if removed_by_loc:
             for loc_id, removed in removed_by_loc.items():
                 await update_stats_for_files(loc_id, removed=removed)
+
+        # Apply dup count deltas for deleted duplicates
+        dup_deltas_by_loc: dict[int, list[tuple[int | None, int]]] = {}
+        for rec in all_rows:
+            if rec["id"] not in deleted_ids:
+                continue
+            h = h_map.get(rec["id"], {})
+            if (h.get("dup_count") or 0) > 0:
+                loc_id = rec["location_id"]
+                if loc_id not in dup_deltas_by_loc:
+                    dup_deltas_by_loc[loc_id] = []
+                dup_deltas_by_loc[loc_id].append((rec["folder_id"], -1))
+        if dup_deltas_by_loc:
+            for loc_id, deltas in dup_deltas_by_loc.items():
+                async with read_db() as rdb:
+                    fp_rows = await rdb.execute_fetchall(
+                        "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                        (loc_id,),
+                    )
+                folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+                await apply_dup_deltas(loc_id, folder_parents, deltas)
 
         await post_op_stats(
             strong_hashes=affected_strong or None,

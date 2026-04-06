@@ -15,6 +15,7 @@ from file_hunter.helpers import (
 )
 from file_hunter.services import fs
 from file_hunter.services.deferred_ops import queue_deferred_op
+from file_hunter.stats_db import update_stats_for_files
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.locations import check_location_online
 from file_hunter.services.settings import get_setting
@@ -646,6 +647,20 @@ async def move_file(
                 "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
                 (final_location_id, file_id),
             )
+
+    # Update folder/location stats if file changed folder
+    if moved and final_folder_id != f["folder_id"]:
+        file_size = f["file_size"] or 0
+        old_type = f["file_type_high"]
+        hidden = f["hidden"]
+        await update_stats_for_files(
+            src_loc_id,
+            removed=[(f["folder_id"], file_size, old_type, hidden)],
+        )
+        await update_stats_for_files(
+            final_location_id,
+            added=[(final_folder_id, file_size, new_type_high, hidden)],
+        )
 
     if not skip_post_processing:
         loc_ids = (
