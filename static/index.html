@@ -320,8 +320,9 @@
                     <div id="merge-source-name" class="merge-source-name"></div>
                     <div id="merge-source-stats" class="merge-source-stats"></div>
                 </div>
-                <p class="merge-warning">Unique files will be copied to the destination preserving
-                folder structure. Source originals will be replaced with .moved stubs.</p>
+                <div class="modal-field">
+                    <label class="merge-option"><input type="checkbox" id="merge-copy-only"> <strong>Copy only</strong> <span class="settings-hint">Leave source files in place, no .moved stubs</span></label>
+                </div>
                 <div class="modal-field">
                     <label class="modal-label">Destination</label>
                     <div class="consolidate-tree-picker" id="merge-tree-picker"></div>

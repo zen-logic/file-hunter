@@ -564,6 +564,7 @@ async def _handle_merge(op_id: int, agent_id: int | None, params: dict):
         params["source_info"],
         params["destination_id"],
         params["dest_info"],
+        mode=params.get("mode", "move"),
     )
 
 

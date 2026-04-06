@@ -19,9 +19,13 @@ async def merge(request: Request):
 
     source_id = body.get("source_id")
     destination_id = body.get("destination_id")
+    mode = body.get("mode", "move")
 
     if not source_id or not destination_id:
         return json_error("source_id and destination_id are required.", 400)
+
+    if mode not in ("move", "copy"):
+        return json_error("mode must be 'move' or 'copy'.", 400)
 
     if source_id == destination_id:
         return json_error("Source and destination cannot be the same.", 400)
@@ -61,15 +65,23 @@ async def merge(request: Request):
     if is_merge_running():
         return json_error("A merge is already in progress.", 409)
 
-    await enqueue("merge", None, {
-        "source_id": source_id,
-        "source_info": source_info,
-        "destination_id": destination_id,
-        "dest_info": dest_info,
-    })
+    await enqueue(
+        "merge",
+        None,
+        {
+            "source_id": source_id,
+            "source_info": source_info,
+            "destination_id": destination_id,
+            "dest_info": dest_info,
+            "mode": mode,
+        },
+    )
 
+    mode_label = "Move" if mode == "move" else "Copy"
     return json_ok(
-        {"message": f"Merge started: {source_info['label']} → {dest_info['label']}"}
+        {
+            "message": f"{mode_label} started: {source_info['label']} → {dest_info['label']}"
+        }
     )
 
 

@@ -507,8 +507,8 @@ Triage.init(
 );
 ImportCatalog.init();
 RepairCatalog.init();
-Merge.init(async ({ source_id, destination_id }) => {
-    await API.post('/api/merge', { source_id, destination_id });
+Merge.init(async ({ source_id, destination_id, mode }) => {
+    await API.post('/api/merge', { source_id, destination_id, mode });
 });
 
 DeleteLocationModal.init(async (node) => {
@@ -1922,33 +1922,47 @@ WS.on('upload_completed', async (msg) => {
 });
 
 WS.on('merge_started', (msg) => {
+    const verb = msg.mode === 'copy' ? 'Copying' : 'Moving';
     Activity.started('merge', {
-        label: `Merging: ${msg.source} → ${msg.destination}`,
+        label: `${verb}: ${msg.source} → ${msg.destination}`,
         detail: 'starting...',
-        log: `Merge started: <b>${msg.source}</b> → <b>${msg.destination}</b>`,
+        log: `${verb} started: <b>${msg.source}</b> → <b>${msg.destination}</b>`,
     });
 });
 
 WS.on('merge_progress', (msg) => {
+    const parts = [`${msg.copied} copied`];
+    if (msg.stubbed > 0) parts.push(`${msg.stubbed} stubbed`);
+    if (msg.duplicate > 0) parts.push(`${msg.duplicate} duplicate`);
+    if (msg.skipped > 0) parts.push(`${msg.skipped} skipped`);
     Activity.progress('merge', {
-        detail: `${msg.processed}/${msg.total} files (${msg.copied} copied, ${msg.stubbed} stubbed)`,
-        log: `Merging: ${msg.source} → ${msg.destination} — ${msg.processed}/${msg.total} files`,
+        detail: `${msg.processed}/${msg.total} files (${parts.join(', ')})`,
+        log: `${msg.mode === 'copy' ? 'Copying' : 'Moving'}: ${msg.source} → ${msg.destination} — ${msg.processed}/${msg.total} files`,
     });
 });
 
 WS.on('merge_completed', async (msg) => {
+    const parts = [`${msg.filesCopied} copied`];
+    if (msg.filesStubbed > 0) parts.push(`${msg.filesStubbed} stubbed`);
+    if (msg.filesDuplicate > 0) parts.push(`${msg.filesDuplicate} duplicate`);
+    if (msg.filesSkipped > 0) parts.push(`${msg.filesSkipped} skipped`);
+    const verb = msg.mode === 'copy' ? 'Copy' : 'Merge';
     Activity.completed('merge', {
-        log: `Merge completed: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.filesCopied} copied, ${msg.filesStubbed} stubbed, ${msg.filesSkipped} skipped`,
+        log: `${verb} completed: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${parts.join(', ')}`,
     });
-    Toast.success(`Merge completed: ${msg.filesCopied} copied, ${msg.filesStubbed} stubbed`);
+    Toast.success(`${verb} completed: ${parts.join(', ')}`);
     await StatusBar.loadStats();
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await refreshDetailPanel();
 });
 
 WS.on('merge_cancelled', async (msg) => {
+    const parts = [];
+    if (msg.copied > 0) parts.push(`${msg.copied} copied`);
+    if (msg.stubbed > 0) parts.push(`${msg.stubbed} stubbed`);
+    const detail = parts.length > 0 ? ` — ${parts.join(', ')} before cancel` : '';
     Activity.completed('merge', {
-        log: `Merge cancelled: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.copied} copied, ${msg.stubbed} stubbed before cancel`,
+        log: `Merge cancelled: <b>${msg.source}</b> → <b>${msg.destination}</b>${detail}`,
     });
     Toast.info(`Merge cancelled: ${msg.source} → ${msg.destination}`);
     await StatusBar.loadStats();

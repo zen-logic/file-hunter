@@ -57,6 +57,7 @@ const Merge = {
         this.sourceStatsEl.textContent = 'Loading stats...';
         this.submitBtn.disabled = true;
         this.destDisplay.textContent = 'No folder selected';
+        document.getElementById('merge-copy-only').checked = false;
 
         // Fetch stats for source
         const isLocation = String(sourceNode.id).startsWith('loc-');
@@ -268,9 +269,11 @@ const Merge = {
     _doSubmit() {
         if (!this._selectedDest) return;
 
+        const copyOnly = document.getElementById('merge-copy-only').checked;
         this.onMerge({
             source_id: this._sourceNode.id,
             destination_id: this._selectedDest,
+            mode: copyOnly ? 'copy' : 'move',
         });
         this.close();
     },

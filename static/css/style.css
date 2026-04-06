@@ -1895,8 +1895,21 @@ select.modal-input {
 
 .merge-source-name { font-weight: var(--font-weight-semibold); margin-bottom: 0.25rem; }
 .merge-source-stats { font-size: var(--font-size-sm); color: var(--color-text-muted); margin-bottom: 0.5rem; }
-.merge-warning { font-size: var(--font-size-sm); color: var(--color-text-dim); margin: 0.5rem 0;
-    padding: 0.5rem; border: 1px solid var(--color-border-subtle); border-radius: 4px; }
+.merge-option {
+    display: flex;
+    align-items: baseline;
+    gap: 0 0.4rem;
+    cursor: pointer;
+}
+
+.merge-option input[type="checkbox"] {
+    flex-shrink: 0;
+    width: 1rem;
+}
+
+.merge-option .settings-hint {
+    margin-left: 0.25rem;
+}
 
 /* ── Filesystem browser ── */
 
