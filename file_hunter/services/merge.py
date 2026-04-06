@@ -230,13 +230,18 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
             )
             return
 
-        # Build destination hash index (excludes stale files)
+        # Build destination hash index (excludes stale files, scoped to folder)
+        dest_folder_id = dest_info["folder_id"]
         async with read_db() as db:
-            dest_hash_index = await _build_dest_hash_index(db, dest_loc_id)
+            dest_hash_index = await _build_dest_hash_index(
+                db, dest_loc_id, dest_folder_id
+            )
 
         # Build set of destination rel_paths for catalog-based name collision
         async with read_db() as db:
-            dest_rel_paths = await _build_dest_rel_paths(db, dest_loc_id)
+            dest_rel_paths = await _build_dest_rel_paths(
+                db, dest_loc_id, dest_folder_id
+            )
 
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
         folder_cache: dict[str, int] = {}
@@ -886,13 +891,30 @@ async def _load_source_files(db, source_id, source_info):
     return result
 
 
-async def _build_dest_hash_index(db, location_id):
-    """Build hash→file dict for non-stale hashed files in the destination."""
-    file_rows = await db.execute_fetchall(
-        "SELECT id, full_path, folder_id, rel_path FROM files "
-        "WHERE location_id = ? AND stale = 0",
-        (location_id,),
-    )
+async def _build_dest_hash_index(db, location_id, folder_id=None):
+    """Build hash→file dict for non-stale hashed files in the destination folder.
+
+    When folder_id is set, scopes to that folder and its descendants.
+    When None, scopes to the entire location.
+    """
+    if folder_id:
+        file_rows = await db.execute_fetchall(
+            """WITH RECURSIVE descendants(id) AS (
+                   SELECT ? UNION ALL
+                   SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id
+               )
+               SELECT fi.id, fi.full_path, fi.folder_id, fi.rel_path
+               FROM files fi
+               WHERE fi.location_id = ? AND fi.stale = 0
+                 AND fi.folder_id IN (SELECT id FROM descendants)""",
+            (folder_id, location_id),
+        )
+    else:
+        file_rows = await db.execute_fetchall(
+            "SELECT id, full_path, folder_id, rel_path FROM files "
+            "WHERE location_id = ? AND stale = 0",
+            (location_id,),
+        )
     if not file_rows:
         return {}
 
@@ -916,12 +938,28 @@ async def _build_dest_hash_index(db, location_id):
     return result
 
 
-async def _build_dest_rel_paths(db, location_id):
-    """Build a set of lowercase rel_paths at the destination for collision checks."""
-    rows = await db.execute_fetchall(
-        "SELECT rel_path FROM files WHERE location_id = ? AND stale = 0",
-        (location_id,),
-    )
+async def _build_dest_rel_paths(db, location_id, folder_id=None):
+    """Build a set of lowercase rel_paths at the destination for collision checks.
+
+    When folder_id is set, scopes to that folder and its descendants.
+    When None, scopes to the entire location.
+    """
+    if folder_id:
+        rows = await db.execute_fetchall(
+            """WITH RECURSIVE descendants(id) AS (
+                   SELECT ? UNION ALL
+                   SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id
+               )
+               SELECT fi.rel_path FROM files fi
+               WHERE fi.location_id = ? AND fi.stale = 0
+                 AND fi.folder_id IN (SELECT id FROM descendants)""",
+            (folder_id, location_id),
+        )
+    else:
+        rows = await db.execute_fetchall(
+            "SELECT rel_path FROM files WHERE location_id = ? AND stale = 0",
+            (location_id,),
+        )
     return {r["rel_path"].lower() for r in rows}
 
 
