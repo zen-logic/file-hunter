@@ -469,12 +469,12 @@ scanBtn.addEventListener('click', async () => {
 
 Consolidate.init(async (params) => {
     if (params.batch) {
-        const payload = { file_ids: params.file_ids, mode: params.mode };
+        const payload = { file_ids: params.file_ids, mode: params.mode, consolidateMode: params.consolidateMode };
         if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
         if (params.filename_match_only) payload.filename_match_only = true;
         await API.post('/api/batch/consolidate', payload);
     } else {
-        const payload = { file_id: params.file_id, mode: params.mode };
+        const payload = { file_id: params.file_id, mode: params.mode, consolidateMode: params.consolidateMode };
         if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
         if (params.filename_match_only) payload.filename_match_only = true;
         await API.post('/api/consolidate', payload);
@@ -486,17 +486,17 @@ consolidateBtn.addEventListener('click', async () => {
     if (selection.length > 1) {
         const files = selection.filter(i => i.type !== 'folder');
         if (files.length > 0) {
-            await Consolidate.open(files[0], [], {
-                files,
-                searchMode: FileList._searchMode,
-            });
+            await Consolidate.open({ files });
         }
-    } else if (selectedFile && selectedFileDups.length > 0) {
-        await Consolidate.open(selectedFile, selectedFileDups);
+    } else if (selectedFile) {
+        await Consolidate.open({ file: selectedFile, dups: selectedFileDups });
     }
 });
 
 SlideshowTriage.init();
+SlideshowTriage._consolidateOpen = (files, onDone) => {
+    Consolidate.open({ files, onDone });
+};
 Detail.slideshowTriage = SlideshowTriage;
 Triage.init(
     (del, con, tag, mov) => SlideshowTriage.show(del, con, tag, mov),

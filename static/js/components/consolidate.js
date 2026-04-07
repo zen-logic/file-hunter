@@ -2,127 +2,205 @@ import API from '../api.js';
 import icons from '../icons.js';
 
 const Consolidate = {
-    overlay: null,
-    filenameEl: null,
-    locationsEl: null,
-    modeGroup: null,
-    destSection: null,
-    treePicker: null,
-    destDisplay: null,
-    cancelBtn: null,
-    submitBtn: null,
-    onConsolidate: null,
+    // DOM — step 1
+    _overlay: null,
+    _step1: null,
+    _subtitle: null,
+    _fileList: null,
+    _dupsEl: null,
+    _modeGroup: null,
+    _filenameMatchCheck: null,
+
+    // DOM — step 2
+    _step2: null,
+    _treePicker: null,
+    _destDisplay: null,
+
+    // State
     _file: null,
     _files: null,
-    _dups: null,
-    _isMulti: false,
-    _isSearchMode: false,
-    _selectedMode: 'keep_here',
+    _allDups: [],
+    _dups: [],
+    _mode: 'copy',
     _selectedDest: null,
     _treeData: null,
     _favourites: [],
     _expandedNodes: new Set(),
+    _onConsolidate: null,
+    _onDone: null,
 
     init(onConsolidate) {
-        this.onConsolidate = onConsolidate;
-        this.overlay = document.getElementById('consolidate-modal');
-        this.filenameEl = document.getElementById('consolidate-filename');
-        this.locationsEl = document.getElementById('consolidate-locations');
-        this.modeGroup = document.getElementById('consolidate-mode-group');
-        this.destSection = document.getElementById('consolidate-dest-section');
-        this.treePicker = document.getElementById('consolidate-tree-picker');
-        this.destDisplay = document.getElementById('consolidate-dest-display');
-        this.cancelBtn = document.getElementById('consolidate-cancel');
-        this.submitBtn = document.getElementById('consolidate-submit');
-        this.filenameMatchCheck = document.getElementById('consolidate-filename-match');
+        this._onConsolidate = onConsolidate;
 
-        this.cancelBtn.addEventListener('click', () => this.close());
-        this.overlay.addEventListener('click', (e) => {
-            if (e.target === this.overlay) this.close();
+        this._overlay = document.getElementById('consolidate-modal');
+        this._step1 = document.getElementById('consolidate-step1');
+        this._step2 = document.getElementById('consolidate-step2');
+        this._subtitle = document.getElementById('consolidate-subtitle');
+        this._fileList = document.getElementById('consolidate-file-list');
+        this._dupsEl = document.getElementById('consolidate-dups');
+        this._modeGroup = document.getElementById('consolidate-mode-group');
+        this._filenameMatchCheck = document.getElementById('consolidate-filename-match');
+        this._treePicker = document.getElementById('consolidate-tree-picker');
+        this._destDisplay = document.getElementById('consolidate-dest-display');
+
+        const cancelBtn = document.getElementById('consolidate-cancel');
+        const nextBtn = document.getElementById('consolidate-next');
+        const cancelBtn2 = document.getElementById('consolidate-cancel2');
+        const submitBtn = document.getElementById('consolidate-submit');
+
+        cancelBtn.addEventListener('click', () => this.close());
+        nextBtn.addEventListener('click', () => this._showStep2());
+        cancelBtn2.addEventListener('click', () => this.close());
+        submitBtn.addEventListener('click', () => this._doSubmit());
+
+        this._overlay.addEventListener('click', (e) => {
+            if (e.target === this._overlay) this.close();
         });
+
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlay.classList.contains('hidden')) {
+            if (e.key === 'Escape' && !this._overlay.classList.contains('hidden')) {
                 this.close();
             }
         });
-        this.submitBtn.addEventListener('click', () => this._doSubmit());
-        this.filenameMatchCheck.addEventListener('change', () => this._updateLocations());
 
-        // Mode radio change
-        this.modeGroup.addEventListener('change', (e) => {
+        this._modeGroup.addEventListener('change', (e) => {
             if (e.target.name === 'consolidate-mode') {
-                this._selectedMode = e.target.value;
-                this._updateModeUI();
+                this._mode = e.target.value;
             }
         });
 
-        // Click on mode option labels for visual selection
-        this.modeGroup.querySelectorAll('.consolidate-mode-option').forEach(label => {
+        this._modeGroup.querySelectorAll('.consolidate-mode-option').forEach(label => {
             label.addEventListener('click', () => {
-                this.modeGroup.querySelectorAll('.consolidate-mode-option').forEach(l => l.classList.remove('selected'));
+                this._modeGroup.querySelectorAll('.consolidate-mode-option').forEach(l => l.classList.remove('selected'));
                 label.classList.add('selected');
             });
         });
+
+        this._filenameMatchCheck.addEventListener('change', () => this._renderDups());
     },
 
-    async open(file, dups, { files = null, searchMode = false } = {}) {
-        this._file = file;
-        this._files = files;
-        this._dups = dups;
-        this._isMulti = files && files.length > 1;
-        this._isSearchMode = searchMode;
+    /**
+     * Open the consolidate dialog.
+     *
+     * @param {Object} opts
+     * @param {Object} [opts.file]  Single file object (id, name, locationId)
+     * @param {Array}  [opts.files] Array of file objects for batch/triaged
+     * @param {Array}  [opts.dups]  Pre-loaded dup data (single file from detail panel)
+     * @param {Function} [opts.onDone] Called when dialog closes (submit or cancel)
+     */
+    async open({ file, files, dups, onDone } = {}) {
+        this._file = file || null;
+        this._files = files || null;
+        this._onDone = onDone || null;
         this._selectedDest = null;
         this._expandedNodes = new Set();
-        this.filenameMatchCheck.checked = false;
+        this._mode = 'copy';
+        this._filenameMatchCheck.checked = false;
 
-        // Locations list — only for single file
-        const locsField = this.locationsEl.closest('.modal-field');
-        this._totalDups = 0;
-        this._filenameMatchedDups = 0;
-        if (this._isMulti) {
-            this.locationsEl.innerHTML = '';
-            if (locsField) locsField.style.display = 'none';
-            // Fetch dup preview counts
+        // Reset mode selection
+        const radios = this._modeGroup.querySelectorAll('input[name="consolidate-mode"]');
+        radios.forEach(r => { r.checked = r.value === 'copy'; });
+        const options = this._modeGroup.querySelectorAll('.consolidate-mode-option');
+        options.forEach(o => o.classList.remove('selected'));
+        options[0].classList.add('selected');
+
+        // Subtitle and file list
+        if (this._files && this._files.length > 0) {
+            const n = this._files.length;
+            this._subtitle.textContent = `${n} file${n !== 1 ? 's' : ''}`;
+            this._renderFileList(this._files);
+            this._fileList.classList.remove('hidden');
+        } else if (this._file) {
+            this._subtitle.textContent = this._file.name;
+            this._fileList.innerHTML = '';
+            this._fileList.classList.add('hidden');
+        }
+
+        // Load duplicates
+        if (dups && dups.length > 0) {
+            this._allDups = dups;
+        } else if (this._files && this._files.length > 0) {
             const preview = await API.post('/api/consolidate/preview', {
-                file_ids: files.map(f => f.id),
+                file_ids: this._files.map(f => f.id),
             });
-            if (preview.ok) {
-                this._totalDups = preview.data.total_dups;
-                this._filenameMatchedDups = preview.data.filename_matched_dups;
-            }
-            this._updateMultiText();
+            this._allDups = (preview.ok && preview.data.duplicates) ? preview.data.duplicates : [];
+        } else if (this._file) {
+            // Single file with no pre-loaded dups — fetch via preview
+            const preview = await API.post('/api/consolidate/preview', {
+                file_ids: [this._file.id],
+            });
+            this._allDups = (preview.ok && preview.data.duplicates) ? preview.data.duplicates : [];
         } else {
-            this.filenameEl.textContent = file.name;
-            this.locationsEl.innerHTML = dups
-                .map(d => `<li>${d.location} &mdash; ${d.path}</li>`)
-                .join('');
-            if (locsField) locsField.style.display = '';
+            this._allDups = [];
         }
 
-        // Mode selector — hide entirely for search or multi with copy_to only
-        const modeField = this.modeGroup.closest('.modal-field');
-        const radios = this.modeGroup.querySelectorAll('input[name="consolidate-mode"]');
-        const options = this.modeGroup.querySelectorAll('.consolidate-mode-option');
+        this._renderDups();
 
-        if (this._isSearchMode) {
-            // Search: copy_to only, hide mode selector entirely
-            if (modeField) modeField.style.display = 'none';
-            this._selectedMode = 'copy_to';
-            radios.forEach(r => { r.checked = r.value === 'copy_to'; });
-        } else {
-            // Folder: both modes available
-            if (modeField) modeField.style.display = '';
-            options.forEach(o => o.style.display = '');
-            this._selectedMode = 'keep_here';
-            radios.forEach(r => { r.checked = r.value === 'keep_here'; });
+        // Show step 1
+        this._step1.classList.remove('hidden');
+        this._step2.classList.add('hidden');
+        this._overlay.classList.remove('hidden');
+    },
+
+    close() {
+        this._overlay.classList.add('hidden');
+        const cb = this._onDone;
+        this._onDone = null;
+        if (cb) cb();
+    },
+
+    // ── Step 1 rendering ──
+
+    _renderFileList(files) {
+        this._fileList.innerHTML = '';
+        const max = 5;
+        const shown = files.slice(0, max);
+        for (const f of shown) {
+            const div = document.createElement('div');
+            div.textContent = f.name;
+            this._fileList.appendChild(div);
         }
-        options.forEach(l => l.classList.remove('selected'));
-        options.forEach(o => {
-            const input = o.querySelector('input');
-            if (input && input.value === this._selectedMode) o.classList.add('selected');
-        });
+        if (files.length > max) {
+            const more = document.createElement('div');
+            more.textContent = `...and ${files.length - max} more`;
+            more.style.opacity = '0.5';
+            this._fileList.appendChild(more);
+        }
+    },
 
-        // Fetch tree data and favourites before rendering mode UI
+    _renderDups() {
+        const fnMatch = this._filenameMatchCheck.checked;
+        let dups = this._allDups;
+
+        if (fnMatch) {
+            const sourceNames = new Set();
+            if (this._file) sourceNames.add(this._file.name);
+            if (this._files) this._files.forEach(f => sourceNames.add(f.name));
+            dups = dups.filter(d => sourceNames.has(d.name));
+        }
+
+        this._dups = dups;
+        this._dupsEl.innerHTML = '';
+
+        if (dups.length === 0) {
+            const div = document.createElement('div');
+            div.textContent = 'No duplicates found';
+            div.style.color = 'var(--color-text-placeholder)';
+            this._dupsEl.appendChild(div);
+            return;
+        }
+
+        for (const d of dups) {
+            const div = document.createElement('div');
+            const agent = d.agent ? ` [${d.agent}]` : '';
+            div.textContent = `${d.location}${agent} ${d.path}`;
+            this._dupsEl.appendChild(div);
+        }
+    },
+
+    // ── Step 2 ──
+
+    async _showStep2() {
         const [res, favRes] = await Promise.all([
             API.get('/api/locations'),
             API.get('/api/favourites'),
@@ -130,49 +208,52 @@ const Consolidate = {
         this._treeData = res.ok ? res.data : [];
         this._favourites = favRes.ok ? favRes.data : [];
 
-        this._updateModeUI();
-        this.overlay.classList.remove('hidden');
-    },
+        this._selectedDest = null;
+        this._destDisplay.textContent = 'No folder selected';
+        this._renderTree();
 
-    close() {
-        this.overlay.classList.add('hidden');
-    },
-
-    _updateMultiText() {
-        if (!this._isMulti) return;
-        const n = this._files.length;
-        const dups = this.filenameMatchCheck.checked
-            ? this._filenameMatchedDups
-            : this._totalDups;
-        this.filenameEl.textContent = `${n} files selected (${dups.toLocaleString()} duplicate${dups !== 1 ? 's' : ''})`;
-    },
-
-    _updateLocations() {
-        if (this._isMulti) { this._updateMultiText(); return; }
-        const filtered = this.filenameMatchCheck.checked
-            ? this._dups.filter(d => d.name === this._file.name)
-            : this._dups;
-        this.locationsEl.innerHTML = filtered
-            .map(d => `<li>${d.location} &mdash; ${d.path}</li>`)
-            .join('');
-    },
-
-    _updateModeUI() {
-        if (this._selectedMode === 'copy_to') {
-            this.destSection.classList.remove('hidden');
-            this._renderTree();
-        } else {
-            this.destSection.classList.add('hidden');
-        }
-        this._updateDestDisplay();
+        this._step1.classList.add('hidden');
+        this._step2.classList.remove('hidden');
     },
 
     _renderTree() {
-        this.treePicker.innerHTML = '';
+        this._treePicker.innerHTML = '';
         if (!this._treeData) return;
-        this._renderFavourites(this.treePicker);
+
+        // "Consolidate in place" option — move mode only
+        if (this._mode === 'move') {
+            const keepDiv = document.createElement('div');
+            keepDiv.className = 'ct-node';
+            if (this._selectedDest === 'keep_here') keepDiv.classList.add('ct-selected');
+
+            const icon = document.createElement('span');
+            icon.className = 'ct-icon';
+            icon.innerHTML = icons.location;
+            keepDiv.appendChild(icon);
+
+            const label = document.createElement('span');
+            label.className = 'ct-label';
+            label.style.fontWeight = 'var(--font-weight-semibold)';
+            label.textContent = 'Consolidate in place';
+            keepDiv.appendChild(label);
+
+            keepDiv.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._selectedDest = 'keep_here';
+                this._destDisplay.textContent = 'Consolidate in place';
+                this._renderTree();
+            });
+
+            this._treePicker.appendChild(keepDiv);
+
+            const divider = document.createElement('div');
+            divider.className = 'ct-divider';
+            this._treePicker.appendChild(divider);
+        }
+
+        this._renderFavourites(this._treePicker);
         this._treeData.forEach(loc => {
-            this._renderTreeNode(this.treePicker, loc, 0);
+            this._renderTreeNode(this._treePicker, loc, 0);
         });
     },
 
@@ -202,7 +283,7 @@ const Consolidate = {
             div.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this._selectedDest = fav.id;
-                this._updateDestDisplay();
+                this._destDisplay.textContent = fav.path;
                 this._renderTree();
             });
 
@@ -253,7 +334,6 @@ const Consolidate = {
                     this._expandedNodes.delete(node.id);
                 } else {
                     this._expandedNodes.add(node.id);
-                    // Lazy-load children if not yet fetched
                     if (node.children === null) {
                         const numId = node.id.replace('fld-', '');
                         const res = await API.get(`/api/tree/children?ids=${numId}`);
@@ -266,7 +346,7 @@ const Consolidate = {
                 }
             }
             this._selectedDest = node.id;
-            this._updateDestDisplay();
+            this._destDisplay.textContent = node.label;
             this._renderTree();
         });
 
@@ -277,53 +357,36 @@ const Consolidate = {
         }
     },
 
-    _updateDestDisplay() {
-        if (this._selectedMode !== 'copy_to' || !this._selectedDest) {
-            this.destDisplay.textContent = 'No folder selected';
-            return;
-        }
-        const node = this._findNode(this._treeData, this._selectedDest);
-        if (node) {
-            this.destDisplay.textContent = node.label;
-        }
-    },
-
-    _findNode(nodes, id) {
-        for (const n of nodes) {
-            if (n.id === id) return n;
-            if (n.children) {
-                const found = this._findNode(n.children, id);
-                if (found) return found;
-            }
-        }
-        // Fall back to favourites (deep folders may not be loaded in tree)
-        if (nodes === this._treeData && this._favourites) {
-            const fav = this._favourites.find(f => f.id === id);
-            if (fav) return { id: fav.id, label: fav.path, type: fav.type };
-        }
-        return null;
-    },
+    // ── Submit ──
 
     _doSubmit() {
-        if (this._selectedMode === 'copy_to' && !this._selectedDest) return;
+        if (!this._selectedDest) return;
 
-        const fnMatch = this.filenameMatchCheck.checked;
-        if (this._isMulti) {
-            this.onConsolidate({
-                file_ids: this._files.map(f => f.id),
-                mode: this._selectedMode,
-                destination_folder_id: this._selectedMode === 'copy_to' ? this._selectedDest : undefined,
-                filename_match_only: fnMatch,
-                batch: true,
-            });
-        } else {
-            this.onConsolidate({
-                file_id: this._file.id,
-                mode: this._selectedMode,
-                destination_folder_id: this._selectedMode === 'copy_to' ? this._selectedDest : undefined,
-                filename_match_only: fnMatch,
-            });
+        const fnMatch = this._filenameMatchCheck.checked;
+        const isKeepHere = this._selectedDest === 'keep_here';
+
+        const params = {
+            consolidateMode: this._mode,
+        };
+
+        if (this._files && this._files.length > 0) {
+            params.file_ids = this._files.map(f => f.id);
+            params.batch = true;
+        } else if (this._file) {
+            params.file_id = this._file.id;
         }
+
+        // Map to existing backend modes for now
+        if (this._mode === 'move' && isKeepHere) {
+            params.mode = 'keep_here';
+        } else {
+            params.mode = 'move_to';
+            params.destination_folder_id = this._selectedDest;
+        }
+
+        if (fnMatch) params.filename_match_only = true;
+
+        if (this._onConsolidate) this._onConsolidate(params);
         this.close();
     },
 };

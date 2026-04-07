@@ -143,6 +143,386 @@ async def _stub_and_delete(copy, canonical_path, dest_loc_name, now_iso):
     )
 
 
+async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False):
+    """Find all duplicate copies and merge their metadata.
+
+    Shared by both copy and move operations. Loads the selected file,
+    finds all copies by effective hash, and merges tags, description,
+    and earliest modified date across all copies.
+
+    Returns:
+        dict with keys: selected, all_copies, effective_hash, hash_col,
+        merged_tags, merged_description, earliest_modified, now_iso.
+        Or None if the file is not found or has no hash (error broadcast).
+    """
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            """SELECT f.*, l.name as location_name, l.root_path
+               FROM files f
+               JOIN locations l ON l.id = f.location_id
+               WHERE f.id = ?""",
+            (file_id,),
+        )
+    if not rows:
+        await broadcast(
+            {
+                "type": "consolidate_error",
+                "fileId": file_id,
+                "filename": "",
+                "error": "File not found.",
+            }
+        )
+        return None
+
+    selected = dict(rows[0])
+    filename = selected["filename"]
+
+    effective_hash, hash_col = await get_effective_hash(file_id)
+
+    # Carry hash_partial for destination record
+    _h_map = await get_file_hashes([file_id])
+    selected["hash_partial"] = _h_map.get(file_id, {}).get("hash_partial")
+
+    if not effective_hash:
+        await broadcast(
+            {
+                "type": "consolidate_error",
+                "fileId": file_id,
+                "filename": filename,
+                "error": "File has no hash — scan it first.",
+            }
+        )
+        return None
+
+    # Find ALL copies by effective hash from hashes.db
+    async with read_hashes() as hdb:
+        dup_rows = await hdb.execute_fetchall(
+            f"SELECT file_id FROM active_hashes WHERE {hash_col} = ?",
+            (effective_hash,),
+        )
+    copy_ids = [r["file_id"] for r in dup_rows]
+
+    async with read_db() as db:
+        ph = ",".join("?" for _ in copy_ids)
+        all_copies = await db.execute_fetchall(
+            f"""SELECT f.id, f.filename, f.full_path, f.rel_path,
+                      f.location_id, f.folder_id, f.dup_exclude,
+                      f.file_type_high, f.file_type_low, f.file_size,
+                      f.description, f.tags,
+                      f.created_date, f.modified_date, f.date_cataloged,
+                      l.name as location_name, l.root_path
+               FROM files f
+               JOIN locations l ON l.id = f.location_id
+               WHERE f.id IN ({ph}) AND f.stale = 0""",
+            copy_ids,
+        )
+    all_copies = [dict(r) for r in all_copies]
+
+    if filename_match_only:
+        all_copies = [c for c in all_copies if c["filename"] == filename]
+
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # Merge tags, description, and earliest modified_date across all copies
+    all_tags: set[str] = set()
+    earliest_modified = None
+    merged_description = ""
+    for copy in all_copies:
+        raw = copy.get("tags") or ""
+        for t in raw.split(","):
+            t = t.strip()
+            if t:
+                all_tags.add(t)
+        md = copy.get("modified_date")
+        if md and (earliest_modified is None or md < earliest_modified):
+            earliest_modified = md
+        desc = (copy.get("description") or "").strip()
+        if desc and not merged_description:
+            merged_description = desc
+    merged_tags = ",".join(sorted(all_tags))
+
+    return {
+        "selected": selected,
+        "all_copies": all_copies,
+        "effective_hash": effective_hash,
+        "hash_col": hash_col,
+        "merged_tags": merged_tags,
+        "merged_description": merged_description,
+        "earliest_modified": earliest_modified,
+        "now_iso": now_iso,
+    }
+
+
+async def run_copy(
+    file_id: int,
+    dest_folder_id: str,
+    shared_csv_path: str | None = None,
+    shared_csv_loc_id: int | None = None,
+    skip_post_processing: bool = False,
+    filename_match_only: bool = False,
+):
+    """Copy a file to a destination with merged metadata from all duplicate copies.
+
+    Finds all duplicates by hash, merges tags/description/earliest mtime,
+    copies the file to the destination, and writes a CSV audit trail.
+    Original files are not modified — no stubbing, no deletion.
+
+    Args:
+        file_id: The DB id of the source file to copy.
+        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') for destination.
+        shared_csv_path: Shared result-log CSV from batch operation.
+        shared_csv_loc_id: Location id for shared CSV.
+        skip_post_processing: Skip stats refresh (batch does it once).
+        filename_match_only: Only merge metadata from copies with same filename.
+
+    Called by:
+        routes/consolidate.py (single), run_batch_copy (batch).
+    """
+    effective_hash = None
+    filename = None
+    dest_loc_id = None
+    act_name = f"copy_{file_id}"
+    activity_register(act_name, "Copying")
+    try:
+        prep = await _find_and_merge_copies(file_id, filename_match_only)
+        if not prep:
+            return
+
+        selected = prep["selected"]
+        all_copies = prep["all_copies"]
+        effective_hash = prep["effective_hash"]
+        filename = selected["filename"]
+        merged_tags = prep["merged_tags"]
+        merged_description = prep["merged_description"]
+        earliest_modified = prep["earliest_modified"]
+        now_iso = prep["now_iso"]
+
+        # Guard concurrent operations on same hash
+        if effective_hash in _active_consolidations:
+            await broadcast(
+                {
+                    "type": "consolidate_error",
+                    "fileId": file_id,
+                    "filename": filename,
+                    "error": "Operation already in progress for this file.",
+                }
+            )
+            return
+        _active_consolidations.add(effective_hash)
+
+        await broadcast(
+            {
+                "type": "consolidate_started",
+                "fileId": file_id,
+                "filename": filename,
+                "locationId": selected["location_id"],
+            }
+        )
+
+        # Resolve destination
+        async with read_db() as db:
+            dest_dir, dest_loc_id = await _resolve_folder_path_with_loc(
+                db, dest_folder_id
+            )
+        if dest_dir is None:
+            await broadcast(
+                {
+                    "type": "consolidate_error",
+                    "fileId": file_id,
+                    "filename": filename,
+                    "error": "Destination folder not found.",
+                }
+            )
+            return
+
+        # Name collision check
+        dest_file_path = os.path.join(dest_dir, filename)
+        canonical_path = dest_file_path
+        async with read_db() as db:
+            dest_rel_paths = {
+                r["rel_path"].lower()
+                for r in await db.execute_fetchall(
+                    "SELECT rel_path FROM files "
+                    "WHERE location_id = ? AND stale = 0",
+                    (dest_loc_id,),
+                )
+            }
+            target = (
+                await resolve_target(db, dest_folder_id) if dest_folder_id else None
+            )
+        if target:
+            check_rel = (
+                os.path.join(target.get("rel_path", ""), filename)
+                if target.get("rel_path")
+                else filename
+            )
+        else:
+            check_rel = filename
+
+        if check_rel.lower() in dest_rel_paths:
+            base, ext = os.path.splitext(filename)
+            counter = 1
+            while check_rel.lower() in dest_rel_paths:
+                new_name = f"{base}_{counter}{ext}"
+                check_rel = (
+                    os.path.join(target.get("rel_path", ""), new_name)
+                    if target and target.get("rel_path")
+                    else new_name
+                )
+                counter += 1
+            actual_filename = os.path.basename(check_rel)
+            canonical_path = os.path.join(dest_dir, actual_filename)
+            filename = actual_filename
+
+        # Find an online source copy
+        online_loc_ids = _get_online_location_ids()
+        source_path = None
+        source_loc_id = None
+        for copy in all_copies:
+            if copy["location_id"] in online_loc_ids:
+                source_path = copy["full_path"]
+                source_loc_id = copy["location_id"]
+                break
+
+        if source_path is None:
+            await broadcast(
+                {
+                    "type": "consolidate_error",
+                    "fileId": file_id,
+                    "filename": filename,
+                    "error": "No online copy available to copy from.",
+                }
+            )
+            return
+
+        # Copy with progress
+        async def _copy_progress(bytes_sent, total_bytes):
+            await broadcast(
+                {
+                    "type": "consolidate_progress",
+                    "fileId": file_id,
+                    "filename": filename,
+                    "phase": "copying",
+                    "bytesSent": bytes_sent,
+                    "bytesTotal": total_bytes,
+                }
+            )
+
+        try:
+            await fs.copy_file(
+                source_path,
+                source_loc_id,
+                canonical_path,
+                dest_loc_id,
+                on_progress=_copy_progress,
+                mtime=parse_mtime(
+                    earliest_modified or selected["modified_date"]
+                ),
+            )
+        except Exception as copy_exc:
+            try:
+                await fs.file_delete(canonical_path, dest_loc_id)
+            except Exception:
+                pass
+            raise RuntimeError(f"Copy failed: {copy_exc}") from copy_exc
+
+        # Hash-verify
+        await broadcast(
+            {
+                "type": "consolidate_progress",
+                "fileId": file_id,
+                "filename": filename,
+                "phase": "verifying",
+            }
+        )
+        (source_hash_fast,) = await fs.file_hash(source_path, source_loc_id)
+        (copy_hash_fast,) = await fs.file_hash(canonical_path, dest_loc_id)
+        if copy_hash_fast != source_hash_fast:
+            await fs.file_delete(canonical_path, dest_loc_id)
+            await broadcast(
+                {
+                    "type": "consolidate_error",
+                    "fileId": file_id,
+                    "filename": filename,
+                    "error": "Hash verification failed after copy.",
+                }
+            )
+            return
+
+        # Create DB record with merged metadata
+        selected["hash_fast"] = source_hash_fast
+        selected["tags"] = merged_tags
+        selected["description"] = merged_description
+        selected["modified_date"] = earliest_modified or selected["modified_date"]
+        selected["filename"] = filename
+
+        canonical_id = await _ensure_canonical_record(
+            canonical_path, dest_folder_id, dest_loc_id, selected, now_iso
+        )
+
+        # CSV audit trail
+        owns_csv = shared_csv_path is None
+        if owns_csv:
+            csv_path = await create_log(dest_dir, dest_loc_id, "consolidate")
+            csv_loc_id = dest_loc_id
+            kind, _ = parse_prefixed_id(dest_folder_id)
+            csv_folder_id = parse_folder_id(dest_folder_id) if kind == "fld" else None
+        else:
+            csv_path = shared_csv_path
+            csv_loc_id = shared_csv_loc_id
+            csv_folder_id = None
+
+        async with read_db() as db:
+            _ln = await db.execute_fetchall(
+                "SELECT name FROM locations WHERE id = ?", (dest_loc_id,)
+            )
+        dest_loc_name = _ln[0]["name"] if _ln else ""
+
+        await append_row(
+            csv_path, csv_loc_id,
+            selected["location_name"], selected["full_path"],
+            dest_loc_name, canonical_path, "copied",
+        )
+
+        if owns_csv:
+            await add_to_catalog(csv_path, csv_loc_id, csv_folder_id)
+
+        await broadcast(
+            {
+                "type": "consolidate_completed",
+                "fileId": canonical_id,
+                "filename": filename,
+                "canonicalPath": canonical_path,
+                "destLocationId": dest_loc_id,
+                "stubsWritten": 0,
+                "stubsQueued": 0,
+                "batch": not owns_csv,
+            }
+        )
+
+        if not skip_post_processing:
+            await post_op_stats(
+                location_ids={dest_loc_id},
+                source=f"copy {filename}",
+            )
+
+    except Exception as exc:
+        await broadcast(
+            {
+                "type": "consolidate_error",
+                "fileId": file_id,
+                "filename": filename or "",
+                "destLocationId": dest_loc_id,
+                "error": str(exc),
+            }
+        )
+
+    finally:
+        activity_unregister(act_name)
+        if effective_hash:
+            _active_consolidations.discard(effective_hash)
+
+
 async def run_consolidation(
     file_id: int,
     mode: str,
@@ -155,7 +535,7 @@ async def run_consolidation(
     """Consolidate duplicate files by electing a canonical copy and stubbing the rest.
 
     For 'keep_here' mode, the selected file stays in place as the canonical.
-    For 'copy_to' mode, the selected file is copied to a destination folder,
+    For 'move_to' mode, the selected file is copied to a destination folder,
     verified by hash, and a new DB record is created there. In both modes,
     every other copy of the same hash is stubbed on disk (.moved) and deleted.
     Offline copies are queued in consolidation_jobs for later processing.
@@ -167,8 +547,8 @@ async def run_consolidation(
 
     Args:
         file_id: The DB id of the file chosen as the canonical copy.
-        mode: 'keep_here' or 'copy_to'.
-        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') for copy_to.
+        mode: 'keep_here' or 'move_to'.
+        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') for move_to.
         shared_csv_path: Shared result-log CSV from batch consolidation.
         shared_csv_loc_id: Location id for shared CSV.
         skip_post_processing: Skip dup-count recalc (batch does it once).
@@ -186,45 +566,20 @@ async def run_consolidation(
     act_name = f"consolidate_{file_id}"
     activity_register(act_name, "Consolidating")
     try:
-        async with read_db() as db:
-            rows = await db.execute_fetchall(
-                """SELECT f.*, l.name as location_name, l.root_path
-                   FROM files f
-                   JOIN locations l ON l.id = f.location_id
-                   WHERE f.id = ?""",
-                (file_id,),
-            )
-        if not rows:
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": "",
-                    "error": "File not found.",
-                }
-            )
+        prep = await _find_and_merge_copies(file_id, filename_match_only)
+        if not prep:
             return
 
-        selected = dict(rows[0])
+        selected = prep["selected"]
+        all_copies = prep["all_copies"]
+        effective_hash = prep["effective_hash"]
+        hash_col = prep["hash_col"]
+        merged_tags = prep["merged_tags"]
+        merged_description = prep["merged_description"]
+        earliest_modified = prep["earliest_modified"]
+        now_iso = prep["now_iso"]
         filename = selected["filename"]
         selected_loc_id = selected["location_id"]
-
-        effective_hash, hash_col = await get_effective_hash(file_id)
-
-        # Carry hash_partial for destination record
-        _h_map = await get_file_hashes([file_id])
-        selected["hash_partial"] = _h_map.get(file_id, {}).get("hash_partial")
-
-        if not effective_hash:
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "error": "File has no hash — scan it first.",
-                }
-            )
-            return
 
         # Guard concurrent consolidation
         if effective_hash in _active_consolidations:
@@ -248,67 +603,24 @@ async def run_consolidation(
             }
         )
 
-        # Find ALL copies by effective hash from hashes.db
-        async with read_hashes() as hdb:
-            dup_rows = await hdb.execute_fetchall(
-                f"SELECT file_id FROM active_hashes WHERE {hash_col} = ?",
-                (effective_hash,),
-            )
-        copy_ids = [r["file_id"] for r in dup_rows]
-
-        async with read_db() as db:
-            ph = ",".join("?" for _ in copy_ids)
-            all_copies = await db.execute_fetchall(
-                f"""SELECT f.id, f.filename, f.full_path, f.rel_path,
-                          f.location_id, f.folder_id, f.dup_exclude,
-                          f.file_type_high, f.file_type_low, f.file_size,
-                          f.description, f.tags,
-                          f.created_date, f.modified_date, f.date_cataloged,
-                          l.name as location_name, l.root_path
-                   FROM files f
-                   JOIN locations l ON l.id = f.location_id
-                   WHERE f.id IN ({ph}) AND f.stale = 0""",
-                copy_ids,
-            )
-        all_copies = [dict(r) for r in all_copies]
-
-        # Filter to matching filenames only if requested
-        if filename_match_only:
-            all_copies = [c for c in all_copies if c["filename"] == filename]
-
-        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-        # Merge tags and find earliest modified_date across all copies
-        all_tags: set[str] = set()
-        earliest_modified = None
-        for copy in all_copies:
-            raw = copy.get("tags") or ""
-            for t in raw.split(","):
-                t = t.strip()
-                if t:
-                    all_tags.add(t)
-            md = copy.get("modified_date")
-            if md and (earliest_modified is None or md < earliest_modified):
-                earliest_modified = md
-        merged_tags = ",".join(sorted(all_tags))
-
         if mode == "keep_here":
             canonical_path = selected["full_path"]
             canonical_id = file_id
             dest_loc_id = selected_loc_id
 
-            # Apply merged tags and earliest modified_date to canonical
+            # Apply merged metadata to canonical
             async with db_writer() as wdb:
                 await wdb.execute(
-                    "UPDATE files SET tags = ?, modified_date = ? WHERE id = ?",
+                    "UPDATE files SET tags = ?, description = ?, modified_date = ? WHERE id = ?",
                     (
                         merged_tags,
+                        merged_description or selected.get("description") or "",
                         earliest_modified or selected["modified_date"],
                         canonical_id,
                     ),
                 )
 
-        elif mode == "copy_to":
+        elif mode == "move_to":
             # Resolve destination path and location_id
             async with read_db() as db:
                 dest_dir, dest_loc_id = await _resolve_folder_path_with_loc(
@@ -343,12 +655,13 @@ async def run_consolidation(
                 canonical_path = existing_at_dest["full_path"]
                 canonical_id = existing_at_dest["id"]
 
-                # Apply merged tags and earliest modified_date
+                # Apply merged metadata
                 async with db_writer() as wdb:
                     await wdb.execute(
-                        "UPDATE files SET tags = ?, modified_date = ? WHERE id = ?",
+                        "UPDATE files SET tags = ?, description = ?, modified_date = ? WHERE id = ?",
                         (
                             merged_tags,
+                            merged_description or existing_at_dest.get("description") or "",
                             earliest_modified or existing_at_dest["modified_date"],
                             canonical_id,
                         ),
@@ -365,9 +678,9 @@ async def run_consolidation(
                             (dest_loc_id,),
                         )
                     }
-                target = (
-                    await resolve_target(db, dest_folder_id) if dest_folder_id else None
-                )
+                    target = (
+                        await resolve_target(db, dest_folder_id) if dest_folder_id else None
+                    )
                 if target:
                     check_rel = (
                         os.path.join(target.get("rel_path", ""), filename)
@@ -516,7 +829,7 @@ async def run_consolidation(
             csv_folder_id = None
             if mode == "keep_here":
                 csv_folder_id = selected.get("folder_id")
-            elif mode == "copy_to":
+            elif mode == "move_to":
                 kind, _ = parse_prefixed_id(dest_folder_id)
                 if kind == "fld":
                     csv_folder_id = parse_folder_id(dest_folder_id)
@@ -718,17 +1031,18 @@ async def run_batch_consolidation(
     mode: str,
     dest_folder_id: str | None,
     filename_match_only: bool = False,
+    consolidate_mode: str = "move",
 ):
-    """Run consolidation for multiple files sequentially, sharing a single result log.
+    """Run copy or move consolidation for multiple files, sharing a single result log.
 
-    Creates a shared CSV result log, then calls run_consolidation for each file
-    with skip_post_processing=True. After all files are processed, performs a
-    single dup-count recalculation and stats refresh for the batch.
+    Creates a shared CSV result log, then calls run_copy or run_consolidation
+    for each file with skip_post_processing=True. After all files are processed,
+    performs a single dup-count recalculation and stats refresh for the batch.
 
     Args:
         file_ids: List of DB file ids to consolidate (each becomes a canonical).
-        mode: 'keep_here' or 'copy_to' (passed through to run_consolidation).
-        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') for copy_to mode.
+        mode: 'keep_here' or 'move_to' (passed through to run_consolidation).
+        dest_folder_id: Prefixed id ('loc-N' or 'fld-N') for move_to mode.
         filename_match_only: Only consolidate copies with the same filename.
 
     Called by:
@@ -785,17 +1099,29 @@ async def run_batch_consolidation(
     batch_act = f"batch_consolidate_{len(file_ids)}"
     activity_register(batch_act, f"Batch consolidate ({len(unique_ids)} files)")
 
+    is_copy = consolidate_mode == "copy"
+
     for file_id in unique_ids:
         try:
-            await run_consolidation(
-                file_id,
-                mode,
-                dest_folder_id,
-                shared_csv_path=csv_path,
-                shared_csv_loc_id=dest_loc_id,
-                skip_post_processing=True,
-                filename_match_only=filename_match_only,
-            )
+            if is_copy:
+                await run_copy(
+                    file_id,
+                    dest_folder_id,
+                    shared_csv_path=csv_path,
+                    shared_csv_loc_id=dest_loc_id,
+                    skip_post_processing=True,
+                    filename_match_only=filename_match_only,
+                )
+            else:
+                await run_consolidation(
+                    file_id,
+                    mode,
+                    dest_folder_id,
+                    shared_csv_path=csv_path,
+                    shared_csv_loc_id=dest_loc_id,
+                    skip_post_processing=True,
+                    filename_match_only=filename_match_only,
+                )
             completed += 1
         except Exception:
             errors += 1

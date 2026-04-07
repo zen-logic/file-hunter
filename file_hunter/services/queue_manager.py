@@ -576,6 +576,7 @@ async def _handle_batch_consolidate(op_id: int, agent_id: int | None, params: di
         params["mode"],
         params.get("dest_folder_id"),
         filename_match_only=params.get("filename_match_only", False),
+        consolidate_mode=params.get("consolidate_mode", "move"),
     )
 
 

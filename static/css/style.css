@@ -1555,6 +1555,26 @@ body::after {
     flex-shrink: 0;
 }
 
+#consolidate-modal .modal-dialog {
+    overflow: hidden;
+}
+
+#consolidate-step1,
+#consolidate-step2 {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    flex: 1;
+    min-height: 0;
+}
+
+/* Step 1: scrollable lists share remaining vertical space */
+#consolidate-step1 > .modal-list-scroll {
+    flex: 1 1 0;
+    min-height: 2.5rem;
+    max-height: none;
+}
+
 .modal-title {
     font-size: var(--font-size-lg);
     font-weight: var(--font-weight-semibold);

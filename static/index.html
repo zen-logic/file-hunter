@@ -232,38 +232,45 @@
         </div>
         <div id="consolidate-modal" class="modal-overlay hidden">
             <div class="modal-dialog modal-dialog-wide">
-                <h2 class="modal-title">Consolidate File</h2>
-                <p id="consolidate-filename" class="modal-text"></p>
-                <div class="modal-field">
-                    <label class="modal-label">Current locations</label>
-                    <ul id="consolidate-locations" class="modal-list"></ul>
-                </div>
-                <div class="modal-field">
-                    <label class="modal-label">Consolidation mode</label>
-                    <div class="consolidate-mode-group" id="consolidate-mode-group">
-                        <label class="consolidate-mode-option selected">
-                            <input type="radio" name="consolidate-mode" value="keep_here" checked>
-                            <span class="consolidate-mode-title">Keep here</span>
-                            <span class="consolidate-mode-desc">Selected file stays in place. All other copies are replaced with stubs.</span>
-                        </label>
-                        <label class="consolidate-mode-option">
-                            <input type="radio" name="consolidate-mode" value="copy_to">
-                            <span class="consolidate-mode-title">Copy to location</span>
-                            <span class="consolidate-mode-desc">File is copied to a chosen folder. All copies (including selected) are replaced with stubs.</span>
-                        </label>
+                <!-- Step 1: File info, duplicates, mode -->
+                <div id="consolidate-step1">
+                    <h2 class="modal-title">Consolidate</h2>
+                    <p id="consolidate-subtitle" class="modal-text"></p>
+                    <div id="consolidate-file-list" class="modal-list-scroll hidden"></div>
+                    <label class="modal-label">Duplicate locations</label>
+                    <div id="consolidate-dups" class="modal-list-scroll"></div>
+                    <div class="modal-field">
+                        <label class="modal-label">Mode</label>
+                        <div class="consolidate-mode-group" id="consolidate-mode-group">
+                            <label class="consolidate-mode-option selected">
+                                <input type="radio" name="consolidate-mode" value="copy" checked>
+                                <span class="consolidate-mode-title">Copy</span>
+                                <span class="consolidate-mode-desc">Copy files to destination. Originals are not modified.</span>
+                            </label>
+                            <label class="consolidate-mode-option">
+                                <input type="radio" name="consolidate-mode" value="move">
+                                <span class="consolidate-mode-title">Move</span>
+                                <span class="consolidate-mode-desc">Files are moved to destination. Source files are removed and replaced with stubs.</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-field">
+                        <label class="modal-check"><input type="checkbox" id="consolidate-filename-match"> Matching filename only</label>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn" id="consolidate-cancel">Cancel</button>
+                        <button class="btn btn-primary" id="consolidate-next">Next</button>
                     </div>
                 </div>
-                <div class="modal-field hidden" id="consolidate-dest-section">
-                    <label class="modal-label">Destination</label>
-                    <div class="consolidate-tree-picker" id="consolidate-tree-picker"></div>
-                    <div class="consolidate-dest-display" id="consolidate-dest-display">No folder selected</div>
-                </div>
-                <div class="modal-field">
-                    <label class="modal-check"><input type="checkbox" id="consolidate-filename-match"> Matching filename only</label>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn" id="consolidate-cancel">Cancel</button>
-                    <button class="btn btn-primary" id="consolidate-submit">Consolidate</button>
+                <!-- Step 2: Destination -->
+                <div id="consolidate-step2" class="hidden">
+                    <h2 class="modal-title">Destination</h2>
+                    <div id="consolidate-tree-picker" class="consolidate-tree-picker"></div>
+                    <div id="consolidate-dest-display" class="consolidate-dest-display">No folder selected</div>
+                    <div class="modal-actions">
+                        <button class="btn" id="consolidate-cancel2">Cancel</button>
+                        <button class="btn btn-primary" id="consolidate-submit">Consolidate</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -381,27 +388,7 @@
                 </div>
             </div>
         </div>
-        <div id="slideshow-consolidate-modal" class="modal-overlay hidden">
-            <div class="modal-dialog modal-dialog-wide">
-                <h2 class="modal-title">Consolidate Marked Files</h2>
-                <p id="slideshow-consolidate-text" class="modal-text"></p>
-                <div id="slideshow-consolidate-list" class="modal-list-scroll"></div>
-                <div class="modal-field">
-                    <label class="modal-label">Destination</label>
-                    <div id="slideshow-consolidate-tree" class="consolidate-tree-picker"></div>
-                    <div id="slideshow-consolidate-dest" class="consolidate-dest-display">
-                        No folder selected
-                    </div>
-                </div>
-                <div class="modal-field">
-                    <label class="modal-check"><input type="checkbox" id="slideshow-consolidate-filename-match"> Matching filename only</label>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn" id="slideshow-consolidate-cancel">Cancel</button>
-                    <button class="btn btn-primary" id="slideshow-consolidate-submit">Consolidate</button>
-                </div>
-            </div>
-        </div>
+        <!-- Consolidate uses unified #consolidate-modal -->
         <div id="slideshow-tag-modal" class="modal-overlay hidden">
             <div class="modal-dialog">
                 <h2 class="modal-title">Tag Marked Files</h2>

@@ -342,9 +342,11 @@ async def get_file_detail(db, file_id: int):
             dup_ids = [r["file_id"] for r in dup_file_rows]
             ph = ",".join("?" for _ in dup_ids)
             dup_rows = await db.execute_fetchall(
-                f"SELECT f2.id, f2.filename, f2.rel_path, l.name as location_name "
+                f"SELECT f2.id, f2.filename, f2.rel_path, f2.location_id, "
+                f"l.name as location_name, a.name as agent_name "
                 f"FROM files f2 "
                 f"JOIN locations l ON l.id = f2.location_id "
+                f"LEFT JOIN agents a ON a.id = l.agent_id "
                 f"WHERE f2.id IN ({ph})",
                 dup_ids,
             )
@@ -354,6 +356,8 @@ async def get_file_detail(db, file_id: int):
                         "fileId": d["id"],
                         "name": d["filename"],
                         "location": d["location_name"],
+                        "agent": d["agent_name"] or "",
+                        "locationId": d["location_id"],
                         "path": f"/{d['rel_path']}",
                     }
                 )

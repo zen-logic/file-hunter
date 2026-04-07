@@ -11,14 +11,8 @@ const SlideshowTriage = {
     _delCancel: null,
     _delSubmit: null,
 
-    // Consolidate dialog elements
-    _conOverlay: null,
-    _conText: null,
-    _conList: null,
-    _conTree: null,
-    _conDest: null,
-    _conCancel: null,
-    _conSubmit: null,
+    // Consolidate — delegated to unified Consolidate component
+    _consolidateOpen: null,
 
     // Tag dialog elements
     _tagOverlay: null,
@@ -62,22 +56,6 @@ const SlideshowTriage = {
         });
         this._delSubmit.addEventListener('click', () => this._doDelete());
 
-        // Consolidate dialog
-        this._conOverlay = document.getElementById('slideshow-consolidate-modal');
-        this._conText = document.getElementById('slideshow-consolidate-text');
-        this._conList = document.getElementById('slideshow-consolidate-list');
-        this._conTree = document.getElementById('slideshow-consolidate-tree');
-        this._conDest = document.getElementById('slideshow-consolidate-dest');
-        this._conCancel = document.getElementById('slideshow-consolidate-cancel');
-        this._conSubmit = document.getElementById('slideshow-consolidate-submit');
-
-        this._conFilenameMatch = document.getElementById('slideshow-consolidate-filename-match');
-        this._conCancel.addEventListener('click', () => this._closeConsolidate());
-        this._conOverlay.addEventListener('click', (e) => {
-            if (e.target === this._conOverlay) this._closeConsolidate();
-        });
-        this._conSubmit.addEventListener('click', () => this._doConsolidate());
-
         // Tag dialog
         this._tagOverlay = document.getElementById('slideshow-tag-modal');
         this._tagText = document.getElementById('slideshow-tag-text');
@@ -107,13 +85,11 @@ const SlideshowTriage = {
         });
         this._movSubmit.addEventListener('click', () => this._doMove());
 
-        // Escape key for all dialogs
+        // Escape key for all dialogs (consolidate handled by unified component)
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
             if (!this._delOverlay.classList.contains('hidden')) {
                 this._closeDelete();
-            } else if (!this._conOverlay.classList.contains('hidden')) {
-                this._closeConsolidate();
             } else if (!this._tagOverlay.classList.contains('hidden')) {
                 this._closeTag();
             } else if (!this._movOverlay.classList.contains('hidden')) {
@@ -137,7 +113,11 @@ const SlideshowTriage = {
         } else if (this._moveItems.length > 0) {
             this._showMoveDialog();
         } else if (this._consolidateItems.length > 0) {
-            this._showConsolidateDialog();
+            const items = this._consolidateItems;
+            this._consolidateItems = [];
+            if (this._consolidateOpen) {
+                this._consolidateOpen(items, () => this._showNext());
+            }
         } else if (this._tagItems.length > 0) {
             this._showTagDialog();
         } else {
@@ -193,60 +173,6 @@ const SlideshowTriage = {
 
         this._delOverlay.classList.add('hidden');
         this._deleteItems = [];
-        this._showNext();
-    },
-
-    // ── Consolidate dialog ──
-
-    async _showConsolidateDialog() {
-        const n = this._consolidateItems.length;
-        this._conText.textContent = `Consolidate ${n} file${n !== 1 ? 's' : ''} to a single location.`;
-        this._renderCappedList(this._conList, this._consolidateItems);
-
-        this._selectedDest = null;
-        this._expandedNodes = new Set();
-        this._activeDest = this._conDest;
-        this._activeTree = this._conTree;
-        this._conDest.textContent = 'No folder selected';
-        this._conFilenameMatch.checked = false;
-        this._conSubmit.textContent = 'Consolidate';
-        this._conSubmit.disabled = false;
-
-        const [res, favRes] = await Promise.all([
-            API.get('/api/locations'),
-            API.get('/api/favourites'),
-        ]);
-        this._treeData = res.ok ? res.data : [];
-        this._favourites = favRes.ok ? favRes.data : [];
-        this._renderTree();
-
-        this._conOverlay.classList.remove('hidden');
-    },
-
-    _closeConsolidate() {
-        this._conOverlay.classList.add('hidden');
-        this._consolidateItems = [];
-        this._showNext();
-    },
-
-    _doConsolidate() {
-        if (!this._selectedDest) return;
-        const fileIds = this._consolidateItems.map(item => item.id);
-        const n = fileIds.length;
-
-        const payload = {
-            file_ids: fileIds,
-            mode: 'copy_to',
-            destination_folder_id: this._selectedDest,
-        };
-        if (this._conFilenameMatch.checked) payload.filename_match_only = true;
-
-        // Fire-and-forget — WS consolidate_completed/batch_consolidate_completed handle UI
-        API.post('/api/batch/consolidate', payload);
-        Toast.info(`Consolidating ${n} file${n !== 1 ? 's' : ''}...`);
-
-        this._conOverlay.classList.add('hidden');
-        this._consolidateItems = [];
         this._showNext();
     },
 
@@ -339,10 +265,10 @@ const SlideshowTriage = {
         this._showNext();
     },
 
-    // ── Tree picker (shared by consolidate and move) ──
+    // ── Tree picker (used by move) ──
 
     _renderTree() {
-        const treeEl = this._activeTree || this._conTree;
+        const treeEl = this._activeTree;
         treeEl.innerHTML = '';
         if (!this._treeData) return;
         this._renderFavourites(treeEl);
@@ -353,7 +279,7 @@ const SlideshowTriage = {
 
     _renderFavourites(container) {
         if (!this._favourites || this._favourites.length === 0) return;
-        const destEl = this._activeDest || this._conDest;
+        const destEl = this._activeDest;
 
         const header = document.createElement('div');
         header.className = 'ct-section-header';
@@ -391,7 +317,7 @@ const SlideshowTriage = {
     },
 
     _renderTreeNode(container, node, depth) {
-        const destEl = this._activeDest || this._conDest;
+        const destEl = this._activeDest;
         const div = document.createElement('div');
         div.className = 'ct-node';
         if (node.online === false) div.classList.add('ct-offline');
