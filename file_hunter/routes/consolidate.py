@@ -175,7 +175,7 @@ async def consolidate_preview(request: Request):
                 f"SELECT file_id FROM active_hashes WHERE {hash_col} = ?",
                 (eff_hash,),
             )
-            dup_ids = [r["file_id"] for r in dup_rows if r["file_id"] != fid]
+            dup_ids = [r["file_id"] for r in dup_rows]
             total_dups += len(dup_ids)
             all_dup_ids.update(dup_ids)
 
