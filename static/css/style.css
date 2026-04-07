@@ -724,6 +724,7 @@ body::after {
     border-bottom: 1px solid var(--color-border);
     cursor: pointer;
     user-select: none;
+    white-space: nowrap;
 }
 
 .file-table th:hover {
