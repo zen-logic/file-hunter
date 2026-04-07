@@ -286,11 +286,13 @@ async def agent_upload_file(
     file_size: int,
     location_id: int,
     on_progress=None,
+    mtime: float | None = None,
 ):
     """Upload a file to an agent via multipart POST to /upload endpoint.
 
     Streams from file_obj (file-like) — no full-file read into RAM.
     Progress is reported via on_progress(bytes_sent, total_bytes).
+    mtime: if provided, agent restores this as the file's modified time.
     """
     proxy = get_agent_proxy()
     if not proxy:
@@ -304,6 +306,7 @@ async def agent_upload_file(
         file_obj=file_obj,
         file_size=file_size,
         on_progress=on_progress,
+        mtime=mtime,
     )
     return result
 

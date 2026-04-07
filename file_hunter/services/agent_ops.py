@@ -154,7 +154,8 @@ async def _get(host, port, token, path, timeout=60.0, agent_id=None):
 
 
 async def _upload_multipart(
-    host, port, token, dest_dir, filename, file_obj, file_size, on_progress
+    host, port, token, dest_dir, filename, file_obj, file_size, on_progress,
+    mtime=None,
 ):
     """Upload a file to agent via multipart POST — raw binary, no base64."""
     url = f"http://{host}:{port}/upload"
@@ -181,12 +182,15 @@ async def _upload_multipart(
     reader = _TrackedReader(file_obj, total)
 
     async def _do_upload():
+        form_data = {"dest_dir": dest_dir}
+        if mtime is not None:
+            form_data["mtime"] = str(mtime)
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(600.0, connect=10.0)
         ) as client:
             resp = await client.post(
                 url,
-                data={"dest_dir": dest_dir},
+                data=form_data,
                 files={"file": (filename, reader)},
                 headers={"Authorization": f"Bearer {token}"},
             )
@@ -315,6 +319,7 @@ async def dispatch(operation: str, location_id: int, **kwargs):
             kwargs["file_obj"],
             kwargs["file_size"],
             kwargs.get("on_progress"),
+            mtime=kwargs.get("mtime"),
         )
 
     else:

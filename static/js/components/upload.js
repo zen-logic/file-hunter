@@ -93,11 +93,14 @@ const Upload = {
 
         const formData = new FormData();
         formData.append('target_id', target.id);
+        const mtimes = [];
         let totalSize = 0;
         for (const file of fileList) {
             formData.append('files', file);
+            mtimes.push(file.lastModified);
             totalSize += file.size;
         }
+        formData.append('mtimes', JSON.stringify(mtimes));
 
         const fileCount = fileList.length;
         const sizeMB = (totalSize / 1048576).toFixed(1);

@@ -1,6 +1,7 @@
 """Upload route — POST /api/upload, multipart/form-data."""
 
 import asyncio
+import json
 import os
 
 from file_hunter.core import json_ok, json_error
@@ -45,6 +46,10 @@ async def upload_files(request):
     if not files:
         return json_error("No files provided.", 400)
 
+    # Per-file modified timestamps from the browser (ms since epoch)
+    raw_mtimes = form.get("mtimes")
+    mtimes = json.loads(raw_mtimes) if raw_mtimes else []
+
     total_files = sum(1 for f in files if hasattr(f, "filename") and f.filename)
 
     saved_files = []
@@ -52,6 +57,9 @@ async def upload_files(request):
     for upload_file in files:
         if not hasattr(upload_file, "filename") or not upload_file.filename:
             continue
+
+        # mtime in seconds (browser sends ms)
+        mtime = mtimes[file_num] / 1000.0 if file_num < len(mtimes) else None
 
         file_num += 1
         dest_path = os.path.join(dest_dir, upload_file.filename)
@@ -91,6 +99,7 @@ async def upload_files(request):
             file_size,
             location_id,
             on_progress=_progress,
+            mtime=mtime,
         )
 
         rel_path = (
@@ -103,6 +112,7 @@ async def upload_files(request):
                 "filename": upload_file.filename,
                 "full_path": dest_path,
                 "rel_path": rel_path,
+                "mtime": mtime,
             }
         )
 
