@@ -379,52 +379,51 @@ async def batch_move(
 
 
 async def batch_tag(
-    db, file_ids: list[int], add_tags: list[str], remove_tags: list[str]
-) -> dict:
-    """Add and/or remove tags on multiple files.
+    file_ids: list[int], add_tags: list[str], remove_tags: list[str]
+):
+    """Add and/or remove tags on multiple files as a background task.
 
     Iterates each file, reads its current tags, applies additions (deduped)
-    and removals, then writes back via update_file().
+    and removals, then writes back via update_file(). Broadcasts completion
+    via WebSocket.
 
-    Parameters:
-        db: Writable database connection (called inside execute_write).
-        file_ids: List of numeric file IDs to update.
-        add_tags: List of tag strings to add (skipped if already present).
-        remove_tags: List of tag strings to remove.
-
-    Returns:
-        dict with key: updated (int — number of files successfully updated).
-
-    Side effects:
-        DB write + commit — per-file UPDATE via update_file(). Files that do
-        not exist in the catalog are silently skipped.
-
-    Called by:
-        Route handler batch_tag_route (POST /api/batch/tag) via execute_write.
+    Runs as a background task — registers activity and broadcasts completion.
     """
+    act_name = f"batch-tag-{id(file_ids)}"
+    tag_label = ", ".join(add_tags) if add_tags else ", ".join(remove_tags)
+    register(act_name, "Writing tags...", tag_label)
     updated = 0
 
-    for fid in file_ids:
-        row = await db.execute_fetchall("SELECT tags FROM files WHERE id = ?", (fid,))
-        if not row:
-            continue
+    try:
+        for fid in file_ids:
+            async with db_writer() as db:
+                row = await db.execute_fetchall(
+                    "SELECT tags FROM files WHERE id = ?", (fid,)
+                )
+                if not row:
+                    continue
 
-        current_raw = row[0]["tags"] or ""
-        current = [t.strip() for t in current_raw.split(",") if t.strip()]
+                current_raw = row[0]["tags"] or ""
+                current = [t.strip() for t in current_raw.split(",") if t.strip()]
 
-        # Add new tags (avoid duplicates)
-        for tag in add_tags:
-            if tag not in current:
-                current.append(tag)
+                for tag in add_tags:
+                    if tag not in current:
+                        current.append(tag)
 
-        # Remove tags
-        for tag in remove_tags:
-            current = [t for t in current if t != tag]
+                for tag in remove_tags:
+                    current = [t for t in current if t != tag]
 
-        await update_file(db, fid, tags=current)
-        updated += 1
+                await update_file(db, fid, tags=current)
+                updated += 1
+    finally:
+        unregister(act_name)
 
-    return {"updated": updated}
+    await broadcast({
+        "type": "batch_tag_completed",
+        "updated": updated,
+        "add_tags": add_tags,
+        "remove_tags": remove_tags,
+    })
 
 
 async def batch_collect_files(

@@ -585,6 +585,16 @@ async def _handle_batch_rehash(op_id: int, agent_id: int | None, params: dict):
     await _run_batch_rehash(params["file_ids"])
 
 
+async def _handle_batch_tag(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.batch import batch_tag
+
+    await batch_tag(
+        params.get("file_ids", []),
+        params.get("add_tags", []),
+        params.get("remove_tags", []),
+    )
+
+
 _HANDLERS = {
     "scan_dir": _handle_scan_dir,
     "backfill_location": _handle_backfill_location,
@@ -594,6 +604,7 @@ _HANDLERS = {
     "merge": _handle_merge,
     "batch_consolidate": _handle_batch_consolidate,
     "batch_rehash": _handle_batch_rehash,
+    "batch_tag": _handle_batch_tag,
 }
 
 

@@ -357,18 +357,15 @@ function wireBatchActions(items) {
         const addTag = async () => {
             const tags = tagInput.value.split(',').map(t => t.trim()).filter(Boolean);
             if (tags.length === 0 || fileIds.length === 0) return;
-            const res = await API.post('/api/batch/tag', {
+            const n = fileIds.length;
+            const label = tags.length === 1 ? `"${tags[0]}"` : `${tags.length} tags`;
+            API.post('/api/batch/tag', {
                 file_ids: fileIds,
                 add_tags: tags,
                 remove_tags: [],
             });
-            if (res.ok) {
-                const label = tags.length === 1 ? `Tag "${tags[0]}"` : `${tags.length} tags`;
-                Toast.success(`${label} added to ${res.data.updated} file${res.data.updated !== 1 ? 's' : ''}`);
-                tagInput.value = '';
-            } else {
-                Toast.error(res.error || 'Failed to add tag.');
-            }
+            Toast.info(`Writing ${label} to ${n} file${n !== 1 ? 's' : ''}...`);
+            tagInput.value = '';
         };
         tagAddBtn.addEventListener('click', addTag);
         tagInput.addEventListener('keydown', (e) => {
@@ -1704,6 +1701,16 @@ WS.on('batch_move_progress', (msg) => {
         ? `${msg.name} (${msg.done}/${msg.total})`
         : `${msg.done}/${msg.total}`;
     Activity.progress('batch-move', { label: 'Moving', detail });
+});
+
+WS.on('batch_tag_completed', async (msg) => {
+    const n = msg.updated || 0;
+    const tags = (msg.add_tags || []).concat(msg.remove_tags || []);
+    const label = tags.length === 1 ? `"${tags[0]}"` : `${tags.length} tags`;
+    const verb = (msg.add_tags || []).length ? 'Tagged' : 'Untagged';
+    ActivityLog.add(`${verb} <b>${n} file${n !== 1 ? 's' : ''}</b> with ${label}`);
+    Toast.success(`${verb} ${n} file${n !== 1 ? 's' : ''}`);
+    await refreshDetailPanel();
 });
 
 WS.on('status_bar_idle', () => {

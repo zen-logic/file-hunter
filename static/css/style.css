@@ -1543,10 +1543,16 @@ body::after {
     padding: 1.25rem;
     width: 400px;
     max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
     box-shadow: var(--glow-modal);
+}
+
+.modal-dialog > * {
+    flex-shrink: 0;
 }
 
 .modal-title {

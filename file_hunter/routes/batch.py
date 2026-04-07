@@ -5,7 +5,6 @@ from file_hunter.db import read_db, execute_write
 from file_hunter.core import json_ok, json_error
 from file_hunter.services.batch import (
     batch_move,
-    batch_tag,
     batch_collect_files,
 )
 from file_hunter.services.queue_manager import enqueue
@@ -72,9 +71,12 @@ async def batch_tag_route(request: Request):
     if not add_tags and not remove_tags:
         return json_error("No tags to add or remove.")
 
-    result = await execute_write(batch_tag, file_ids, add_tags, remove_tags)
-
-    return json_ok(result)
+    op_id = await enqueue("batch_tag", None, {
+        "file_ids": file_ids,
+        "add_tags": add_tags,
+        "remove_tags": remove_tags,
+    })
+    return json_ok({"started": True, "op_id": op_id, "total": len(file_ids)})
 
 
 async def batch_download_route(request: Request):
