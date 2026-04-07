@@ -531,6 +531,7 @@ async def run_consolidation(
     shared_csv_loc_id: int | None = None,
     skip_post_processing: bool = False,
     filename_match_only: bool = False,
+    stub_file_ids: list[int] | None = None,
 ):
     """Consolidate duplicate files by electing a canonical copy and stubbing the rest.
 
@@ -860,8 +861,13 @@ async def run_consolidation(
         )
 
         # Process each duplicate (skip canonical and dup-excluded files)
+        # If stub_file_ids provided, only stub those specific files
+        stub_set = set(stub_file_ids) if stub_file_ids else None
         duplicates = [
-            c for c in all_copies if c["id"] != canonical_id and not c["dup_exclude"]
+            c for c in all_copies
+            if c["id"] != canonical_id
+            and not c["dup_exclude"]
+            and (stub_set is None or c["id"] in stub_set)
         ]
         total_dups = len(duplicates)
 
@@ -1032,6 +1038,7 @@ async def run_batch_consolidation(
     dest_folder_id: str | None,
     filename_match_only: bool = False,
     consolidate_mode: str = "move",
+    stub_file_ids: list[int] | None = None,
 ):
     """Run copy or move consolidation for multiple files, sharing a single result log.
 
@@ -1121,6 +1128,7 @@ async def run_batch_consolidation(
                     shared_csv_loc_id=dest_loc_id,
                     skip_post_processing=True,
                     filename_match_only=filename_match_only,
+                    stub_file_ids=stub_file_ids,
                 )
             completed += 1
         except Exception:

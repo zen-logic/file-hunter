@@ -472,11 +472,13 @@ Consolidate.init(async (params) => {
         const payload = { file_ids: params.file_ids, mode: params.mode, consolidateMode: params.consolidateMode };
         if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
         if (params.filename_match_only) payload.filename_match_only = true;
+        if (params.stub_file_ids) payload.stub_file_ids = params.stub_file_ids;
         await API.post('/api/batch/consolidate', payload);
     } else {
         const payload = { file_id: params.file_id, mode: params.mode, consolidateMode: params.consolidateMode };
         if (params.destination_folder_id) payload.destination_folder_id = params.destination_folder_id;
         if (params.filename_match_only) payload.filename_match_only = true;
+        if (params.stub_file_ids) payload.stub_file_ids = params.stub_file_ids;
         await API.post('/api/consolidate', payload);
     }
 });
@@ -489,7 +491,7 @@ consolidateBtn.addEventListener('click', async () => {
             await Consolidate.open({ files });
         }
     } else if (selectedFile) {
-        await Consolidate.open({ file: selectedFile, dups: selectedFileDups });
+        await Consolidate.open({ file: selectedFile });
     }
 });
 

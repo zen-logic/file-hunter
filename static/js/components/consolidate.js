@@ -2,17 +2,21 @@ import API from '../api.js';
 import icons from '../icons.js';
 
 const Consolidate = {
-    // DOM — step 1
+    // DOM — info step
     _overlay: null,
-    _step1: null,
+    _stepInfo: null,
     _subtitle: null,
     _fileList: null,
-    _dupsEl: null,
     _modeGroup: null,
     _filenameMatchCheck: null,
 
-    // DOM — step 2
-    _step2: null,
+    // DOM — merge step
+    _stepMerge: null,
+    _mergeList: null,
+    _mergeNextBtn: null,
+
+    // DOM — destination step
+    _stepDest: null,
     _treePicker: null,
     _destDisplay: null,
 
@@ -22,6 +26,7 @@ const Consolidate = {
     _allDups: [],
     _dups: [],
     _mode: 'copy',
+    _checkedDupIds: new Set(),
     _selectedDest: null,
     _treeData: null,
     _favourites: [],
@@ -33,50 +38,52 @@ const Consolidate = {
         this._onConsolidate = onConsolidate;
 
         this._overlay = document.getElementById('consolidate-modal');
-        this._step1 = document.getElementById('consolidate-step1');
-        this._step2 = document.getElementById('consolidate-step2');
+        this._stepInfo = document.getElementById('consolidate-step-info');
+        this._stepMerge = document.getElementById('consolidate-step-merge');
+        this._stepDest = document.getElementById('consolidate-step-dest');
         this._subtitle = document.getElementById('consolidate-subtitle');
         this._fileList = document.getElementById('consolidate-file-list');
-        this._dupsEl = document.getElementById('consolidate-dups');
         this._modeGroup = document.getElementById('consolidate-mode-group');
         this._filenameMatchCheck = document.getElementById('consolidate-filename-match');
+        this._mergeList = document.getElementById('consolidate-merge-list');
+        this._mergeNextBtn = document.getElementById('consolidate-merge-next');
         this._treePicker = document.getElementById('consolidate-tree-picker');
         this._destDisplay = document.getElementById('consolidate-dest-display');
 
-        const cancelBtn = document.getElementById('consolidate-cancel');
-        const nextBtn = document.getElementById('consolidate-next');
-        const cancelBtn2 = document.getElementById('consolidate-cancel2');
-        const submitBtn = document.getElementById('consolidate-submit');
+        // Info step
+        document.getElementById('consolidate-cancel').addEventListener('click', () => this.close());
+        document.getElementById('consolidate-next').addEventListener('click', () => this._afterInfoStep());
 
-        cancelBtn.addEventListener('click', () => this.close());
-        nextBtn.addEventListener('click', () => this._showStep2());
-        cancelBtn2.addEventListener('click', () => this.close());
-        submitBtn.addEventListener('click', () => this._doSubmit());
+        // Merge step
+        document.getElementById('consolidate-merge-cancel').addEventListener('click', () => this.close());
+        this._mergeNextBtn.addEventListener('click', () => this._showDestStep());
 
+        // Destination step
+        document.getElementById('consolidate-dest-cancel').addEventListener('click', () => this.close());
+        document.getElementById('consolidate-submit').addEventListener('click', () => this._doSubmit());
+
+        // Overlay + escape
         this._overlay.addEventListener('click', (e) => {
             if (e.target === this._overlay) this.close();
         });
-
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && !this._overlay.classList.contains('hidden')) {
                 this.close();
             }
         });
 
+        // Mode radio
         this._modeGroup.addEventListener('change', (e) => {
             if (e.target.name === 'consolidate-mode') {
                 this._mode = e.target.value;
             }
         });
-
         this._modeGroup.querySelectorAll('.consolidate-mode-option').forEach(label => {
             label.addEventListener('click', () => {
                 this._modeGroup.querySelectorAll('.consolidate-mode-option').forEach(l => l.classList.remove('selected'));
                 label.classList.add('selected');
             });
         });
-
-        this._filenameMatchCheck.addEventListener('change', () => this._renderDups());
     },
 
     /**
@@ -85,15 +92,15 @@ const Consolidate = {
      * @param {Object} opts
      * @param {Object} [opts.file]  Single file object (id, name, locationId)
      * @param {Array}  [opts.files] Array of file objects for batch/triaged
-     * @param {Array}  [opts.dups]  Pre-loaded dup data (single file from detail panel)
      * @param {Function} [opts.onDone] Called when dialog closes (submit or cancel)
      */
-    async open({ file, files, dups, onDone } = {}) {
+    async open({ file, files, onDone } = {}) {
         this._file = file || null;
         this._files = files || null;
         this._onDone = onDone || null;
         this._selectedDest = null;
         this._expandedNodes = new Set();
+        this._checkedDupIds = new Set();
         this._mode = 'copy';
         this._filenameMatchCheck.checked = false;
 
@@ -116,29 +123,22 @@ const Consolidate = {
             this._fileList.classList.add('hidden');
         }
 
-        // Load duplicates
-        if (dups && dups.length > 0) {
-            this._allDups = dups;
-        } else if (this._files && this._files.length > 0) {
+        // Load all copies via preview endpoint (includes source files
+        // since the merge step needs to show them for move operations)
+        const previewIds = this._files
+            ? this._files.map(f => f.id)
+            : this._file ? [this._file.id] : [];
+        if (previewIds.length > 0) {
             const preview = await API.post('/api/consolidate/preview', {
-                file_ids: this._files.map(f => f.id),
-            });
-            this._allDups = (preview.ok && preview.data.duplicates) ? preview.data.duplicates : [];
-        } else if (this._file) {
-            // Single file with no pre-loaded dups — fetch via preview
-            const preview = await API.post('/api/consolidate/preview', {
-                file_ids: [this._file.id],
+                file_ids: previewIds,
             });
             this._allDups = (preview.ok && preview.data.duplicates) ? preview.data.duplicates : [];
         } else {
             this._allDups = [];
         }
 
-        this._renderDups();
-
-        // Show step 1
-        this._step1.classList.remove('hidden');
-        this._step2.classList.add('hidden');
+        // Show info step
+        this._showStep(this._stepInfo);
         this._overlay.classList.remove('hidden');
     },
 
@@ -149,7 +149,16 @@ const Consolidate = {
         if (cb) cb();
     },
 
-    // ── Step 1 rendering ──
+    // ── Step management ──
+
+    _showStep(step) {
+        this._stepInfo.classList.add('hidden');
+        this._stepMerge.classList.add('hidden');
+        this._stepDest.classList.add('hidden');
+        step.classList.remove('hidden');
+    },
+
+    // ── Info step ──
 
     _renderFileList(files) {
         this._fileList.innerHTML = '';
@@ -168,39 +177,68 @@ const Consolidate = {
         }
     },
 
-    _renderDups() {
-        const fnMatch = this._filenameMatchCheck.checked;
+    _getFilteredDups() {
         let dups = this._allDups;
-
-        if (fnMatch) {
+        if (this._filenameMatchCheck.checked) {
             const sourceNames = new Set();
             if (this._file) sourceNames.add(this._file.name);
             if (this._files) this._files.forEach(f => sourceNames.add(f.name));
             dups = dups.filter(d => sourceNames.has(d.name));
         }
+        return dups;
+    },
 
-        this._dups = dups;
-        this._dupsEl.innerHTML = '';
+    _afterInfoStep() {
+        this._dups = this._getFilteredDups();
 
-        if (dups.length === 0) {
-            const div = document.createElement('div');
-            div.textContent = 'No duplicates found';
-            div.style.color = 'var(--color-text-placeholder)';
-            this._dupsEl.appendChild(div);
-            return;
-        }
-
-        for (const d of dups) {
-            const div = document.createElement('div');
-            const agent = d.agent ? ` [${d.agent}]` : '';
-            div.textContent = `${d.location}${agent} ${d.path}`;
-            this._dupsEl.appendChild(div);
+        if (this._mode === 'move' && this._dups.length > 0) {
+            this._showMergeStep();
+        } else {
+            this._showDestStep();
         }
     },
 
-    // ── Step 2 ──
+    // ── Merge step (move only) ──
 
-    async _showStep2() {
+    _showMergeStep() {
+        this._checkedDupIds = new Set();
+        this._mergeNextBtn.disabled = true;
+        this._renderMergeList();
+        this._showStep(this._stepMerge);
+    },
+
+    _renderMergeList() {
+        this._mergeList.innerHTML = '';
+
+        for (const d of this._dups) {
+            const label = document.createElement('label');
+            label.className = 'consolidate-merge-item';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = this._checkedDupIds.has(d.fileId);
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    this._checkedDupIds.add(d.fileId);
+                } else {
+                    this._checkedDupIds.delete(d.fileId);
+                }
+                this._mergeNextBtn.disabled = this._checkedDupIds.size === 0;
+            });
+            label.appendChild(checkbox);
+
+            const text = document.createElement('span');
+            const agent = d.agent ? ` [${d.agent}]` : '';
+            text.textContent = `${d.location}${agent} ${d.path}`;
+            label.appendChild(text);
+
+            this._mergeList.appendChild(label);
+        }
+    },
+
+    // ── Destination step ──
+
+    async _showDestStep() {
         const [res, favRes] = await Promise.all([
             API.get('/api/locations'),
             API.get('/api/favourites'),
@@ -211,9 +249,7 @@ const Consolidate = {
         this._selectedDest = null;
         this._destDisplay.textContent = 'No folder selected';
         this._renderTree();
-
-        this._step1.classList.add('hidden');
-        this._step2.classList.remove('hidden');
+        this._showStep(this._stepDest);
     },
 
     _renderTree() {
@@ -376,7 +412,7 @@ const Consolidate = {
             params.file_id = this._file.id;
         }
 
-        // Map to existing backend modes for now
+        // Map to backend modes
         if (this._mode === 'move' && isKeepHere) {
             params.mode = 'keep_here';
         } else {
@@ -385,6 +421,11 @@ const Consolidate = {
         }
 
         if (fnMatch) params.filename_match_only = true;
+
+        // For move mode, pass the selected file IDs to stub
+        if (this._mode === 'move' && this._checkedDupIds.size > 0) {
+            params.stub_file_ids = Array.from(this._checkedDupIds);
+        }
 
         if (this._onConsolidate) this._onConsolidate(params);
         this.close();

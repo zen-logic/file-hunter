@@ -232,13 +232,11 @@
         </div>
         <div id="consolidate-modal" class="modal-overlay hidden">
             <div class="modal-dialog modal-dialog-wide">
-                <!-- Step 1: File info, duplicates, mode -->
-                <div id="consolidate-step1">
+                <!-- Step: File info and mode -->
+                <div id="consolidate-step-info">
                     <h2 class="modal-title">Consolidate</h2>
                     <p id="consolidate-subtitle" class="modal-text"></p>
                     <div id="consolidate-file-list" class="modal-list-scroll hidden"></div>
-                    <label class="modal-label">Duplicate locations</label>
-                    <div id="consolidate-dups" class="modal-list-scroll"></div>
                     <div class="modal-field">
                         <label class="modal-label">Mode</label>
                         <div class="consolidate-mode-group" id="consolidate-mode-group">
@@ -262,13 +260,23 @@
                         <button class="btn btn-primary" id="consolidate-next">Next</button>
                     </div>
                 </div>
-                <!-- Step 2: Destination -->
-                <div id="consolidate-step2" class="hidden">
+                <!-- Step: Merge selection (move only) -->
+                <div id="consolidate-step-merge" class="hidden">
+                    <h2 class="modal-title">Select locations to merge</h2>
+                    <p class="modal-text">Checked files will be removed and replaced with stubs.</p>
+                    <div id="consolidate-merge-list" class="modal-list-scroll"></div>
+                    <div class="modal-actions">
+                        <button class="btn" id="consolidate-merge-cancel">Cancel</button>
+                        <button class="btn btn-primary" id="consolidate-merge-next" disabled>Next</button>
+                    </div>
+                </div>
+                <!-- Step: Destination -->
+                <div id="consolidate-step-dest" class="hidden">
                     <h2 class="modal-title">Destination</h2>
                     <div id="consolidate-tree-picker" class="consolidate-tree-picker"></div>
                     <div id="consolidate-dest-display" class="consolidate-dest-display">No folder selected</div>
                     <div class="modal-actions">
-                        <button class="btn" id="consolidate-cancel2">Cancel</button>
+                        <button class="btn" id="consolidate-dest-cancel">Cancel</button>
                         <button class="btn btn-primary" id="consolidate-submit">Consolidate</button>
                     </div>
                 </div>

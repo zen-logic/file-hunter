@@ -1559,8 +1559,9 @@ body::after {
     overflow: hidden;
 }
 
-#consolidate-step1,
-#consolidate-step2 {
+#consolidate-step-info,
+#consolidate-step-merge,
+#consolidate-step-dest {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -1568,11 +1569,24 @@ body::after {
     min-height: 0;
 }
 
-/* Step 1: scrollable lists share remaining vertical space */
-#consolidate-step1 > .modal-list-scroll {
+/* Info step: file list shrinks to share space with mode selector */
+#consolidate-step-info > .modal-list-scroll {
     flex: 1 1 0;
     min-height: 2.5rem;
     max-height: none;
+}
+
+.consolidate-merge-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.consolidate-merge-item input[type="checkbox"] {
+    flex-shrink: 0;
 }
 
 .modal-title {

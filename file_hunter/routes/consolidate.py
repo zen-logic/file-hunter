@@ -67,6 +67,7 @@ async def consolidate(request: Request):
                 return json_error("Destination is offline.", 400)
 
     filename_match_only = body.get("filename_match_only", False)
+    stub_file_ids = body.get("stub_file_ids")
 
     if is_copy:
         asyncio.create_task(
@@ -77,7 +78,9 @@ async def consolidate(request: Request):
     else:
         asyncio.create_task(
             run_consolidation(
-                file_id, mode, dest_folder_id, filename_match_only=filename_match_only
+                file_id, mode, dest_folder_id,
+                filename_match_only=filename_match_only,
+                stub_file_ids=stub_file_ids,
             )
         )
 
@@ -119,12 +122,14 @@ async def batch_consolidate(request: Request):
             return json_error("Destination is offline.", 400)
 
     filename_match_only = body.get("filename_match_only", False)
+    stub_file_ids = body.get("stub_file_ids")
     await enqueue("batch_consolidate", None, {
         "file_ids": file_ids,
         "mode": mode,
         "consolidate_mode": consolidate_mode,
         "dest_folder_id": dest_folder_id,
         "filename_match_only": filename_match_only,
+        "stub_file_ids": stub_file_ids,
     })
 
     return json_ok(
@@ -136,14 +141,13 @@ async def consolidate_preview(request: Request):
     """POST /api/consolidate/preview — return dup counts and locations for a set of files.
 
     Returns total_dups, filename_matched_dups, and a duplicates list with
-    location/agent/path for each duplicate entry (excluding the source files).
+    location/agent/path for all copies (including source files, since the
+    merge step needs to show them for move operations).
     """
     body = await request.json()
     file_ids = body.get("file_ids", [])
     if not file_ids:
         return json_ok({"total_dups": 0, "filename_matched_dups": 0, "duplicates": []})
-
-    file_id_set = set(file_ids)
 
     # Get filenames and effective hashes for all selected files
     async with read_db() as db:
@@ -171,8 +175,7 @@ async def consolidate_preview(request: Request):
                 f"SELECT file_id FROM active_hashes WHERE {hash_col} = ?",
                 (eff_hash,),
             )
-            dup_ids = [r["file_id"] for r in dup_rows
-                       if r["file_id"] != fid and r["file_id"] not in file_id_set]
+            dup_ids = [r["file_id"] for r in dup_rows if r["file_id"] != fid]
             total_dups += len(dup_ids)
             all_dup_ids.update(dup_ids)
 
