@@ -57,9 +57,16 @@ def _get_online_location_ids() -> set[int]:
     return online
 
 
-def _build_stub_text(filename, dest_path, dest_loc_name, now_iso):
+def _format_location(loc_name, agent_name=None):
+    """Format location name with agent: 'Location [Agent]' or just 'Location'."""
+    if agent_name:
+        return f"{loc_name} [{agent_name}]"
+    return loc_name
+
+
+def _build_stub_text(filename, dest_path, dest_loc_label, now_iso):
     """Build the text content for a .moved stub file."""
-    moved_to = f"{dest_loc_name}: {dest_path}" if dest_loc_name else dest_path
+    moved_to = f"{dest_loc_label}: {dest_path}" if dest_loc_label else dest_path
     return (
         f"Consolidated by File Hunter\n"
         f"Original: {filename}\n"
@@ -157,9 +164,11 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
     """
     async with read_db() as db:
         rows = await db.execute_fetchall(
-            """SELECT f.*, l.name as location_name, l.root_path
+            """SELECT f.*, l.name as location_name, l.root_path,
+                      a.name as agent_name
                FROM files f
                JOIN locations l ON l.id = f.location_id
+               LEFT JOIN agents a ON a.id = l.agent_id
                WHERE f.id = ?""",
             (file_id,),
         )
@@ -210,9 +219,11 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
                       f.file_type_high, f.file_type_low, f.file_size,
                       f.description, f.tags,
                       f.created_date, f.modified_date, f.date_cataloged,
-                      l.name as location_name, l.root_path
+                      l.name as location_name, l.root_path,
+                      a.name as agent_name
                FROM files f
                JOIN locations l ON l.id = f.location_id
+               LEFT JOIN agents a ON a.id = l.agent_id
                WHERE f.id IN ({ph}) AND f.stale = 0""",
             copy_ids,
         )
@@ -474,9 +485,14 @@ async def run_copy(
 
         async with read_db() as db:
             _ln = await db.execute_fetchall(
-                "SELECT name FROM locations WHERE id = ?", (dest_loc_id,)
+                "SELECT l.name, a.name as agent_name "
+                "FROM locations l LEFT JOIN agents a ON a.id = l.agent_id "
+                "WHERE l.id = ?",
+                (dest_loc_id,),
             )
-        dest_loc_name = _ln[0]["name"] if _ln else ""
+        dest_loc_name = _format_location(
+            _ln[0]["name"], _ln[0]["agent_name"]
+        ) if _ln else ""
 
         await append_row(
             csv_path, csv_loc_id,
@@ -807,7 +823,8 @@ async def run_consolidation(
         # Write .sources file next to canonical — single append call
         try:
             sources_entries = "".join(
-                f"- {c['location_name']}: {c['rel_path']}\n" for c in all_copies
+                f"- {_format_location(c['location_name'], c.get('agent_name'))}: {c['rel_path']}\n"
+                for c in all_copies
             )
             await fs.file_write_text(
                 canonical_path + ".sources",
@@ -839,15 +856,22 @@ async def run_consolidation(
             csv_loc_id = shared_csv_loc_id
             csv_folder_id = None  # batch manages catalog entry
 
-        # Resolve destination location name
+        # Resolve destination location label
         if mode == "keep_here":
-            dest_loc_name = selected["location_name"]
+            dest_loc_name = _format_location(
+                selected["location_name"], selected.get("agent_name")
+            )
         else:
             async with read_db() as db:
                 _ln = await db.execute_fetchall(
-                    "SELECT name FROM locations WHERE id = ?", (dest_loc_id,)
+                    "SELECT l.name, a.name as agent_name "
+                    "FROM locations l LEFT JOIN agents a ON a.id = l.agent_id "
+                    "WHERE l.id = ?",
+                    (dest_loc_id,),
                 )
-            dest_loc_name = _ln[0]["name"] if _ln else ""
+            dest_loc_name = _format_location(
+                _ln[0]["name"], _ln[0]["agent_name"]
+            ) if _ln else ""
 
         # Log the canonical file
         await append_row(
@@ -1189,8 +1213,22 @@ async def drain_pending_jobs(location_id: int, root_path: str):
         source_file = job["source_file"]
 
         try:
+            # Resolve destination location label from canonical file
+            async with read_db() as rdb:
+                dest_rows = await rdb.execute_fetchall(
+                    "SELECT l.name, a.name as agent_name "
+                    "FROM files f "
+                    "JOIN locations l ON l.id = f.location_id "
+                    "LEFT JOIN agents a ON a.id = l.agent_id "
+                    "WHERE f.full_path = ? LIMIT 1",
+                    (dest_path,),
+                )
+            dest_loc_label = _format_location(
+                dest_rows[0]["name"], dest_rows[0]["agent_name"]
+            ) if dest_rows else ""
+
             # Build a stub text for this job
-            stub_text = _build_stub_text(source_file, dest_path, "", now_iso)
+            stub_text = _build_stub_text(source_file, dest_path, dest_loc_label, now_iso)
             stub_path = source_path + ".moved"
             stub_name = source_file + ".moved"
             stub_size = len(stub_text.encode())
