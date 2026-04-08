@@ -92,7 +92,7 @@ async def list_files(
         folder_params = [loc_id]
         # Subfolders at root level (include rel_path + root_path for missing check)
         folders = await db.execute_fetchall(
-            f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, fld.stale, l.root_path
+            f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, fld.stale, fld.is_favourite, l.root_path
                FROM folders fld JOIN locations l ON l.id = fld.location_id
                WHERE fld.location_id = ? AND fld.parent_id IS NULL{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name""",
             [loc_id] + folder_name_params,
@@ -103,7 +103,7 @@ async def list_files(
         folder_params = [fld_id]
         # Subfolders (include rel_path + root_path for missing check)
         folders = await db.execute_fetchall(
-            f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, fld.stale, l.root_path, fld.location_id
+            f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, fld.stale, fld.is_favourite, l.root_path, fld.location_id
                FROM folders fld JOIN locations l ON l.id = fld.location_id
                WHERE fld.parent_id = ?{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name""",
             [fld_id] + folder_name_params,
@@ -189,6 +189,7 @@ async def list_files(
             "missing": fld["id"] in missing_folder_ids,
             "hidden": bool(fld["hidden"]),
             "stale": bool(fld["stale"]),
+            "favourite": bool(fld["is_favourite"]),
         }
         for fld in folders
     ]

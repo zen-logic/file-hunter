@@ -276,6 +276,7 @@ function wireFavouriteBtn() {
                 if (icon) icon.innerHTML = res.data.favourite ? icons.heart : icons.heartOutline;
                 btn.classList.toggle('btn-active', res.data.favourite);
                 Tree.setFavourite(selectedNode.id, res.data.favourite);
+                FileList.setFolderFavourite(selectedNode.id, res.data.favourite);
             }
         });
     }

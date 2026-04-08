@@ -925,24 +925,39 @@ const Tree = {
             }
         }
 
-        item.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            // Block interaction with deleting locations
-            if (node.type === 'location' && this._deletingLocations.has(node.id)) return;
-            let structural = false;
-            if (hasChildren) {
+        // Disclosure arrow: always toggles expand/collapse
+        if (hasChildren) {
+            toggle.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (node.type === 'location' && this._deletingLocations.has(node.id)) return;
                 if (node.expanded) {
                     node.expanded = false;
                     this._expandedIds.delete(node.id);
-                    structural = true;
                 } else {
                     node.expanded = true;
                     this._expandedIds.add(node.id);
                     if (node.children === null) {
                         await this._loadChildren(node.id);
                     }
-                    structural = true;
                 }
+                this.selected = node.id;
+                this.render();
+                if (this.onSelect) this.onSelect(node);
+            });
+        }
+
+        // Row click: expand if closed, select only if already open
+        item.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (node.type === 'location' && this._deletingLocations.has(node.id)) return;
+            let structural = false;
+            if (hasChildren && !node.expanded) {
+                node.expanded = true;
+                this._expandedIds.add(node.id);
+                if (node.children === null) {
+                    await this._loadChildren(node.id);
+                }
+                structural = true;
             }
             if (structural) {
                 this.selected = node.id;

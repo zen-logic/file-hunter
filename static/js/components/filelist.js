@@ -897,11 +897,15 @@ const FileList = {
             const marks = Triage.getMarks(file.id);
             const triageHtml = marks.map(op => `<span class="triage-mark triage-mark-${op}">${op[0].toUpperCase()}</span>`).join('');
 
+            const favHtml = (file.type === 'folder' && file.favourite)
+                ? `<span class="tree-fav">${icons.heart}</span>`
+                : '';
+
             // Remaining cells via innerHTML on a temp fragment
             const tempRow = document.createElement('tr');
             tempRow.innerHTML = `
                 <td class="col-icon">${fileIcon(file)}</td>
-                <td><span class="file-name">${file.name}${dupHtml}${staleHtml}${missingHtml}${pendingHtml}${triageHtml}</span>${locHtml}</td>
+                <td><span class="file-name">${file.name}${favHtml}${dupHtml}${staleHtml}${missingHtml}${pendingHtml}${triageHtml}</span>${locHtml}</td>
                 <td class="col-type">${file.typeLow || ''}</td>
                 <td class="col-size">${formatSize(file.size)}</td>
                 <td class="col-date">${formatDate(file.date)}</td>
@@ -972,6 +976,14 @@ const FileList = {
         if (pagingBar) this.el.parentElement.appendChild(pagingBar);
 
         this._scrollSelectedIntoView();
+    },
+
+    setFolderFavourite(nodeId, favourite) {
+        if (!this.currentFolders) return;
+        const folder = this.currentFolders.find(f => f.id === nodeId);
+        if (!folder) return;
+        folder.favourite = favourite;
+        this.render();
     },
 
     async refreshDupCounts() {
