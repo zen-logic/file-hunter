@@ -667,19 +667,24 @@ RenameFolderModal.init(async (folder, newName) => {
     return { ok: true };
 });
 
-MoveFileModal.init(async (item, destinationFolderId) => {
+MoveFileModal.init(async (item, destinationFolderId, copy) => {
+    const verb = copy ? 'copied' : 'moved';
+    const Verb = copy ? 'Copied' : 'Moved';
+    const noun = copy ? 'Copy' : 'Move';
+
     if (item.id === 'batch') {
         const res = await API.post('/api/batch/move', {
             file_ids: item.batchFileIds,
             folder_ids: item.batchFolderIds,
             destination_folder_id: destinationFolderId,
+            copy: !!copy,
         });
         if (!res.ok) {
-            return { error: res.error || 'Batch move failed.' };
+            return { error: res.error || `Batch ${noun.toLowerCase()} failed.` };
         }
         const d = res.data;
-        ActivityLog.add(`Batch moved: <b>${d.moved_files} files, ${d.moved_folders} folders</b>`);
-        Toast.success(`Moved ${d.moved_files} files, ${d.moved_folders} folders`);
+        ActivityLog.add(`Batch ${verb}: <b>${d.moved_files} files, ${d.moved_folders} folders</b>`);
+        Toast.success(`${Verb} ${d.moved_files} files, ${d.moved_folders} folders`);
         selectedFile = null;
         selectedFileDups = [];
         consolidateBtn.disabled = true;
@@ -697,12 +702,15 @@ MoveFileModal.init(async (item, destinationFolderId) => {
     const itemId = String(item.id);
     if (itemId.startsWith('fld-')) {
         const numId = itemId.replace('fld-', '');
-        const res = await API.post(`/api/folders/${numId}/move`, { destination_parent_id: destinationFolderId });
+        const res = await API.post(`/api/folders/${numId}/move`, {
+            destination_parent_id: destinationFolderId,
+            copy: !!copy,
+        });
         if (!res.ok) {
-            return { error: res.error || 'Move failed.' };
+            return { error: res.error || `${noun} failed.` };
         }
-        ActivityLog.add(`Folder moved: <b>${item.name || item.label}</b>`);
-        Toast.success(`Folder moved: ${item.name || item.label}`);
+        ActivityLog.add(`Folder ${verb}: <b>${item.name || item.label}</b>`);
+        Toast.success(`Folder ${verb}: ${item.name || item.label}`);
         selectedFile = null;
         selectedFileDups = [];
         consolidateBtn.disabled = true;
@@ -715,12 +723,15 @@ MoveFileModal.init(async (item, destinationFolderId) => {
         return { ok: true };
     }
 
-    const res = await API.post(`/api/files/${item.id}/move`, { destination_folder_id: destinationFolderId });
+    const res = await API.post(`/api/files/${item.id}/move`, {
+        destination_folder_id: destinationFolderId,
+        copy: !!copy,
+    });
     if (!res.ok) {
-        return { error: res.error || 'Move failed.' };
+        return { error: res.error || `${noun} failed.` };
     }
-    ActivityLog.add(`File moved: <b>${item.name}</b>`);
-    Toast.success(`File moved: ${item.name}`);
+    ActivityLog.add(`File ${verb}: <b>${item.name}</b>`);
+    Toast.success(`File ${verb}: ${item.name}`);
     selectedFile = null;
     selectedFileDups = [];
     consolidateBtn.disabled = true;

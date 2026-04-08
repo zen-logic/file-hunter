@@ -912,7 +912,7 @@ const Detail = {
         const fileLocScanning = _isScanning(String(detail.locationId || '').replace('loc-', ''));
         const fileScanDisable = fileLocScanning ? ' disabled title="Location is being scanned"' : '';
         const renameFileBtn = detail.id && detail.locationOnline && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-rename-file" style="margin-top:0.4rem"${fileScanDisable || (fileMissing ? ` disabled title="${disabledReason}"` : '')}>Rename</button>` : '';
-        const moveFileBtn = detail.id && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-move-file" style="margin-top:0.4rem"${fileScanDisable || (fileMissing ? ` disabled title="${disabledReason}"` : '')}>Move</button>` : '';
+        const moveFileBtn = detail.id && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-move-file" style="margin-top:0.4rem"${fileScanDisable || (fileMissing ? ` disabled title="${disabledReason}"` : '')}>Move / Copy</button>` : '';
         const deleteFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-danger btn-sm" id="detail-delete-file" style="margin-top:0.4rem"${fileScanDisable}>Delete</button>` : '';
         const ignoreFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-sm" id="detail-ignore-file" style="margin-top:0.4rem">Ignore files like this\u2026</button>` : '';
         const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${ignoreFileBtn}${deleteFileBtn}</div>` : '';
@@ -1742,7 +1742,7 @@ const Detail = {
                     <button class="btn btn-sm" id="detail-download-zip"${_disabledIf(off, false, miss)}>Download ZIP</button>
                     <button class="btn btn-sm" id="detail-merge-btn"${_disabledIf(off, false, miss)}>Merge</button>
                     <button class="btn btn-sm" id="detail-rename-folder"${_disabledIf(off, sc, miss)}>Rename</button>
-                    <button class="btn btn-sm" id="detail-move-folder"${_disabledIf(off, sc, miss)}>Move</button>
+                    <button class="btn btn-sm" id="detail-move-folder"${_disabledIf(off, sc, miss)}>Move / Copy</button>
                     <button class="btn btn-danger btn-sm" id="detail-delete-folder"${_disabledIf(off, sc)}>Delete Folder</button>
                     `; })()}
                 </div>
@@ -1991,7 +1991,7 @@ const Detail = {
             <div class="detail-section">
                 <div class="detail-btn-group">
                     <button class="btn btn-danger btn-sm" id="batch-delete-btn"${bsd}>Delete</button>
-                    <button class="btn btn-sm" id="batch-move-btn"${bsd}>Move</button>
+                    <button class="btn btn-sm" id="batch-move-btn"${bsd}>Move / Copy</button>
                     <button class="btn btn-sm" id="batch-download-btn">Download ZIP</button>
                     <button class="btn btn-sm" id="batch-rehash-btn">Re-hash</button>
                 </div>`; })()}

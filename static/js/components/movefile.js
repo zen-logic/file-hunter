@@ -26,6 +26,7 @@ const MoveFileModal = {
         this.errorEl = document.getElementById('move-file-error');
         this.cancelBtn = document.getElementById('move-file-cancel');
         this.submitBtn = document.getElementById('move-file-submit');
+        this.copyCheckbox = document.getElementById('move-file-copy');
 
         this.cancelBtn.addEventListener('click', () => this.close());
         this.overlay.addEventListener('click', (e) => {
@@ -37,6 +38,9 @@ const MoveFileModal = {
             }
         });
         this.submitBtn.addEventListener('click', () => this._doSubmit());
+        this.copyCheckbox.addEventListener('change', () => {
+            this.submitBtn.textContent = this.copyCheckbox.checked ? 'Copy' : 'Move';
+        });
     },
 
     async open(file, excludeId) {
@@ -47,6 +51,8 @@ const MoveFileModal = {
 
         this.fileNameEl.textContent = file.name;
         this.submitBtn.disabled = true;
+        this.submitBtn.textContent = 'Move';
+        this.copyCheckbox.checked = false;
         this.destDisplay.textContent = 'No folder selected';
         if (this.errorEl) {
             this.errorEl.textContent = '';
@@ -246,12 +252,14 @@ const MoveFileModal = {
     _setBusy(busy) {
         this.submitBtn.disabled = busy;
         this.cancelBtn.disabled = busy;
+        this.copyCheckbox.disabled = busy;
         this.treePicker.style.pointerEvents = busy ? 'none' : '';
         this.treePicker.style.opacity = busy ? '0.5' : '';
         if (busy) {
-            this.submitBtn.innerHTML = '<span class="detail-spinner" style="width:1rem;height:1rem;display:inline-block;vertical-align:middle;margin-right:0.4rem"></span>Moving\u2026';
+            const verb = this.copyCheckbox.checked ? 'Copying' : 'Moving';
+            this.submitBtn.innerHTML = `<span class="detail-spinner" style="width:1rem;height:1rem;display:inline-block;vertical-align:middle;margin-right:0.4rem"></span>${verb}\u2026`;
         } else {
-            this.submitBtn.textContent = 'Move';
+            this.submitBtn.textContent = this.copyCheckbox.checked ? 'Copy' : 'Move';
         }
     },
 
@@ -264,7 +272,8 @@ const MoveFileModal = {
         }
 
         this._setBusy(true);
-        const result = await this.onMove(this._file, this._selectedDest);
+        const copy = this.copyCheckbox.checked;
+        const result = await this.onMove(this._file, this._selectedDest, copy);
         if (result && result.error) {
             this._setBusy(false);
             if (this.errorEl) {

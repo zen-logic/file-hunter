@@ -7,7 +7,7 @@
  */
 
 const OPERATIONS = ['delete', 'consolidate', 'tag', 'move'];
-const OP_LABELS = { delete: 'Delete', consolidate: 'Consolidate', tag: 'Tag', move: 'Move' };
+const OP_LABELS = { delete: 'Delete', consolidate: 'Consolidate', tag: 'Tag', move: 'Move / Copy' };
 const OP_KEYS = { d: 'delete', c: 'consolidate', t: 'tag', m: 'move' };
 const OP_CSS = {
     delete: 'triage-delete',

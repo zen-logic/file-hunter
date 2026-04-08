@@ -273,11 +273,12 @@ async def treemap_data(request: Request):
 
 
 async def folder_move(request: Request):
-    """POST /api/folders/{id:int}/move — move and/or rename a folder."""
+    """POST /api/folders/{id:int}/move — move, copy, and/or rename a folder."""
     folder_id = int(request.path_params["id"])
     body = await request.json()
     destination_parent_id = body.get("destination_parent_id", "").strip() or None
     new_name = body.get("name")
+    copy = body.get("copy", False)
 
     if new_name is not None:
         new_name = new_name.strip()
@@ -291,7 +292,8 @@ async def folder_move(request: Request):
 
     try:
         result = await execute_write(
-            move_folder, folder_id, destination_parent_id, new_name=new_name
+            move_folder, folder_id, destination_parent_id,
+            new_name=new_name, copy=copy,
         )
     except ValueError as e:
         return json_error(str(e), 400)
@@ -305,6 +307,7 @@ async def folder_move(request: Request):
             "name": result.get("name"),
             "oldName": result.get("old_name"),
             "renamed": result.get("renamed", False),
+            "copied": copy,
         }
     )
 

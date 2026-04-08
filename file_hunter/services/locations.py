@@ -12,7 +12,7 @@ from file_hunter.helpers import (
     parse_mtime,
     post_op_stats,
 )
-from file_hunter.hashes_db import hashes_writer
+from file_hunter.hashes_db import get_file_hashes, hashes_writer
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.online_check import (
@@ -978,8 +978,90 @@ async def _cross_location_dir_move(
         await broadcast({"type": "status_bar_idle"})
 
 
+async def _cross_location_dir_copy(
+    db, fld, src_abs, dest_abs, src_loc_id, dest_loc_id,
+    old_prefix, new_prefix, dest_root, desc_folder_rows,
+):
+    """Copy a folder tree to a destination, leaving the source intact.
+
+    Same physical copy logic as _cross_location_dir_move but skips the
+    source deletion step. Used by move_folder(copy=True).
+    """
+    log = logging.getLogger(__name__)
+
+    all_folder_ids = [fld["id"]] + [df["id"] for df in desc_folder_rows]
+    ph = ",".join("?" for _ in all_folder_ids)
+    count_row = await db.execute_fetchall(
+        f"SELECT COUNT(*) AS cnt FROM files WHERE folder_id IN ({ph})",
+        all_folder_ids,
+    )
+    total_files = count_row[0]["cnt"] if count_row else 0
+
+    act_name = f"cross-copy-{fld['id']}"
+    register(act_name, f"Copying {fld['name']}", f"0/{total_files} files")
+
+    try:
+        await fs.dir_create(dest_abs, dest_loc_id)
+
+        sorted_descs = sorted(desc_folder_rows, key=lambda r: r["rel_path"].count("/"))
+        for df in sorted_descs:
+            dest_sub_rel = new_prefix + df["rel_path"][len(old_prefix):]
+            dest_sub_abs = os.path.join(dest_root, dest_sub_rel)
+            await fs.dir_create(dest_sub_abs, dest_loc_id)
+
+        copied = 0
+        skipped = 0
+        for fid in all_folder_ids:
+            file_rows = await db.execute_fetchall(
+                "SELECT id, full_path, rel_path, modified_date FROM files WHERE folder_id = ?",
+                (fid,),
+            )
+            for fr in file_rows:
+                dest_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
+                dest_file_abs = os.path.join(dest_root, dest_file_rel)
+                try:
+                    await fs.copy_file(
+                        fr["full_path"], src_loc_id,
+                        dest_file_abs, dest_loc_id,
+                        mtime=parse_mtime(fr["modified_date"]),
+                    )
+                    copied += 1
+                except (RuntimeError, ValueError, OSError) as e:
+                    err = str(e).lower()
+                    if "404" in err or "not found" in err:
+                        log.warning("Skipping missing file: %s", fr["full_path"])
+                        skipped += 1
+                    else:
+                        raise
+                update(act_name, progress=f"{copied}/{total_files} files")
+                await broadcast(
+                    {
+                        "type": "batch_move_progress",
+                        "done": copied + skipped,
+                        "total": total_files,
+                        "name": fld["name"],
+                    }
+                )
+
+        log.info(
+            "Dir copy complete: %s -> %s (%d files, %d skipped)",
+            src_abs, dest_abs, copied, skipped,
+        )
+
+    except Exception:
+        try:
+            await fs.dir_delete(dest_abs, dest_loc_id)
+        except Exception:
+            pass
+        raise
+    finally:
+        unregister(act_name)
+        await broadcast({"type": "status_bar_idle"})
+
+
 async def move_folder(
-    db, folder_id: int, destination_parent_id: str = None, *, new_name: str = None
+    db, folder_id: int, destination_parent_id: str = None, *, new_name: str = None,
+    copy: bool = False,
 ):
     """Move and/or rename a folder (and its entire subtree) on disk and in the catalog.
 
@@ -1134,93 +1216,176 @@ async def move_folder(
         (folder_id,),
     )
 
-    # Move on disk
-    if cross_location:
+    # Copy or move on disk
+    if copy:
+        # Copy always uses the cross-location pattern: create dirs, copy files
+        await _cross_location_dir_copy(
+            db, fld, src_abs, dest_abs, src_loc_id, dest_loc_id,
+            old_prefix, new_prefix, dest_root, desc_folder_rows,
+        )
+    elif cross_location:
         await _cross_location_dir_move(
-            db,
-            fld,
-            src_abs,
-            dest_abs,
-            src_loc_id,
-            dest_loc_id,
-            old_prefix,
-            new_prefix,
-            dest_root,
-            desc_folder_rows,
+            db, fld, src_abs, dest_abs, src_loc_id, dest_loc_id,
+            old_prefix, new_prefix, dest_root, desc_folder_rows,
         )
     else:
         await fs.dir_move(src_abs, dest_abs, src_loc_id)
 
-    # Update moved folder
     new_hidden = 1 if effective_name.startswith(".") else 0
-    await db.execute(
-        "UPDATE folders SET parent_id = ?, name = ?, rel_path = ?, location_id = ?, hidden = ? WHERE id = ?",
-        (
-            dest_parent_fld_id,
-            effective_name,
-            new_rel,
-            dest_loc_id,
-            new_hidden,
-            folder_id,
-        ),
-    )
 
-    # Update descendant folders: replace rel_path prefix
-    for df in desc_folder_rows:
-        new_desc_rel = new_prefix + df["rel_path"][len(old_prefix) :]
-        params = (
-            [new_desc_rel, dest_loc_id, df["id"]]
-            if cross_location
-            else [new_desc_rel, src_loc_id, df["id"]]
-        )
-        await db.execute(
-            "UPDATE folders SET rel_path = ?, location_id = ? WHERE id = ?",
-            params,
-        )
+    if copy:
+        # Insert new folder and file records — source stays untouched
+        from file_hunter.core import classify_file
 
-    # Update all files in folder + descendants
-    all_folder_ids = [folder_id] + [df["id"] for df in desc_folder_rows]
-    for fid in all_folder_ids:
-        file_rows = await db.execute_fetchall(
-            "SELECT id, full_path, rel_path FROM files WHERE folder_id = ?",
-            (fid,),
+        now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+
+        # Map old folder IDs to new folder IDs
+        folder_id_map = {}
+
+        # Insert root folder copy
+        cursor = await db.execute(
+            """INSERT INTO folders (location_id, parent_id, name, rel_path, hidden, stale)
+               VALUES (?, ?, ?, ?, ?, 0)""",
+            (dest_loc_id, dest_parent_fld_id, effective_name, new_rel, new_hidden),
         )
-        for fr in file_rows:
-            new_file_rel = new_prefix + fr["rel_path"][len(old_prefix) :]
-            new_full_path = os.path.join(dest_root, new_file_rel)
-            update_params = [new_full_path, new_file_rel]
-            if cross_location:
-                await db.execute(
-                    "UPDATE files SET full_path = ?, rel_path = ?, location_id = ? WHERE id = ?",
-                    update_params + [dest_loc_id, fr["id"]],
+        folder_id_map[folder_id] = cursor.lastrowid
+
+        # Insert descendant folder copies (sorted by depth)
+        sorted_descs = sorted(desc_folder_rows, key=lambda r: r["rel_path"].count("/"))
+        for df in sorted_descs:
+            new_desc_rel = new_prefix + df["rel_path"][len(old_prefix):]
+            # Find the parent of this descendant in the original tree
+            orig_parent = await db.execute_fetchall(
+                "SELECT parent_id FROM folders WHERE id = ?", (df["id"],)
+            )
+            orig_parent_id = orig_parent[0]["parent_id"] if orig_parent else folder_id
+            new_parent_id = folder_id_map.get(orig_parent_id, folder_id_map[folder_id])
+
+            orig_row = await db.execute_fetchall(
+                "SELECT name, hidden FROM folders WHERE id = ?", (df["id"],)
+            )
+            df_name = orig_row[0]["name"] if orig_row else os.path.basename(new_desc_rel)
+            df_hidden = orig_row[0]["hidden"] if orig_row else 0
+
+            cursor = await db.execute(
+                """INSERT INTO folders (location_id, parent_id, name, rel_path, hidden, stale)
+                   VALUES (?, ?, ?, ?, ?, 0)""",
+                (dest_loc_id, new_parent_id, df_name, new_desc_rel, df_hidden),
+            )
+            folder_id_map[df["id"]] = cursor.lastrowid
+
+        # Insert file copies for all folders
+        all_folder_ids = [folder_id] + [df["id"] for df in desc_folder_rows]
+        for fid in all_folder_ids:
+            file_rows = await db.execute_fetchall(
+                """SELECT id, filename, rel_path, file_type_high, file_type_low,
+                          file_size, description, tags, created_date, modified_date,
+                          hidden
+                   FROM files WHERE folder_id = ?""",
+                (fid,),
+            )
+            new_folder_id = folder_id_map[fid]
+            for fr in file_rows:
+                new_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
+                new_full_path = os.path.join(dest_root, new_file_rel)
+                cursor = await db.execute(
+                    """INSERT INTO files (filename, full_path, rel_path, location_id,
+                          folder_id, file_type_high, file_type_low, file_size,
+                          description, tags, created_date, modified_date,
+                          date_cataloged, date_last_seen)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        fr["filename"], new_full_path, new_file_rel, dest_loc_id,
+                        new_folder_id, fr["file_type_high"], fr["file_type_low"],
+                        fr["file_size"], fr["description"] or "", fr["tags"] or "",
+                        fr["created_date"], fr["modified_date"], now_iso, now_iso,
+                    ),
                 )
-                # Sync hashes.db location_id
-                async with hashes_writer() as hdb:
-                    await hdb.execute(
-                        "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
-                        (dest_loc_id, fr["id"]),
-                    )
-            else:
-                await db.execute(
-                    "UPDATE files SET full_path = ?, rel_path = ? WHERE id = ?",
-                    update_params + [fr["id"]],
-                )
+                new_file_id = cursor.lastrowid
 
-    await db.commit()
+                # Copy hash record
+                src_hashes = await get_file_hashes([fr["id"]])
+                if fr["id"] in src_hashes:
+                    h = src_hashes[fr["id"]]
+                    async with hashes_writer() as hdb:
+                        await hdb.execute(
+                            """INSERT OR REPLACE INTO file_hashes
+                                  (file_id, location_id, file_size, hash_partial,
+                                   hash_fast, hash_strong, dup_count, excluded, stale)
+                               VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)""",
+                            (
+                                new_file_id, dest_loc_id,
+                                h.get("file_size", fr["file_size"] or 0),
+                                h.get("hash_partial"), h.get("hash_fast"),
+                                h.get("hash_strong"), h.get("excluded", 0),
+                            ),
+                        )
 
-    if cross_location:
-        await post_op_stats(
-            location_ids={src_loc_id, dest_loc_id}, source="move_folder"
-        )
+        await db.commit()
+        result_id = folder_id_map[folder_id]
     else:
-        await post_op_stats(location_ids={src_loc_id}, source="move_folder")
+        # Move — update existing records
+        await db.execute(
+            "UPDATE folders SET parent_id = ?, name = ?, rel_path = ?, location_id = ?, hidden = ? WHERE id = ?",
+            (dest_parent_fld_id, effective_name, new_rel, dest_loc_id, new_hidden, folder_id),
+        )
+
+        # Update descendant folders: replace rel_path prefix
+        for df in desc_folder_rows:
+            new_desc_rel = new_prefix + df["rel_path"][len(old_prefix):]
+            params = (
+                [new_desc_rel, dest_loc_id, df["id"]]
+                if cross_location
+                else [new_desc_rel, src_loc_id, df["id"]]
+            )
+            await db.execute(
+                "UPDATE folders SET rel_path = ?, location_id = ? WHERE id = ?",
+                params,
+            )
+
+        # Update all files in folder + descendants
+        all_folder_ids = [folder_id] + [df["id"] for df in desc_folder_rows]
+        for fid in all_folder_ids:
+            file_rows = await db.execute_fetchall(
+                "SELECT id, full_path, rel_path FROM files WHERE folder_id = ?",
+                (fid,),
+            )
+            for fr in file_rows:
+                new_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
+                new_full_path = os.path.join(dest_root, new_file_rel)
+                update_params = [new_full_path, new_file_rel]
+                if cross_location:
+                    await db.execute(
+                        "UPDATE files SET full_path = ?, rel_path = ?, location_id = ? WHERE id = ?",
+                        update_params + [dest_loc_id, fr["id"]],
+                    )
+                    async with hashes_writer() as hdb:
+                        await hdb.execute(
+                            "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
+                            (dest_loc_id, fr["id"]),
+                        )
+                else:
+                    await db.execute(
+                        "UPDATE files SET full_path = ?, rel_path = ? WHERE id = ?",
+                        update_params + [fr["id"]],
+                    )
+
+        await db.commit()
+        result_id = folder_id
+
+    loc_ids = {dest_loc_id}
+    if not copy:
+        loc_ids.add(src_loc_id)
+    op_label = "copy_folder" if copy else "move_folder"
+    await post_op_stats(location_ids=loc_ids, source=op_label)
 
     renamed = effective_name != fld["name"]
     moved = destination_parent_id is not None
     return {
-        "id": folder_id,
+        "id": result_id,
         "name": effective_name,
         "old_name": fld["name"],
         "renamed": renamed,
         "moved": moved,
+        "copied": copy,
     }

@@ -132,6 +132,11 @@ async def drain_pending_ops(location_id: int, root_path: str):
                 if dst_location_id and dst_location_id != location_id:
                     affected_location_ids.add(dst_location_id)
 
+            elif op_type == "copy":
+                dst_location_id = await _drain_copy(f, params, op_id, now_iso)
+                if dst_location_id and dst_location_id != location_id:
+                    affected_location_ids.add(dst_location_id)
+
             elif op_type == "verify":
                 result = await _drain_verify(f, op_id, now_iso)
                 if result:
@@ -329,6 +334,105 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
         )
 
     return dst_location_id if cross_location else None
+
+
+async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
+    """Execute a deferred copy: copy file on disk, insert new DB record.
+
+    Returns destination location_id if different from source, else None.
+    Source file and catalog entry are left untouched.
+    """
+    from file_hunter.core import classify_file
+
+    file_id = f["id"]
+    full_path = f["full_path"]
+    location_id = f["location_id"]
+
+    dst_full_path = params.get("dst_full_path")
+    dst_rel_path = params.get("dst_rel_path")
+    dst_location_id = params.get("dst_location_id", location_id)
+    dst_folder_id = params.get("dst_folder_id")
+    dst_filename = params.get("dst_filename", f["filename"])
+
+    if not dst_full_path or not dst_rel_path:
+        raise ValueError("Missing destination path in deferred copy params")
+
+    if not await fs.file_exists(full_path, location_id):
+        raise ValueError(f"Source file not found on disk: {full_path}")
+
+    if await fs.path_exists(dst_full_path, dst_location_id):
+        raise ValueError(f"Destination already exists: {dst_full_path}")
+
+    # Copy on disk
+    await fs.copy_file(
+        full_path, location_id,
+        dst_full_path, dst_location_id,
+        mtime=parse_mtime(f["modified_date"]),
+    )
+
+    new_type_high, new_type_low = classify_file(dst_filename)
+
+    # Read source file's description and tags
+    async with read_db() as rdb:
+        src_row = await rdb.execute_fetchall(
+            "SELECT description, tags, created_date, modified_date FROM files WHERE id = ?",
+            (file_id,),
+        )
+    src = src_row[0] if src_row else {}
+
+    # Insert new file record
+    async with db_writer() as wdb:
+        cursor = await wdb.execute(
+            """INSERT INTO files (filename, full_path, rel_path, location_id,
+                  folder_id, file_type_high, file_type_low, file_size,
+                  description, tags, created_date, modified_date,
+                  date_cataloged, date_last_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                dst_filename, dst_full_path, dst_rel_path, dst_location_id,
+                dst_folder_id, new_type_high, new_type_low, f["file_size"],
+                src.get("description") or "", src.get("tags") or "",
+                src.get("created_date"), src.get("modified_date"),
+                now_iso, now_iso,
+            ),
+        )
+        new_file_id = cursor.lastrowid
+
+        # Clear pending_op on source (it was only set for queueing)
+        await wdb.execute(
+            "UPDATE files SET pending_op = NULL WHERE id = ?", (file_id,)
+        )
+        await wdb.execute(
+            "UPDATE pending_file_ops SET status = 'completed', "
+            "date_completed = ? WHERE id = ?",
+            (now_iso, op_id),
+        )
+
+    # Copy hash record
+    src_hashes = await get_file_hashes([file_id])
+    if file_id in src_hashes:
+        h = src_hashes[file_id]
+        async with hashes_writer() as hdb:
+            await hdb.execute(
+                """INSERT OR REPLACE INTO file_hashes
+                      (file_id, location_id, file_size, hash_partial,
+                       hash_fast, hash_strong, dup_count, excluded, stale)
+                   VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)""",
+                (
+                    new_file_id, dst_location_id,
+                    h.get("file_size", f["file_size"] or 0),
+                    h.get("hash_partial"), h.get("hash_fast"),
+                    h.get("hash_strong"), h.get("excluded", 0),
+                ),
+            )
+
+    # Update destination folder stats (no source removal for copy)
+    await update_stats_for_files(
+        dst_location_id,
+        added=[(dst_folder_id, f["file_size"] or 0, new_type_high, f["hidden"])],
+    )
+
+    return dst_location_id if dst_location_id != location_id else None
 
 
 async def _drain_verify(f, op_id: int, now_iso: str) -> dict | None:

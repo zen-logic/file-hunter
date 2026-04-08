@@ -651,11 +651,12 @@ async def zip_serve(request: Request):
 
 
 async def file_move(request: Request):
-    """POST /api/files/{id:int}/move — rename or move a file."""
+    """POST /api/files/{id:int}/move — rename, move, or copy a file."""
     file_id = int(request.path_params["id"])
     body = await request.json()
     new_name = body.get("name")
     destination_folder_id = body.get("destination_folder_id")
+    copy = body.get("copy", False)
 
     if not new_name and not destination_folder_id:
         return json_error("Provide name and/or destination_folder_id.")
@@ -673,18 +674,20 @@ async def file_move(request: Request):
             file_id,
             new_name=new_name,
             destination_folder_id=destination_folder_id,
+            copy=copy,
         )
     except ValueError as e:
         return json_error(str(e), 400)
 
     await post_op_stats()
 
+    op_type = "copy" if copy else "move"
     if result.get("deferred"):
         await broadcast(
             {
                 "type": "deferred_op_created",
                 "fileId": file_id,
-                "opType": "move",
+                "opType": op_type,
                 "filename": result.get("old_name"),
             }
         )
@@ -697,6 +700,7 @@ async def file_move(request: Request):
                 "newName": result.get("new_name"),
                 "renamed": result.get("renamed", False),
                 "moved": result.get("moved", False),
+                "copied": copy,
             }
         )
 

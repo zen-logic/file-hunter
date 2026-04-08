@@ -414,7 +414,7 @@
         </div>
         <div id="slideshow-move-modal" class="modal-overlay hidden">
             <div class="modal-dialog modal-dialog-wide">
-                <h2 class="modal-title">Move Marked Files</h2>
+                <h2 class="modal-title">Move / Copy Marked Files</h2>
                 <p id="slideshow-move-text" class="modal-text"></p>
                 <div id="slideshow-move-list" class="modal-list-scroll"></div>
                 <div class="modal-field">
@@ -425,6 +425,7 @@
                     </div>
                 </div>
                 <div class="modal-actions">
+                    <label class="search-checkbox"><input type="checkbox" id="slideshow-move-copy"> Copy files</label>
                     <button class="btn" id="slideshow-move-cancel">Cancel</button>
                     <button class="btn btn-primary" id="slideshow-move-submit">Move</button>
                 </div>
@@ -474,7 +475,7 @@
         </div>
         <div id="move-file-modal" class="modal-overlay hidden">
             <div class="modal-dialog modal-dialog-wide">
-                <h2 class="modal-title">Move File</h2>
+                <h2 class="modal-title">Move / Copy</h2>
                 <div class="modal-field">
                     <label class="modal-label">File</label>
                     <div id="move-file-name" class="merge-source-name"></div>
@@ -486,6 +487,7 @@
                 </div>
                 <p id="move-file-error" class="modal-error hidden"></p>
                 <div class="modal-actions">
+                    <label class="search-checkbox"><input type="checkbox" id="move-file-copy"> Copy files</label>
                     <button class="btn" id="move-file-cancel">Cancel</button>
                     <button class="btn btn-primary" id="move-file-submit" disabled>Move</button>
                 </div>

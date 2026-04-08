@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
 from file_hunter.db import execute_write
@@ -474,12 +475,14 @@ async def move_file(
     new_name: str = None,
     destination_folder_id: str = None,
     skip_post_processing: bool = False,
+    copy: bool = False,
 ):
-    """Move and/or rename a file on disk and update the catalog to match.
+    """Move, copy, and/or rename a file on disk and update the catalog.
 
     Handles same-location moves, cross-location moves (copy+delete via agent),
-    renames, and combinations. If the source or destination location is offline,
-    the operation is queued as a deferred op instead of executing immediately.
+    copies (to any destination without deleting source), renames, and
+    combinations. If the destination location is offline (or source for moves),
+    the operation is queued as a deferred op.
 
     Parameters:
         db: Writable database connection (called inside execute_write).
@@ -489,19 +492,21 @@ async def move_file(
             or None if only renaming in place.
         skip_post_processing: If True, skip post_op_stats broadcast. Used by
             batch_move() which does a single post_op_stats at the end.
+        copy: If True, copy instead of move — source is left untouched and
+            a new catalog entry is created at the destination.
 
     Returns:
         dict with keys: id, old_name, new_name, renamed (bool), moved (bool),
-        deferred (bool).
+        deferred (bool), copied (bool).
 
     Raises:
         ValueError: File not found, destination not found, file missing on disk,
             or name collision on rename.
 
     Side effects:
-        Disk I/O — file move/rename or cross-location copy+delete via fs service.
-        DB write + commit — updates filename, full_path, rel_path, location_id,
-        folder_id, file_type_high, file_type_low.
+        Disk I/O — file move/rename/copy via fs service.
+        DB write + commit — for moves: updates existing record. For copies:
+        inserts new file record and new hash record.
         Reclassifies file type if extension changed.
         Broadcasts updated stats via post_op_stats (unless skip_post_processing).
         May queue a deferred_op if location is offline.
@@ -556,8 +561,16 @@ async def move_file(
         dst_online = await fs.dir_exists(final_root, final_location_id)
 
     # If any involved location is offline, defer the operation
-    any_offline = not src_online or (cross_location and not dst_online)
+    # For copy: defer only when destination is offline (source must be readable)
+    # For move: defer when either side is offline
+    if copy:
+        any_offline = not dst_online if cross_location else False
+        if not src_online:
+            raise ValueError("Source location is offline.")
+    else:
+        any_offline = not src_online or (cross_location and not dst_online)
     if any_offline:
+        op_type = "copy" if copy else "move"
         params = {
             "dst_full_path": new_full_path,
             "dst_rel_path": new_rel_path,
@@ -565,7 +578,7 @@ async def move_file(
             "dst_folder_id": final_folder_id,
             "dst_filename": final_name,
         }
-        await queue_deferred_op(db, file_id, src_loc_id, "move", params)
+        await queue_deferred_op(db, file_id, src_loc_id, op_type, params)
         await db.commit()
 
         if not skip_post_processing:
@@ -577,6 +590,7 @@ async def move_file(
             "renamed": renamed,
             "moved": moved,
             "deferred": True,
+            "copied": copy,
         }
 
     # Both sides online — validate and execute immediately
@@ -586,19 +600,28 @@ async def move_file(
     if moved and not await fs.dir_exists(dest_dir, final_location_id):
         raise ValueError("Destination directory does not exist on disk.")
 
-    # Handle collision — auto-rename when moving, error when renaming
+    # Handle collision — auto-rename when moving/copying, error when renaming
     if new_full_path != f["full_path"]:
         if moved and not renamed:
-            # Moving to a different folder — auto-rename on collision
+            # Moving/copying to a different folder — auto-rename on collision
             new_full_path = await fs.unique_dest_path(new_full_path, final_location_id)
             final_name = os.path.basename(new_full_path)
             new_rel_path = os.path.relpath(new_full_path, final_root)
         elif await fs.path_exists(new_full_path, final_location_id):
             raise ValueError("A file with that name already exists at the destination.")
 
-    # Move/rename on disk
+    # Copy or move on disk
     if new_full_path != f["full_path"]:
-        if cross_location:
+        if copy:
+            # Copy always uses fs.copy_file regardless of same/cross location
+            await fs.copy_file(
+                f["full_path"],
+                src_loc_id,
+                new_full_path,
+                final_location_id,
+                mtime=parse_mtime(f["modified_date"]),
+            )
+        elif cross_location:
             # Check if both locations are on the same agent
             dst_row = await db.execute_fetchall(
                 "SELECT agent_id FROM locations WHERE id = ?",
@@ -627,45 +650,107 @@ async def move_file(
     # Reclassify if extension changed
     new_type_high, new_type_low = classify_file(final_name)
 
-    await db.execute(
-        """UPDATE files SET filename = ?, full_path = ?, rel_path = ?,
-              location_id = ?, folder_id = ?,
-              file_type_high = ?, file_type_low = ?
-           WHERE id = ?""",
-        (
-            final_name,
-            new_full_path,
-            new_rel_path,
-            final_location_id,
-            final_folder_id,
-            new_type_high,
-            new_type_low,
-            file_id,
-        ),
-    )
-    await db.commit()
+    if copy:
+        # Insert new file record — source stays untouched
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        cursor = await db.execute(
+            """INSERT INTO files (filename, full_path, rel_path, location_id,
+                  folder_id, file_type_high, file_type_low, file_size,
+                  description, tags, created_date, modified_date,
+                  date_cataloged, date_last_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                final_name,
+                new_full_path,
+                new_rel_path,
+                final_location_id,
+                final_folder_id,
+                new_type_high,
+                new_type_low,
+                f["file_size"],
+                f["description"] or "",
+                f["tags"] or "",
+                f["created_date"],
+                f["modified_date"],
+                now_iso,
+                now_iso,
+            ),
+        )
+        new_file_id = cursor.lastrowid
+        await db.commit()
 
-    # Sync hashes.db location_id for cross-location moves
-    if final_location_id != src_loc_id:
-        async with hashes_writer() as hdb:
-            await hdb.execute(
-                "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
-                (final_location_id, file_id),
+        # Copy hash record from source to new file
+        src_hashes = await get_file_hashes([file_id])
+        if file_id in src_hashes:
+            h = src_hashes[file_id]
+            async with hashes_writer() as hdb:
+                await hdb.execute(
+                    """INSERT OR REPLACE INTO file_hashes
+                          (file_id, location_id, file_size, hash_partial,
+                           hash_fast, hash_strong, dup_count, excluded, stale)
+                       VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)""",
+                    (
+                        new_file_id,
+                        final_location_id,
+                        h.get("file_size", f["file_size"] or 0),
+                        h.get("hash_partial"),
+                        h.get("hash_fast"),
+                        h.get("hash_strong"),
+                        h.get("excluded", 0),
+                    ),
+                )
+
+        # Update destination folder stats (no source removal for copy)
+        file_size = f["file_size"] or 0
+        await update_stats_for_files(
+            final_location_id,
+            added=[(final_folder_id, file_size, new_type_high, f["hidden"])],
+        )
+
+        result_id = new_file_id
+    else:
+        # Move — update existing record
+        await db.execute(
+            """UPDATE files SET filename = ?, full_path = ?, rel_path = ?,
+                  location_id = ?, folder_id = ?,
+                  file_type_high = ?, file_type_low = ?
+               WHERE id = ?""",
+            (
+                final_name,
+                new_full_path,
+                new_rel_path,
+                final_location_id,
+                final_folder_id,
+                new_type_high,
+                new_type_low,
+                file_id,
+            ),
+        )
+        await db.commit()
+
+        # Sync hashes.db location_id for cross-location moves
+        if final_location_id != src_loc_id:
+            async with hashes_writer() as hdb:
+                await hdb.execute(
+                    "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
+                    (final_location_id, file_id),
+                )
+
+        # Update folder/location stats if file changed folder
+        if moved and final_folder_id != f["folder_id"]:
+            file_size = f["file_size"] or 0
+            old_type = f["file_type_high"]
+            hidden = f["hidden"]
+            await update_stats_for_files(
+                src_loc_id,
+                removed=[(f["folder_id"], file_size, old_type, hidden)],
+            )
+            await update_stats_for_files(
+                final_location_id,
+                added=[(final_folder_id, file_size, new_type_high, hidden)],
             )
 
-    # Update folder/location stats if file changed folder
-    if moved and final_folder_id != f["folder_id"]:
-        file_size = f["file_size"] or 0
-        old_type = f["file_type_high"]
-        hidden = f["hidden"]
-        await update_stats_for_files(
-            src_loc_id,
-            removed=[(f["folder_id"], file_size, old_type, hidden)],
-        )
-        await update_stats_for_files(
-            final_location_id,
-            added=[(final_folder_id, file_size, new_type_high, hidden)],
-        )
+        result_id = file_id
 
     if not skip_post_processing:
         loc_ids = (
@@ -676,10 +761,11 @@ async def move_file(
         await post_op_stats(location_ids=loc_ids)
 
     return {
-        "id": file_id,
+        "id": result_id,
         "old_name": old_name,
         "new_name": final_name,
         "renamed": renamed,
         "moved": moved,
         "deferred": False,
+        "copied": copy,
     }

@@ -32,11 +32,12 @@ async def batch_delete_route(request: Request):
 
 
 async def batch_move_route(request: Request):
-    """POST /api/batch/move — move multiple files and folders."""
+    """POST /api/batch/move — move or copy multiple files and folders."""
     body = await request.json()
     file_ids = body.get("file_ids", [])
     folder_ids = body.get("folder_ids", [])
     destination_folder_id = body.get("destination_folder_id")
+    copy = body.get("copy", False)
 
     if not file_ids and not folder_ids:
         return json_error("No items to move.")
@@ -44,7 +45,7 @@ async def batch_move_route(request: Request):
         return json_error("destination_folder_id is required.")
 
     result = await execute_write(
-        batch_move, file_ids, folder_ids, destination_folder_id
+        batch_move, file_ids, folder_ids, destination_folder_id, copy=copy
     )
     await post_op_stats()
 
@@ -53,6 +54,7 @@ async def batch_move_route(request: Request):
             "type": "batch_moved",
             "movedFiles": result["moved_files"],
             "movedFolders": result["moved_folders"],
+            "copied": copy,
         }
     )
 

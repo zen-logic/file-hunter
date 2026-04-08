@@ -78,12 +78,16 @@ const SlideshowTriage = {
         this._movDest = document.getElementById('slideshow-move-dest');
         this._movCancel = document.getElementById('slideshow-move-cancel');
         this._movSubmit = document.getElementById('slideshow-move-submit');
+        this._movCopy = document.getElementById('slideshow-move-copy');
 
         this._movCancel.addEventListener('click', () => this._closeMove());
         this._movOverlay.addEventListener('click', (e) => {
             if (e.target === this._movOverlay) this._closeMove();
         });
         this._movSubmit.addEventListener('click', () => this._doMove());
+        this._movCopy.addEventListener('change', () => {
+            this._movSubmit.textContent = this._movCopy.checked ? 'Copy' : 'Move';
+        });
 
         // Escape key for all dialogs (consolidate handled by unified component)
         document.addEventListener('keydown', (e) => {
@@ -221,7 +225,7 @@ const SlideshowTriage = {
 
     async _showMoveDialog() {
         const n = this._moveItems.length;
-        this._movText.textContent = `Move ${n} file${n !== 1 ? 's' : ''} to a new location.`;
+        this._movText.textContent = `Move or copy ${n} file${n !== 1 ? 's' : ''} to a new location.`;
         this._renderCappedList(this._movList, this._moveItems);
 
         this._selectedDest = null;
@@ -229,6 +233,7 @@ const SlideshowTriage = {
         this._activeDest = this._movDest;
         this._activeTree = this._movTree;
         this._movDest.textContent = 'No folder selected';
+        this._movCopy.checked = false;
         this._movSubmit.textContent = 'Move';
         this._movSubmit.disabled = false;
 
@@ -253,12 +258,15 @@ const SlideshowTriage = {
         if (!this._selectedDest) return;
         const fileIds = this._moveItems.map(item => item.id);
         const n = fileIds.length;
+        const copy = this._movCopy.checked;
+        const verb = copy ? 'Copying' : 'Moving';
 
         API.post('/api/batch/move', {
             file_ids: fileIds,
             destination_folder_id: this._selectedDest,
+            copy: copy,
         });
-        Toast.info(`Moving ${n} file${n !== 1 ? 's' : ''}...`);
+        Toast.info(`${verb} ${n} file${n !== 1 ? 's' : ''}...`);
 
         this._movOverlay.classList.add('hidden');
         this._moveItems = [];

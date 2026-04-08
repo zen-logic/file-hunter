@@ -237,28 +237,30 @@ async def batch_delete(
 
 
 async def batch_move(
-    db, file_ids: list[int], folder_ids: list[int], destination_folder_id: str
+    db, file_ids: list[int], folder_ids: list[int], destination_folder_id: str,
+    *, copy: bool = False,
 ) -> dict:
-    """Move multiple files and folders to a single destination folder or location root.
+    """Move or copy multiple files and folders to a single destination.
 
-    Folders are moved first, then files. Each move is individual (not transactional)
-    so partial success is possible — errors are collected and returned. Per-file
-    post_op_stats is skipped; a single post_op_stats runs at the end covering all
-    affected locations.
+    Folders are processed first, then files. Each operation is individual (not
+    transactional) so partial success is possible — errors are collected and
+    returned. Per-file post_op_stats is skipped; a single post_op_stats runs
+    at the end covering all affected locations.
 
     Parameters:
         db: Writable database connection (called inside execute_write).
-        file_ids: List of numeric file IDs to move.
-        folder_ids: List of numeric folder IDs to move.
+        file_ids: List of numeric file IDs to move/copy.
+        folder_ids: List of numeric folder IDs to move/copy.
         destination_folder_id: Prefixed target ID ("loc-{id}" or "fld-{id}").
+        copy: If True, copy instead of move — source items are left untouched.
 
     Returns:
         dict with keys: moved_files (int), moved_folders (int),
-        errors (list[str] — per-item error messages for failed moves).
+        errors (list[str] — per-item error messages for failed operations).
 
     Side effects:
-        Disk I/O — moves files/folders via fs service and move_file()/move_folder().
-        DB write + commit — per-item catalog updates.
+        Disk I/O — moves/copies files/folders via fs service.
+        DB write + commit — per-item catalog updates/inserts.
         Registers/unregisters an activity entry for status bar progress.
         Broadcasts batch_move_progress via WebSocket per item.
         Broadcasts updated stats via post_op_stats() once at the end.
@@ -267,8 +269,9 @@ async def batch_move(
         Route handler batch_move_route (POST /api/batch/move) via execute_write.
     """
     total = len(file_ids) + len(folder_ids)
-    act_name = f"batch-move-{id(file_ids)}"
-    register(act_name, "Moving files", f"0/{total}")
+    verb = "Copying" if copy else "Moving"
+    act_name = f"batch-{'copy' if copy else 'move'}-{id(file_ids)}"
+    register(act_name, f"{verb} files", f"0/{total}")
 
     moved_files = 0
     moved_folders = 0
@@ -321,7 +324,7 @@ async def batch_move(
                 }
             )
             try:
-                await move_folder(db, fid, destination_folder_id)
+                await move_folder(db, fid, destination_folder_id, copy=copy)
                 moved_folders += 1
             except (ValueError, OSError) as e:
                 errors.append(f"Folder {fid}: {e}")
@@ -345,6 +348,7 @@ async def batch_move(
                     fid,
                     destination_folder_id=destination_folder_id,
                     skip_post_processing=True,
+                    copy=copy,
                 )
                 moved_files += 1
             except (ValueError, OSError) as e:
@@ -368,7 +372,7 @@ async def batch_move(
         affected_loc_ids.add(dest_loc_id)
     await post_op_stats(
         location_ids=affected_loc_ids or None,
-        source=f"batch move ({moved_files} files, {moved_folders} folders)",
+        source=f"batch {'copy' if copy else 'move'} ({moved_files} files, {moved_folders} folders)",
     )
 
     return {
