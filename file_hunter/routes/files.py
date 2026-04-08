@@ -6,7 +6,7 @@ from starlette.responses import Response, StreamingResponse
 
 from file_hunter.core import json_ok, json_error
 from file_hunter.db import read_db, db_writer, execute_write
-from file_hunter.helpers import post_op_stats
+from file_hunter.helpers import parse_folder_id, parse_location_id, post_op_stats
 from file_hunter.services.files import (
     list_files,
     get_file_detail,
@@ -36,10 +36,33 @@ from file_hunter.services.dup_exclude import (
     is_running,
     toggle_dup_exclude,
 )
+from file_hunter.services.quick_scan import run_quick_scan
 from file_hunter.services.settings import set_setting
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
+
+
+async def _freshness_check(folder_id_str: str):
+    """Fire a quick scan for the browsed folder. Background, fire-and-forget."""
+    try:
+        if folder_id_str.startswith("loc-"):
+            loc_id = parse_location_id(folder_id_str)
+            fld_id = None
+        elif folder_id_str.startswith("fld-"):
+            fld_id = parse_folder_id(folder_id_str)
+            async with read_db() as db:
+                row = await db.execute_fetchall(
+                    "SELECT location_id FROM folders WHERE id = ?", (fld_id,)
+                )
+            if not row:
+                return
+            loc_id = row[0]["location_id"]
+        else:
+            return
+        await run_quick_scan(loc_id, fld_id, silent=True)
+    except Exception:
+        logger.exception("Freshness check failed for %s", folder_id_str)
 
 
 async def files_list(request: Request):
@@ -62,6 +85,11 @@ async def files_list(request: Request):
             filter_text=filter_text,
             focus_file_id=focus_file_id,
         )
+
+    # Trigger freshness check on initial folder load (not pagination or post-scan refresh)
+    if page == 0 and not request.query_params.get("fresh"):
+        asyncio.create_task(_freshness_check(folder_id))
+
     return json_ok(data)
 
 

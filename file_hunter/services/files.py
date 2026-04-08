@@ -14,7 +14,10 @@ from file_hunter.helpers import (
     post_op_stats,
     resolve_target,
 )
+from file_hunter.hashes_db import mark_hashes_stale
 from file_hunter.services import fs
+from file_hunter.services.agent_ops import dispatch
+from file_hunter.ws.scan import broadcast
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.services.dup_counts import batch_dup_counts
@@ -370,18 +373,39 @@ async def get_file_detail(db, file_id: int):
         check_location_online, f["location_id"], f["location_root_path"]
     )
 
-    # If stale but location is online, check if file actually exists
+    # Check file freshness against agent
     stale = bool(f["stale"])
-    if stale and location_online:
-        exists = await fs.file_exists(f["full_path"], f["location_id"])
-        if exists:
-
-            async def _clear_stale(conn, fid):
-                await conn.execute("UPDATE files SET stale = 0 WHERE id = ?", (fid,))
-                await conn.commit()
-
-            await execute_write(_clear_stale, file_id)
-            stale = False
+    if location_online:
+        stat = await dispatch("file_stat", f["location_id"], path=f["full_path"])
+        if stat is None:
+            # File gone from disk
+            if not stale:
+                async def _mark_stale(conn, fid):
+                    await conn.execute("UPDATE files SET stale = 1 WHERE id = ?", (fid,))
+                    await conn.commit()
+                await execute_write(_mark_stale, file_id)
+                await mark_hashes_stale([file_id])
+                stale = True
+                await broadcast({"type": "file_freshness", "fileId": file_id, "stale": True})
+        else:
+            # File exists — clear stale if it was marked
+            if stale:
+                async def _clear_stale(conn, fid):
+                    await conn.execute("UPDATE files SET stale = 0 WHERE id = ?", (fid,))
+                    await conn.commit()
+                await execute_write(_clear_stale, file_id)
+                stale = False
+                await broadcast({"type": "file_freshness", "fileId": file_id, "stale": False})
+            # Update size if changed
+            if stat["size"] != f["file_size"]:
+                async def _update_size(conn, fid, new_size):
+                    await conn.execute(
+                        "UPDATE files SET file_size = ? WHERE id = ?", (new_size, fid)
+                    )
+                    await conn.commit()
+                await execute_write(_update_size, file_id, stat["size"])
+                f["file_size"] = stat["size"]
+                await broadcast({"type": "file_freshness", "fileId": file_id, "size": stat["size"]})
 
     # Tree node ID of containing folder (or location root)
     folder_id = f"fld-{f['folder_id']}" if f["folder_id"] else f"loc-{f['location_id']}"

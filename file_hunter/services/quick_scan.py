@@ -35,11 +35,15 @@ from file_hunter_core.classify import classify_file
 logger = logging.getLogger("file_hunter")
 
 
-async def run_quick_scan(location_id: int, folder_id: int | None = None):
+async def run_quick_scan(
+    location_id: int, folder_id: int | None = None, silent: bool = False
+):
     """Quick scan a single directory level.
 
     location_id: the location
     folder_id: specific folder, or None for location root
+    silent: when True, only show UI indicators if changes are found.
+        Used by browse-triggered freshness checks.
     """
     # Resolve paths
     async with read_db() as db:
@@ -76,6 +80,61 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             parent_dup_exclude = 0
             label = location_name
 
+    # Get listing from agent
+    listing = await dispatch("list_dir", location_id, path=scan_path)
+    disk_folders = {f["name"]: f for f in listing["folders"]}
+    disk_files = {f["name"]: f for f in listing["files"]}
+
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # Get current catalog state for this folder
+    async with read_db() as db:
+        if folder_id:
+            cat_folders = await db.execute_fetchall(
+                "SELECT id, name, rel_path FROM folders WHERE parent_id = ?",
+                (folder_id,),
+            )
+            cat_files = await db.execute_fetchall(
+                "SELECT id, filename, rel_path, file_size, file_type_high, hidden, stale FROM files WHERE folder_id = ?",
+                (folder_id,),
+            )
+        else:
+            cat_folders = await db.execute_fetchall(
+                "SELECT id, name, rel_path FROM folders WHERE location_id = ? AND parent_id IS NULL",
+                (location_id,),
+            )
+            cat_files = await db.execute_fetchall(
+                "SELECT id, filename, rel_path, file_size, file_type_high, hidden, stale FROM files WHERE location_id = ? AND folder_id IS NULL",
+                (location_id,),
+            )
+
+    cat_folder_names = {f["name"]: f for f in cat_folders}
+    cat_file_names = {f["filename"]: f for f in cat_files}
+
+    # Check for differences before showing any UI
+    has_new_folders = any(n for n in disk_folders if n not in cat_folder_names)
+    has_missing_folders = any(n for n in cat_folder_names if n not in disk_folders)
+    has_new_files = any(n for n in disk_files if n not in cat_file_names)
+    has_missing_files = any(
+        n for n in cat_file_names
+        if n not in disk_files and not cat_file_names[n]["stale"]
+    )
+    has_recovered = any(
+        n for n in cat_file_names
+        if n in disk_files and cat_file_names[n]["stale"]
+    )
+    has_changes = (
+        has_new_folders or has_missing_folders
+        or has_new_files or has_missing_files or has_recovered
+    )
+
+    if silent and not has_changes:
+        return {
+            "new_folders": 0, "new_files": 0,
+            "stale_folders": 0, "stale_files": 0,
+            "recovered_files": 0,
+        }
+
     act_name = f"quick-scan-{location_id}-{folder_id or 'root'}"
     register(act_name, f"Quick scan: {label}")
 
@@ -89,38 +148,6 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
             }
         )
 
-        # Get listing from agent
-        activity_update(act_name, progress="listing")
-        listing = await dispatch("list_dir", location_id, path=scan_path)
-        disk_folders = {f["name"]: f for f in listing["folders"]}
-        disk_files = {f["name"]: f for f in listing["files"]}
-
-        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-        # Get current catalog state for this folder
-        async with read_db() as db:
-            if folder_id:
-                cat_folders = await db.execute_fetchall(
-                    "SELECT id, name, rel_path FROM folders WHERE parent_id = ?",
-                    (folder_id,),
-                )
-                cat_files = await db.execute_fetchall(
-                    "SELECT id, filename, rel_path, file_size, file_type_high, hidden, stale FROM files WHERE folder_id = ?",
-                    (folder_id,),
-                )
-            else:
-                cat_folders = await db.execute_fetchall(
-                    "SELECT id, name, rel_path FROM folders WHERE location_id = ? AND parent_id IS NULL",
-                    (location_id,),
-                )
-                cat_files = await db.execute_fetchall(
-                    "SELECT id, filename, rel_path, file_size, file_type_high, hidden, stale FROM files WHERE location_id = ? AND folder_id IS NULL",
-                    (location_id,),
-                )
-
-        cat_folder_names = {f["name"]: f for f in cat_folders}
-        cat_file_names = {f["filename"]: f for f in cat_files}
-
         new_folders = 0
         new_files = 0
         stale_folders = 0
@@ -130,8 +157,6 @@ async def run_quick_scan(location_id: int, folder_id: int | None = None):
         recovered_file_ids = []
         stats_added = []  # (folder_id, file_size, file_type_high, is_hidden)
         stats_removed = []  # (folder_id, file_size, file_type_high, is_hidden)
-
-        activity_update(act_name, progress="comparing")
 
         async with db_writer() as db:
             # --- Folders ---

@@ -518,6 +518,10 @@ const FileList = {
         });
         if (this.filterText) params.set('filter', this.filterText);
         if (focusFileId) params.set('focusFile', focusFileId);
+        if (this._fresh) {
+            params.set('fresh', '1');
+            this._fresh = false;
+        }
 
         let res;
         try {

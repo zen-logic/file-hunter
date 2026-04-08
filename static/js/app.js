@@ -1228,7 +1228,7 @@ WS.on('scan_completed', async (msg) => {
         if (msg.recoveredFiles) parts.push(`${msg.recoveredFiles} recovered`);
         const detail = parts.length ? parts.join(', ') : 'no changes';
         logText = `Quick scan completed: <b>${msg.location}</b> — ${detail}`;
-        Toast.success(`Quick scan completed: ${msg.location}`);
+        if (parts.length) Toast.success(`Quick scan completed: ${msg.location} — ${detail}`);
     } else {
         const skippedPart = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
         const stalePart = msg.staleFiles ? `, ${msg.staleFiles.toLocaleString()} stale` : '';
@@ -1238,7 +1238,8 @@ WS.on('scan_completed', async (msg) => {
     Activity.completed('scan-' + msg.locationId, { log: logText });
     Tree.clearScanningLocation(msg.locationId);
     if (msg.totalSize !== undefined) Tree.updateLocationSize(msg.locationId, msg.totalSize);
-    if (selectedNode) await FileList.showFolder(selectedNode.id);
+    FileList._fresh = true;
+    if (selectedNode) await FileList.refreshFolder();
     await StatusBar.loadStats();
     await Detail.refreshStats();
 });
@@ -1925,6 +1926,15 @@ WS.on('upload_duplicate', (msg) => {
 WS.on('upload_file_error', (msg) => {
     Toast.error(`Upload error: ${msg.filename} — ${msg.error}`);
     ActivityLog.add(`Upload error: <b>${msg.filename}</b> — ${msg.error}`);
+});
+
+WS.on('file_freshness', (msg) => {
+    if (!FileList.currentItems) return;
+    const item = FileList.currentItems.find(f => f.id === msg.fileId);
+    if (!item) return;
+    if (msg.stale !== undefined) item.stale = msg.stale;
+    if (msg.size !== undefined) item.size = msg.size;
+    FileList.render();
 });
 
 WS.on('file_added', (msg) => {
