@@ -468,6 +468,69 @@ async def update_file(db, file_id: int, description: str = None, tags: list = No
     await db.commit()
 
 
+async def insert_file_copy(db, *, source_file_id, source_row, filename,
+                          full_path, rel_path, location_id, folder_id):
+    """Insert a new file record as a copy of an existing file.
+
+    Creates the catalog entry and duplicates the hash record from hashes.db.
+    Does NOT copy the physical file — the caller handles that.
+
+    Parameters:
+        db: Writable database connection.
+        source_file_id: ID of the source file (for hash lookup).
+        source_row: Dict with source file metadata — must include:
+            file_size, description, tags, created_date, modified_date.
+        filename: Destination filename.
+        full_path: Destination absolute path.
+        rel_path: Destination relative path.
+        location_id: Destination location ID.
+        folder_id: Destination folder ID (or None for location root).
+
+    Returns:
+        int: The new file ID.
+    """
+    type_high, type_low = classify_file(filename)
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    cursor = await db.execute(
+        """INSERT INTO files (filename, full_path, rel_path, location_id,
+              folder_id, file_type_high, file_type_low, file_size,
+              description, tags, created_date, modified_date,
+              date_cataloged, date_last_seen)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            filename, full_path, rel_path, location_id, folder_id,
+            type_high, type_low, source_row["file_size"],
+            source_row.get("description") or "",
+            source_row.get("tags") or "",
+            source_row.get("created_date"),
+            source_row.get("modified_date"),
+            now_iso, now_iso,
+        ),
+    )
+    new_file_id = cursor.lastrowid
+
+    # Copy hash record from source
+    src_hashes = await get_file_hashes([source_file_id])
+    if source_file_id in src_hashes:
+        h = src_hashes[source_file_id]
+        async with hashes_writer() as hdb:
+            await hdb.execute(
+                """INSERT OR REPLACE INTO file_hashes
+                      (file_id, location_id, file_size, hash_partial,
+                       hash_fast, hash_strong, dup_count, excluded, stale)
+                   VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)""",
+                (
+                    new_file_id, location_id,
+                    h.get("file_size", source_row["file_size"] or 0),
+                    h.get("hash_partial"), h.get("hash_fast"),
+                    h.get("hash_strong"), h.get("excluded", 0),
+                ),
+            )
+
+    return new_file_id
+
+
 async def move_file(
     db,
     file_id: int,
@@ -652,53 +715,17 @@ async def move_file(
 
     if copy:
         # Insert new file record — source stays untouched
-        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        cursor = await db.execute(
-            """INSERT INTO files (filename, full_path, rel_path, location_id,
-                  folder_id, file_type_high, file_type_low, file_size,
-                  description, tags, created_date, modified_date,
-                  date_cataloged, date_last_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                final_name,
-                new_full_path,
-                new_rel_path,
-                final_location_id,
-                final_folder_id,
-                new_type_high,
-                new_type_low,
-                f["file_size"],
-                f["description"] or "",
-                f["tags"] or "",
-                f["created_date"],
-                f["modified_date"],
-                now_iso,
-                now_iso,
-            ),
+        new_file_id = await insert_file_copy(
+            db,
+            source_file_id=file_id,
+            source_row=f,
+            filename=final_name,
+            full_path=new_full_path,
+            rel_path=new_rel_path,
+            location_id=final_location_id,
+            folder_id=final_folder_id,
         )
-        new_file_id = cursor.lastrowid
         await db.commit()
-
-        # Copy hash record from source to new file
-        src_hashes = await get_file_hashes([file_id])
-        if file_id in src_hashes:
-            h = src_hashes[file_id]
-            async with hashes_writer() as hdb:
-                await hdb.execute(
-                    """INSERT OR REPLACE INTO file_hashes
-                          (file_id, location_id, file_size, hash_partial,
-                           hash_fast, hash_strong, dup_count, excluded, stale)
-                       VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)""",
-                    (
-                        new_file_id,
-                        final_location_id,
-                        h.get("file_size", f["file_size"] or 0),
-                        h.get("hash_partial"),
-                        h.get("hash_fast"),
-                        h.get("hash_strong"),
-                        h.get("excluded", 0),
-                    ),
-                )
 
         # Update destination folder stats (no source removal for copy)
         file_size = f["file_size"] or 0

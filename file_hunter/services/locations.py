@@ -12,7 +12,7 @@ from file_hunter.helpers import (
     parse_mtime,
     post_op_stats,
 )
-from file_hunter.hashes_db import get_file_hashes, hashes_writer
+from file_hunter.hashes_db import hashes_writer
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.online_check import (
@@ -848,7 +848,7 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
     }
 
 
-async def _cross_location_dir_move(
+async def _cross_location_dir_transfer(
     db,
     fld,
     src_abs,
@@ -859,8 +859,10 @@ async def _cross_location_dir_move(
     new_prefix,
     dest_root,
     desc_folder_rows,
+    *,
+    delete_source=True,
 ):
-    """Move a folder tree between locations, then delete the source.
+    """Copy a folder tree between locations, optionally deleting the source.
 
     Args:
         db: Read-capable DB connection for querying file rows.
@@ -873,6 +875,8 @@ async def _cross_location_dir_move(
         new_prefix: Destination rel_path prefix for path rewriting.
         dest_root: Destination location root_path.
         desc_folder_rows: Pre-fetched descendant folder rows (id, rel_path).
+        delete_source: If True (default), delete the source tree after all
+            copies succeed. Set to False for copy operations.
 
     Raises:
         Exception: Re-raised from fs operations after cleaning up the partial
@@ -880,17 +884,13 @@ async def _cross_location_dir_move(
 
     Side effects:
         Creates folders and copies files on the destination agent via fs.
-        Deletes the source tree on the source agent after all copies succeed.
+        Optionally deletes the source tree on the source agent.
         Registers/unregisters activity and broadcasts batch_move_progress
         events to the UI.
-
-    Notes:
-        Creates the destination folder structure via fs.dir_create, copies every
-        file via fs.copy_file (streaming, 1MB chunks, constant memory), then
-        deletes the source tree via fs.dir_delete after ALL copies succeed.
-        Called only by move_folder() for cross-location moves.
     """
     log = logging.getLogger(__name__)
+    verb = "Moving" if delete_source else "Copying"
+    verb_past = "move" if delete_source else "copy"
 
     # Count total files for progress
     all_folder_ids = [fld["id"]] + [df["id"] for df in desc_folder_rows]
@@ -901,8 +901,8 @@ async def _cross_location_dir_move(
     )
     total_files = count_row[0]["cnt"] if count_row else 0
 
-    act_name = f"cross-move-{fld['id']}"
-    register(act_name, f"Moving {fld['name']}", f"0/{total_files} files")
+    act_name = f"cross-{verb_past}-{fld['id']}"
+    register(act_name, f"{verb} {fld['name']}", f"0/{total_files} files")
 
     try:
         # 1. Create destination root folder
@@ -911,15 +911,11 @@ async def _cross_location_dir_move(
         # 2. Create subfolder structure (sorted by depth so parents exist first)
         sorted_descs = sorted(desc_folder_rows, key=lambda r: r["rel_path"].count("/"))
         for df in sorted_descs:
-            dest_sub_rel = new_prefix + df["rel_path"][len(old_prefix) :]
+            dest_sub_rel = new_prefix + df["rel_path"][len(old_prefix):]
             dest_sub_abs = os.path.join(dest_root, dest_sub_rel)
             await fs.dir_create(dest_sub_abs, dest_loc_id)
 
         # 3. Copy every file (skip files missing from disk — catalog-only)
-        #    Always copy, never move — source tree is deleted in step 4
-        #    only after ALL copies succeed. This keeps rollback safe:
-        #    if any file fails, the error handler deletes the partial
-        #    destination and the source remains intact.
         copied = 0
         skipped = 0
         for fid in all_folder_ids:
@@ -928,7 +924,7 @@ async def _cross_location_dir_move(
                 (fid,),
             )
             for fr in file_rows:
-                dest_file_rel = new_prefix + fr["rel_path"][len(old_prefix) :]
+                dest_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
                 dest_file_abs = os.path.join(dest_root, dest_file_rel)
                 try:
                     await fs.copy_file(
@@ -956,96 +952,13 @@ async def _cross_location_dir_move(
                     }
                 )
 
-        # 4. All copies succeeded — delete source tree
-        await fs.dir_delete(src_abs, src_loc_id)
-        log.info(
-            "Cross-location dir move complete: %s -> %s (%d files, %d skipped)",
-            src_abs,
-            dest_abs,
-            copied,
-            skipped,
-        )
-
-    except Exception:
-        # Clean up partial destination, leave source untouched
-        try:
-            await fs.dir_delete(dest_abs, dest_loc_id)
-        except Exception:
-            pass  # best-effort cleanup
-        raise
-    finally:
-        unregister(act_name)
-        await broadcast({"type": "status_bar_idle"})
-
-
-async def _cross_location_dir_copy(
-    db, fld, src_abs, dest_abs, src_loc_id, dest_loc_id,
-    old_prefix, new_prefix, dest_root, desc_folder_rows,
-):
-    """Copy a folder tree to a destination, leaving the source intact.
-
-    Same physical copy logic as _cross_location_dir_move but skips the
-    source deletion step. Used by move_folder(copy=True).
-    """
-    log = logging.getLogger(__name__)
-
-    all_folder_ids = [fld["id"]] + [df["id"] for df in desc_folder_rows]
-    ph = ",".join("?" for _ in all_folder_ids)
-    count_row = await db.execute_fetchall(
-        f"SELECT COUNT(*) AS cnt FROM files WHERE folder_id IN ({ph})",
-        all_folder_ids,
-    )
-    total_files = count_row[0]["cnt"] if count_row else 0
-
-    act_name = f"cross-copy-{fld['id']}"
-    register(act_name, f"Copying {fld['name']}", f"0/{total_files} files")
-
-    try:
-        await fs.dir_create(dest_abs, dest_loc_id)
-
-        sorted_descs = sorted(desc_folder_rows, key=lambda r: r["rel_path"].count("/"))
-        for df in sorted_descs:
-            dest_sub_rel = new_prefix + df["rel_path"][len(old_prefix):]
-            dest_sub_abs = os.path.join(dest_root, dest_sub_rel)
-            await fs.dir_create(dest_sub_abs, dest_loc_id)
-
-        copied = 0
-        skipped = 0
-        for fid in all_folder_ids:
-            file_rows = await db.execute_fetchall(
-                "SELECT id, full_path, rel_path, modified_date FROM files WHERE folder_id = ?",
-                (fid,),
-            )
-            for fr in file_rows:
-                dest_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
-                dest_file_abs = os.path.join(dest_root, dest_file_rel)
-                try:
-                    await fs.copy_file(
-                        fr["full_path"], src_loc_id,
-                        dest_file_abs, dest_loc_id,
-                        mtime=parse_mtime(fr["modified_date"]),
-                    )
-                    copied += 1
-                except (RuntimeError, ValueError, OSError) as e:
-                    err = str(e).lower()
-                    if "404" in err or "not found" in err:
-                        log.warning("Skipping missing file: %s", fr["full_path"])
-                        skipped += 1
-                    else:
-                        raise
-                update(act_name, progress=f"{copied}/{total_files} files")
-                await broadcast(
-                    {
-                        "type": "batch_move_progress",
-                        "done": copied + skipped,
-                        "total": total_files,
-                        "name": fld["name"],
-                    }
-                )
+        # 4. Optionally delete source tree
+        if delete_source:
+            await fs.dir_delete(src_abs, src_loc_id)
 
         log.info(
-            "Dir copy complete: %s -> %s (%d files, %d skipped)",
-            src_abs, dest_abs, copied, skipped,
+            "Cross-location dir %s complete: %s -> %s (%d files, %d skipped)",
+            verb_past, src_abs, dest_abs, copied, skipped,
         )
 
     except Exception:
@@ -1086,8 +999,8 @@ async def move_folder(
         cache invalidation.
 
     Notes:
-        Cross-location moves are handled by _cross_location_dir_move (copy
-        then delete, with rollback on failure). Called from the move-folder
+        Cross-location moves/copies are handled by _cross_location_dir_transfer
+        (with rollback on failure). Called from the move-folder
         HTTP endpoint.
     """
     if not destination_parent_id and not new_name:
@@ -1217,16 +1130,11 @@ async def move_folder(
     )
 
     # Copy or move on disk
-    if copy:
-        # Copy always uses the cross-location pattern: create dirs, copy files
-        await _cross_location_dir_copy(
+    if copy or cross_location:
+        await _cross_location_dir_transfer(
             db, fld, src_abs, dest_abs, src_loc_id, dest_loc_id,
             old_prefix, new_prefix, dest_root, desc_folder_rows,
-        )
-    elif cross_location:
-        await _cross_location_dir_move(
-            db, fld, src_abs, dest_abs, src_loc_id, dest_loc_id,
-            old_prefix, new_prefix, dest_root, desc_folder_rows,
+            delete_source=not copy,
         )
     else:
         await fs.dir_move(src_abs, dest_abs, src_loc_id)
@@ -1235,8 +1143,6 @@ async def move_folder(
 
     if copy:
         # Insert new folder and file records — source stays untouched
-        from file_hunter.core import classify_file
-
         now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
 
         # Map old folder IDs to new folder IDs
@@ -1275,12 +1181,13 @@ async def move_folder(
             folder_id_map[df["id"]] = cursor.lastrowid
 
         # Insert file copies for all folders
+        from file_hunter.services.files import insert_file_copy
+
         all_folder_ids = [folder_id] + [df["id"] for df in desc_folder_rows]
         for fid in all_folder_ids:
             file_rows = await db.execute_fetchall(
-                """SELECT id, filename, rel_path, file_type_high, file_type_low,
-                          file_size, description, tags, created_date, modified_date,
-                          hidden
+                """SELECT id, filename, rel_path, file_size,
+                          description, tags, created_date, modified_date
                    FROM files WHERE folder_id = ?""",
                 (fid,),
             )
@@ -1288,38 +1195,16 @@ async def move_folder(
             for fr in file_rows:
                 new_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
                 new_full_path = os.path.join(dest_root, new_file_rel)
-                cursor = await db.execute(
-                    """INSERT INTO files (filename, full_path, rel_path, location_id,
-                          folder_id, file_type_high, file_type_low, file_size,
-                          description, tags, created_date, modified_date,
-                          date_cataloged, date_last_seen)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        fr["filename"], new_full_path, new_file_rel, dest_loc_id,
-                        new_folder_id, fr["file_type_high"], fr["file_type_low"],
-                        fr["file_size"], fr["description"] or "", fr["tags"] or "",
-                        fr["created_date"], fr["modified_date"], now_iso, now_iso,
-                    ),
+                await insert_file_copy(
+                    db,
+                    source_file_id=fr["id"],
+                    source_row=fr,
+                    filename=fr["filename"],
+                    full_path=new_full_path,
+                    rel_path=new_file_rel,
+                    location_id=dest_loc_id,
+                    folder_id=new_folder_id,
                 )
-                new_file_id = cursor.lastrowid
-
-                # Copy hash record
-                src_hashes = await get_file_hashes([fr["id"]])
-                if fr["id"] in src_hashes:
-                    h = src_hashes[fr["id"]]
-                    async with hashes_writer() as hdb:
-                        await hdb.execute(
-                            """INSERT OR REPLACE INTO file_hashes
-                                  (file_id, location_id, file_size, hash_partial,
-                                   hash_fast, hash_strong, dup_count, excluded, stale)
-                               VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)""",
-                            (
-                                new_file_id, dest_loc_id,
-                                h.get("file_size", fr["file_size"] or 0),
-                                h.get("hash_partial"), h.get("hash_fast"),
-                                h.get("hash_strong"), h.get("excluded", 0),
-                            ),
-                        )
 
         await db.commit()
         result_id = folder_id_map[folder_id]

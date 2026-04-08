@@ -343,6 +343,7 @@ async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
     Source file and catalog entry are left untouched.
     """
     from file_hunter.core import classify_file
+    from file_hunter.services.files import insert_file_copy
 
     file_id = f["id"]
     full_path = f["full_path"]
@@ -370,33 +371,26 @@ async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
         mtime=parse_mtime(f["modified_date"]),
     )
 
-    new_type_high, new_type_low = classify_file(dst_filename)
-
     # Read source file's description and tags
     async with read_db() as rdb:
         src_row = await rdb.execute_fetchall(
-            "SELECT description, tags, created_date, modified_date FROM files WHERE id = ?",
+            "SELECT file_size, description, tags, created_date, modified_date FROM files WHERE id = ?",
             (file_id,),
         )
-    src = src_row[0] if src_row else {}
+    src = dict(src_row[0]) if src_row else {"file_size": f["file_size"]}
 
-    # Insert new file record
+    # Insert new catalog entry + hash copy
     async with db_writer() as wdb:
-        cursor = await wdb.execute(
-            """INSERT INTO files (filename, full_path, rel_path, location_id,
-                  folder_id, file_type_high, file_type_low, file_size,
-                  description, tags, created_date, modified_date,
-                  date_cataloged, date_last_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                dst_filename, dst_full_path, dst_rel_path, dst_location_id,
-                dst_folder_id, new_type_high, new_type_low, f["file_size"],
-                src.get("description") or "", src.get("tags") or "",
-                src.get("created_date"), src.get("modified_date"),
-                now_iso, now_iso,
-            ),
+        new_file_id = await insert_file_copy(
+            wdb,
+            source_file_id=file_id,
+            source_row=src,
+            filename=dst_filename,
+            full_path=dst_full_path,
+            rel_path=dst_rel_path,
+            location_id=dst_location_id,
+            folder_id=dst_folder_id,
         )
-        new_file_id = cursor.lastrowid
 
         # Clear pending_op on source (it was only set for queueing)
         await wdb.execute(
@@ -408,25 +402,8 @@ async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
             (now_iso, op_id),
         )
 
-    # Copy hash record
-    src_hashes = await get_file_hashes([file_id])
-    if file_id in src_hashes:
-        h = src_hashes[file_id]
-        async with hashes_writer() as hdb:
-            await hdb.execute(
-                """INSERT OR REPLACE INTO file_hashes
-                      (file_id, location_id, file_size, hash_partial,
-                       hash_fast, hash_strong, dup_count, excluded, stale)
-                   VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)""",
-                (
-                    new_file_id, dst_location_id,
-                    h.get("file_size", f["file_size"] or 0),
-                    h.get("hash_partial"), h.get("hash_fast"),
-                    h.get("hash_strong"), h.get("excluded", 0),
-                ),
-            )
-
-    # Update destination folder stats (no source removal for copy)
+    # Update destination folder stats
+    new_type_high, _ = classify_file(dst_filename)
     await update_stats_for_files(
         dst_location_id,
         added=[(dst_folder_id, f["file_size"] or 0, new_type_high, f["hidden"])],
