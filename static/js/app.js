@@ -160,7 +160,12 @@ function wireDownloadZipBtn(node) {
             if (resp.ok) {
                 _pendingZipBtn = btn;
                 _pendingZipOrigText = 'Download ZIP';
-                Toast.info(`Building ZIP: ${target.label || 'download'}`);
+                const zipLabel = target.label || 'download';
+                Activity.started('zip-' + resp.data.jobId, {
+                    label: `Building ZIP: ${zipLabel}`,
+                    detail: `0/${resp.data.total} files`,
+                    log: `ZIP build started: <b>${zipLabel}</b>`,
+                });
             } else {
                 btn.disabled = false;
                 btn.textContent = 'Download ZIP';

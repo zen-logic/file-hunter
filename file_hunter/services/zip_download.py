@@ -7,6 +7,11 @@ import tempfile
 import time
 import zipfile
 
+from file_hunter.services.activity import (
+    register as activity_register,
+    update as activity_update,
+    unregister as activity_unregister,
+)
 from file_hunter.services.content_proxy import stream_agent_file
 from file_hunter.ws.scan import broadcast
 
@@ -37,6 +42,7 @@ async def start_build(files: list[tuple[str, str, int]], zip_name: str) -> str:
         "task": None,
         "created": time.monotonic(),
     }
+    activity_register(job_id, f"Building ZIP: {zip_name}", progress=f"0/{len(files)}")
     task = asyncio.create_task(_build(job_id, files, zip_name))
     _jobs[job_id]["task"] = task
     return job_id
@@ -65,6 +71,7 @@ async def _build(job_id: str, files: list[tuple[str, str, int]], zip_name: str):
                 done += 1
                 job["progress"] = done
                 if done % 10 == 0 or done == total:
+                    activity_update(job_id, progress=f"{done}/{total}")
                     await broadcast(
                         {
                             "type": "zip_progress",
@@ -79,6 +86,7 @@ async def _build(job_id: str, files: list[tuple[str, str, int]], zip_name: str):
         job["file_size"] = file_size
         job["status"] = "ready"
 
+        activity_unregister(job_id)
         log.info("ZIP ready: %s (%d files, %d bytes)", zip_name, total, file_size)
         await broadcast(
             {
@@ -93,9 +101,11 @@ async def _build(job_id: str, files: list[tuple[str, str, int]], zip_name: str):
         asyncio.create_task(_cleanup_after_timeout(job_id))
 
     except asyncio.CancelledError:
+        activity_unregister(job_id)
         _cleanup_job(job_id)
         log.info("ZIP build cancelled: %s", zip_name)
     except Exception:
+        activity_unregister(job_id)
         log.error("ZIP build failed: %s", zip_name, exc_info=True)
         _cleanup_job(job_id)
         await broadcast(
