@@ -91,7 +91,7 @@ async def run_quick_scan(
     async with read_db() as db:
         if folder_id:
             cat_folders = await db.execute_fetchall(
-                "SELECT id, name, rel_path FROM folders WHERE parent_id = ?",
+                "SELECT id, name, rel_path, stale FROM folders WHERE parent_id = ?",
                 (folder_id,),
             )
             cat_files = await db.execute_fetchall(
@@ -100,7 +100,7 @@ async def run_quick_scan(
             )
         else:
             cat_folders = await db.execute_fetchall(
-                "SELECT id, name, rel_path FROM folders WHERE location_id = ? AND parent_id IS NULL",
+                "SELECT id, name, rel_path, stale FROM folders WHERE location_id = ? AND parent_id IS NULL",
                 (location_id,),
             )
             cat_files = await db.execute_fetchall(
@@ -113,7 +113,10 @@ async def run_quick_scan(
 
     # Check for differences before showing any UI
     has_new_folders = any(n for n in disk_folders if n not in cat_folder_names)
-    has_missing_folders = any(n for n in cat_folder_names if n not in disk_folders)
+    has_missing_folders = any(
+        n for n in cat_folder_names
+        if n not in disk_folders and not cat_folder_names[n]["stale"]
+    )
     has_new_files = any(n for n in disk_files if n not in cat_file_names)
     has_missing_files = any(
         n for n in cat_file_names
@@ -183,7 +186,7 @@ async def run_quick_scan(
 
             # Missing folders — mark folder and all descendant folders/files stale
             for name, cat in cat_folder_names.items():
-                if name not in disk_folders:
+                if name not in disk_folders and not cat["stale"]:
                     await db.execute(
                         """WITH RECURSIVE desc(id) AS (
                                SELECT ? UNION ALL
@@ -314,6 +317,7 @@ async def run_quick_scan(
             root_path,
             label,
             folder_id=folder_id,
+            root_only=not folder_id,
         )
         new_file_ids.extend(recovery_ids)
 

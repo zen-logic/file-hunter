@@ -1467,7 +1467,41 @@ async def write_hash_partials(
 
     Resolves file_ids from catalog by rel_path, then updates hash_partial
     in hashes.db. Shared by rescan, quick scan, and recovery paths.
+
+    Files the agent reports as "File not found" are marked stale — they
+    exist in the catalog but are gone from disk.
     """
+    # Mark ghost files stale so they stop cycling through recovery
+    not_found = [
+        e for e in result.get("errors", []) if e.get("error") == "File not found"
+    ]
+    if not_found:
+        nf_rels = [os.path.relpath(e["path"], root_path) for e in not_found]
+        async with read_db() as rdb:
+            ph = ",".join("?" for _ in nf_rels)
+            nf_rows = await rdb.execute_fetchall(
+                f"SELECT id FROM files "
+                f"WHERE location_id = ? AND rel_path IN ({ph}) AND stale = 0",
+                [location_id] + nf_rels,
+            )
+        if nf_rows:
+            nf_ids = [r["id"] for r in nf_rows]
+            async with db_writer() as db:
+                ph = ",".join("?" for _ in nf_ids)
+                await db.execute(
+                    f"UPDATE files SET stale = 1 WHERE id IN ({ph})", nf_ids
+                )
+            async with hashes_writer() as hdb:
+                ph = ",".join("?" for _ in nf_ids)
+                await hdb.execute(
+                    f"DELETE FROM file_hashes WHERE file_id IN ({ph})", nf_ids
+                )
+            log.info(
+                "Marked %d files stale (not found on disk) for location %d",
+                len(nf_ids),
+                location_id,
+            )
+
     hash_results = result.get("results", [])
     if not hash_results:
         return
@@ -1514,6 +1548,7 @@ async def recover_missing_hash_partials(
     location_name: str,
     *,
     folder_id: int | None = None,
+    root_only: bool = False,
     scan_prefix: str | None = None,
 ) -> list[int]:
     """Find files in the catalog with no hash_partial and hash them via agent.
@@ -1522,8 +1557,8 @@ async def recover_missing_hash_partials(
     was interrupted. This ensures a user-initiated scan leaves things correct
     regardless of prior history.
 
-    Scoping: folder_id (quick scan), scan_prefix (subfolder rescan), or
-    neither (full location).
+    Scoping: folder_id (quick scan subfolder), root_only (quick scan at root),
+    scan_prefix (subfolder rescan), or none (full location).
 
     Returns list of recovered file IDs (for inclusion in affected_file_ids).
     """
@@ -1532,6 +1567,8 @@ async def recover_missing_hash_partials(
     if folder_id:
         scope_filter = " AND f.folder_id = ?"
         scope_params.append(folder_id)
+    elif root_only:
+        scope_filter = " AND f.folder_id IS NULL"
     elif scan_prefix:
         scope_filter = " AND f.rel_path LIKE ?"
         scope_params.append(scan_prefix + "%")
