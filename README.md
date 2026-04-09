@@ -8,8 +8,6 @@ Built for real-world scale. The UI stays responsive during scans.
 
 ![File Hunter](docs/img/app-screenshot.png)
 
-This application was developed with the assistance of AI tools (Claude Opus, Kimi K2.5 and Qwen3-Coder-Next). These tools were used for code linting, syntax checking, testing, performance optimisation (particularly the SQLite WAL optimisation and DB locking operations), the theme engine and code refactoring. All generated code is manually reviewed and heavily tested in real use.
-
 ## Features
 
 | Feature | Description |
@@ -103,6 +101,10 @@ No cloud services. No telemetry. No framework dependencies. Your files never lea
 File Hunter is free, open source, and always will be. File Hunter Pro is an optional extension that adds remote agent support - install a lightweight agent on any machine on your network and its drives appear as locations in your catalog. Browse, search, scan, preview, and stream content from remote machines as if the files were local. Duplicates are detected across all machines using the same three-gate hashing strategy. Pro also includes a read-only WebDAV server for mounting your catalog as a network drive.
 
 See [filehunter.zenlogic.uk](https://filehunter.zenlogic.uk) for details.
+
+## AI Disclosure
+
+This application was developed with the assistance of AI tools (Claude Opus, Kimi K2.5 and Qwen3-Coder-Next). These tools were used for code linting, syntax checking, testing, performance optimisation (particularly the SQLite WAL optimisation and DB locking operations), the theme engine and code refactoring. All generated code is manually reviewed and heavily tested in real use.
 
 ## Links
 
