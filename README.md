@@ -100,13 +100,13 @@ No cloud services. No telemetry. No framework dependencies. Your files never lea
 
 ## File Hunter Pro
 
-File Hunter is free, open source, and always will be. File Hunter Pro is an optional extension that adds remote agent support - install a lightweight agent on any machine on your network and its drives appear as locations in your catalog. Browse, search, scan, preview, and stream content from remote machines as if the files were local. Duplicates are detected across all machines using the same three-gate hashing strategy.
+File Hunter is free, open source, and always will be. File Hunter Pro is an optional extension that adds remote agent support - install a lightweight agent on any machine on your network and its drives appear as locations in your catalog. Browse, search, scan, preview, and stream content from remote machines as if the files were local. Duplicates are detected across all machines using the same three-gate hashing strategy. Pro also includes a read-only WebDAV server for mounting your catalog as a network drive.
 
-See the [landing page](https://zen-logic.github.io/file-hunter/) for details.
+See [filehunter.zenlogic.uk](https://filehunter.zenlogic.uk) for details.
 
 ## Links
 
-- [Landing page](https://zen-logic.github.io/file-hunter/)
+- [Website](https://filehunter.zenlogic.uk)
 
 ## License
 
