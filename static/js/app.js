@@ -430,6 +430,13 @@ function startApp(user) {
         },
     });
     Keyboard.setSelectAllHandler(() => FileList._selectAll());
+    Keyboard.setNewLocationHandler(() => AddLocationModal.open());
+    Keyboard.setScanHandler(() => scanBtn.click());
+    Keyboard.setDeleteHandler(() => {
+        const delBtn = document.getElementById('detail-delete-file')
+            || document.getElementById('detail-delete-folder');
+        if (delBtn) delBtn.click();
+    });
 
     // About dialog
     About.init();

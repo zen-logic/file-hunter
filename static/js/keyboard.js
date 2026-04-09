@@ -3,6 +3,9 @@ const Keyboard = {
     _handlers: {},
     _searchToggle: null,
     _selectAllHandler: null,
+    _newLocationHandler: null,
+    _scanHandler: null,
+    _deleteHandler: null,
     _panels: {},
 
     init() {
@@ -47,6 +50,18 @@ const Keyboard = {
 
     setSelectAllHandler(fn) {
         this._selectAllHandler = fn;
+    },
+
+    setNewLocationHandler(fn) {
+        this._newLocationHandler = fn;
+    },
+
+    setScanHandler(fn) {
+        this._scanHandler = fn;
+    },
+
+    setDeleteHandler(fn) {
+        this._deleteHandler = fn;
     },
 
     setActivePanel(name) {
@@ -106,7 +121,23 @@ const Keyboard = {
             return;
         }
 
-        // 3. Input/textarea/select focused?
+        // 3. Tab — cycle panels
+        if (e.key === 'Tab' && !this._isInputFocused()) {
+            e.preventDefault();
+            const order = ['tree', 'filelist', 'detail'];
+            const idx = order.indexOf(this._activePanel);
+            const next = e.shiftKey
+                ? order[(idx - 1 + order.length) % order.length]
+                : order[(idx + 1) % order.length];
+            const el = this._panels[next];
+            if (el) {
+                el.focus();
+                this.setActivePanel(next);
+            }
+            return;
+        }
+
+        // 4. Input/textarea/select focused?
         if (this._isInputFocused()) {
             // Escape in a panel filter input: clear and blur
             if (e.key === 'Escape') {
@@ -142,7 +173,28 @@ const Keyboard = {
             return;
         }
 
-        // 5. Route to active panel handler
+        // 5. N — new location
+        if (e.key === 'n' || e.key === 'N') {
+            e.preventDefault();
+            if (this._newLocationHandler) this._newLocationHandler();
+            return;
+        }
+
+        // 6. S — scan selected location
+        if (e.key === 's' || e.key === 'S') {
+            e.preventDefault();
+            if (this._scanHandler) this._scanHandler();
+            return;
+        }
+
+        // 7. Delete — delete selected file(s)
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            e.preventDefault();
+            if (this._deleteHandler) this._deleteHandler();
+            return;
+        }
+
+        // 8. Route to active panel handler
         if (this._activePanel && this._handlers[this._activePanel]) {
             this._handlers[this._activePanel](e);
         }
