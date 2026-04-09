@@ -82,7 +82,7 @@ On first run, the launcher prompts for host and port, creates a virtual environm
 
 1. On first launch, create your user account in the setup screen
 2. Click **+ Add Location** and browse to a folder (a USB drive, a subfolder on a disk, a network mount, etc.)
-3. A scan starts automatically - file metadata and hashes are computed and stored in the catalog
+3. Select the location and click **Scan** - file metadata and hashes are computed and stored in the catalog
 4. Browse the location tree, search files, review duplicates, and consolidate when ready
 
 Everything is self-contained in the install directory - database, config, and virtual environment. Move the folder and it still works. Delete it and it's completely gone.
@@ -91,8 +91,8 @@ Everything is self-contained in the install directory - database, config, and vi
 
 - **Backend** - Python, Starlette, uvicorn, aiosqlite
 - **Frontend** - vanilla HTML/CSS/JavaScript (no frameworks, no build step)
-- **Database** - SQLite in WAL mode
-- **Hashing** - xxHash64 + SHA-256
+- **Database** - SQLite in WAL mode (three databases: catalog, hashes, stats)
+- **Hashing** - xxHash64 (partial + fast), optional SHA-256 strong hash
 
 No cloud services. No telemetry. No framework dependencies. Your files never leave your machine.
 
