@@ -968,6 +968,17 @@ const Tree = {
             if (this.onSelect) this.onSelect(node);
         });
 
+        // Double-click: collapse if expanded
+        if (hasChildren) {
+            item.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                if (!node.expanded) return;
+                node.expanded = false;
+                this._expandedIds.delete(node.id);
+                this.render();
+            });
+        }
+
         parent.appendChild(item);
 
         if (node.children && node.children.length > 0 && (node.expanded || this.filterText)) {
