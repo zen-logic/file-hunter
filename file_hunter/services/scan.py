@@ -808,7 +808,7 @@ async def _bulk_ingest(
             rel_path = r["rel_path"]
             filename = os.path.basename(rel_path)
             full_path = os.path.join(root_path, rel_path)
-            file_type_high, file_type_low = classify_file(rel_path)
+            file_type_high, file_type_low = classify_file(filename)
             is_hidden = 1 if filename.startswith(".") else 0
             rel_dir = r["rel_dir"]
 
@@ -1285,7 +1285,7 @@ async def _diff_and_update(
                 rel_path = r["rel_path"]
                 filename = os.path.basename(rel_path)
                 full_path = os.path.join(root_path, rel_path)
-                file_type_high, file_type_low = classify_file(rel_path)
+                file_type_high, file_type_low = classify_file(filename)
                 is_hidden = 1 if filename.startswith(".") else 0
                 rel_dir = r["rel_dir"]
 
@@ -1392,7 +1392,7 @@ async def _diff_and_update(
                 rel_path = r["rel_path"]
                 filename = os.path.basename(rel_path)
                 full_path = os.path.join(root_path, rel_path)
-                file_type_high, file_type_low = classify_file(rel_path)
+                file_type_high, file_type_low = classify_file(filename)
                 is_hidden = 1 if filename.startswith(".") else 0
                 rel_dir = r["rel_dir"]
 
@@ -1455,8 +1455,9 @@ async def _diff_and_update(
             folder_id = None
             if rel_dir and rel_dir in folder_cache:
                 folder_id = folder_cache[rel_dir][0]
-            file_type_high = classify_file(r["rel_path"])[0]
-            is_hidden = 1 if os.path.basename(r["rel_path"]).startswith(".") else 0
+            filename = os.path.basename(r["rel_path"])
+            file_type_high = classify_file(filename)[0]
+            is_hidden = 1 if filename.startswith(".") else 0
             changed_added.append((folder_id, r["file_size"], file_type_high, is_hidden))
 
         await apply_file_deltas(
