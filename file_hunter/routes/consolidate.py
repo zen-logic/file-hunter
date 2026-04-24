@@ -150,13 +150,17 @@ async def consolidate_preview(request: Request):
         return json_ok({"total_dups": 0, "filename_matched_dups": 0, "duplicates": []})
 
     # Get filenames and effective hashes for all selected files
+    filename_by_id = {}
     async with read_db() as db:
-        ph = ",".join("?" for _ in file_ids)
-        file_rows = await db.execute_fetchall(
-            f"SELECT id, filename FROM files WHERE id IN ({ph})",
-            file_ids,
-        )
-    filename_by_id = {r["id"]: r["filename"] for r in file_rows}
+        for i in range(0, len(file_ids), 500):
+            batch = file_ids[i : i + 500]
+            ph = ",".join("?" for _ in batch)
+            rows = await db.execute_fetchall(
+                f"SELECT id, filename FROM files WHERE id IN ({ph})",
+                batch,
+            )
+            for r in rows:
+                filename_by_id[r["id"]] = r["filename"]
     hash_map = await get_effective_hashes(file_ids)
 
     total_dups = 0
@@ -197,28 +201,30 @@ async def consolidate_preview(request: Request):
     duplicates = []
     if all_dup_ids:
         dup_id_list = list(all_dup_ids)
-        dph = ",".join("?" for _ in dup_id_list)
         async with read_db() as db:
-            dup_detail_rows = await db.execute_fetchall(
-                f"SELECT f.id, f.filename, f.rel_path, f.location_id, "
-                f"l.name as location_name, a.name as agent_name "
-                f"FROM files f "
-                f"JOIN locations l ON l.id = f.location_id "
-                f"LEFT JOIN agents a ON a.id = l.agent_id "
-                f"WHERE f.id IN ({dph})",
-                dup_id_list,
-            )
-        for d in dup_detail_rows:
-            duplicates.append(
-                {
-                    "fileId": d["id"],
-                    "name": d["filename"],
-                    "location": d["location_name"],
-                    "agent": d["agent_name"] or "",
-                    "locationId": d["location_id"],
-                    "path": f"/{d['rel_path']}",
-                }
-            )
+            for i in range(0, len(dup_id_list), 500):
+                batch = dup_id_list[i : i + 500]
+                dph = ",".join("?" for _ in batch)
+                rows = await db.execute_fetchall(
+                    f"SELECT f.id, f.filename, f.rel_path, f.location_id, "
+                    f"l.name as location_name, a.name as agent_name "
+                    f"FROM files f "
+                    f"JOIN locations l ON l.id = f.location_id "
+                    f"LEFT JOIN agents a ON a.id = l.agent_id "
+                    f"WHERE f.id IN ({dph})",
+                    batch,
+                )
+                for d in rows:
+                    duplicates.append(
+                        {
+                            "fileId": d["id"],
+                            "name": d["filename"],
+                            "location": d["location_name"],
+                            "agent": d["agent_name"] or "",
+                            "locationId": d["location_id"],
+                            "path": f"/{d['rel_path']}",
+                        }
+                    )
 
     return json_ok(
         {
