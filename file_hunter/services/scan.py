@@ -649,6 +649,9 @@ async def _stream_to_temp_db(
                 tmp_db.commit()
                 hash_batch.clear()
 
+        elif rtype == "error":
+            raise RuntimeError(f"Agent error during scan: {record['message']}")
+
         elif rtype == "end":
             pass
 

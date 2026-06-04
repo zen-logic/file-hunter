@@ -497,6 +497,8 @@ def _parse_tsv_line(line: str) -> dict | None:
         return {"type": "phase", "phase": parts[1], "total": int(parts[2])}
     if t == "E" and len(parts) >= 3:
         return {"type": "end", "dirs": int(parts[1]), "files": int(parts[2])}
+    if t == "X" and len(parts) >= 2:
+        return {"type": "error", "message": parts[1]}
     return None
 
 
