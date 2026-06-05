@@ -453,7 +453,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
         logger.info("Scan cancelled: location #%d (%s)", location_id, location_name)
         raise
 
-    except (ConnectionError, OSError, httpx.ConnectError) as e:
+    except (ConnectionError, OSError, httpx.ConnectError, httpx.TransportError) as e:
         drainer_task.cancel()
         async with db_writer() as db:
             params["scan_id"] = scan_id
@@ -555,17 +555,14 @@ async def _stream_to_temp_db(
 
     Called by run_scan for both first-scan and rescan paths.
     """
-    # Remove stale temp file from interrupted scans
-    if os.path.exists(tmp_path):
-        os.unlink(tmp_path)
-
+    resuming = os.path.exists(tmp_path)
     tmp_db = sqlite3.connect(tmp_path)
     tmp_db.execute("PRAGMA journal_mode=WAL")
     tmp_db.execute("PRAGMA synchronous=OFF")  # temp DB, speed over safety
     tmp_db.execute(
-        """CREATE TABLE files (
+        """CREATE TABLE IF NOT EXISTS files (
             rel_dir TEXT NOT NULL,
-            rel_path TEXT NOT NULL,
+            rel_path TEXT NOT NULL UNIQUE,
             file_size INTEGER NOT NULL,
             mtime TEXT NOT NULL,
             ctime TEXT NOT NULL,
@@ -573,11 +570,19 @@ async def _stream_to_temp_db(
             hash_partial TEXT
         )"""
     )
-    tmp_db.execute("CREATE TABLE dirs (rel_dir TEXT PRIMARY KEY)")
+    tmp_db.execute("CREATE TABLE IF NOT EXISTS dirs (rel_dir TEXT PRIMARY KEY)")
     tmp_db.commit()
 
-    total_files = 0
-    total_dirs = 0
+    if resuming:
+        total_files = tmp_db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        total_dirs = tmp_db.execute("SELECT COUNT(*) FROM dirs").fetchone()[0]
+        logger.info(
+            "Resuming scan stream: %d files, %d dirs already captured for %s",
+            total_files, total_dirs, location_name,
+        )
+    else:
+        total_files = 0
+        total_dirs = 0
     current_rel_dir = ""
     file_batch: list[tuple] = []
     last_broadcast = time.monotonic()
@@ -614,7 +619,7 @@ async def _stream_to_temp_db(
             # Flush batch to temp DB periodically
             if len(file_batch) >= 5000:
                 tmp_db.executemany(
-                    "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch
+                    "INSERT OR IGNORE INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch
                 )
                 tmp_db.commit()
                 file_batch.clear()
@@ -623,7 +628,7 @@ async def _stream_to_temp_db(
             # Flush remaining file batch and index for hash lookups
             if file_batch:
                 tmp_db.executemany(
-                    "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch
+                    "INSERT OR IGNORE INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch
                 )
                 tmp_db.commit()
                 file_batch.clear()
@@ -695,7 +700,7 @@ async def _stream_to_temp_db(
 
     # Flush remaining batches
     if file_batch:
-        tmp_db.executemany("INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch)
+        tmp_db.executemany("INSERT OR IGNORE INTO files VALUES (?, ?, ?, ?, ?, ?, ?)", file_batch)
     if hash_batch:
         tmp_db.executemany(
             "UPDATE files SET hash_partial = ? WHERE rel_path = ?",

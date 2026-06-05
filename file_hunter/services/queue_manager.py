@@ -422,7 +422,7 @@ async def _reap_finished():
         except asyncio.CancelledError:
             await _set_status(op_id, "cancelled")
             logger.info("Queue manager: cancelled (id=%d)", op_id)
-        except (ConnectionError, OSError, httpx.ConnectError) as e:
+        except (ConnectionError, OSError, httpx.ConnectError, httpx.TransportError) as e:
             logger.warning(
                 "Queue manager: agent unavailable (id=%d): %s — re-queuing",
                 op_id,
