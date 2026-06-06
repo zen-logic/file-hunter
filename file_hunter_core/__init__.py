@@ -4,6 +4,7 @@ No database, no web framework, no async dependencies. Everything here is
 synchronous and portable.
 """
 
+from file_hunter_core.paths import safe_str
 from file_hunter_core.classify import classify_file, format_size
 from file_hunter_core.hasher import hash_file_sync, hash_file_partial_sync
 from file_hunter_core.browse import get_root_entries, get_children
@@ -16,6 +17,7 @@ from file_hunter_core.fileops import (
 )
 
 __all__ = [
+    "safe_str",
     "classify_file",
     "format_size",
     "hash_file_sync",
