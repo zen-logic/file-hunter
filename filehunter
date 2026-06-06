@@ -43,11 +43,51 @@ find_python() {
 
 PYTHON=$(find_python) || error "Python 3.10+ is required but not found."
 
+# ── Install a specific version ───────────────────────────────────────
+
+REPO="zen-logic/file-hunter"
+CURRENT=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
+
+install_version() {
+    local TAG="$1"
+    local VERSION="${TAG#v}"
+
+    local ARCHIVE="filehunter-${VERSION}.tar.gz"
+    local URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
+
+    curl -fSL "$URL" -o "/tmp/${ARCHIVE}" || error "Download failed. Check the version exists: ${TAG}"
+
+    local TMPDIR
+    TMPDIR=$(mktemp -d)
+    tar xzf "/tmp/${ARCHIVE}" -C "$TMPDIR"
+    rm -f "/tmp/${ARCHIVE}"
+
+    local EXTRACTED="$TMPDIR/filehunter-${VERSION}"
+    if [ ! -d "$EXTRACTED" ]; then
+        rm -rf "$TMPDIR"
+        error "Unexpected archive structure."
+    fi
+
+    for dir in file_hunter file_hunter_core file_hunter_agent static; do
+        rm -rf "${SCRIPT_DIR:?}/$dir"
+    done
+
+    for item in "$EXTRACTED"/*; do
+        local name
+        name=$(basename "$item")
+        case "$name" in
+            data|config.json|venv) continue ;;
+        esac
+        cp -R "$item" "$SCRIPT_DIR/"
+    done
+
+    rm -rf "$TMPDIR"
+    chmod +x "$SCRIPT_DIR/filehunter"
+}
+
 # ── Self-update ──────────────────────────────────────────────────────
 
 if [ "${1:-}" = "update" ]; then
-    REPO="zen-logic/file-hunter"
-    CURRENT=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
     FORCE=false
     [ "${2:-}" = "--force" ] && FORCE=true
 
@@ -72,39 +112,35 @@ if [ "${1:-}" = "update" ]; then
         info "Updating v${CURRENT} → v${LATEST}..."
     fi
 
-    ARCHIVE="filehunter-${LATEST}.tar.gz"
-    URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ARCHIVE}"
+    install_version "$LATEST_TAG"
+    info "Updated to v${LATEST}. Restart with: ./filehunter"
+    exit 0
+fi
 
-    curl -fSL "$URL" -o "/tmp/${ARCHIVE}" || error "Download failed."
+# ── Install specific version ────────────────────────────────────────
 
-    TMPDIR=$(mktemp -d)
-    tar xzf "/tmp/${ARCHIVE}" -C "$TMPDIR"
-    rm -f "/tmp/${ARCHIVE}"
-
-    EXTRACTED="$TMPDIR/filehunter-${LATEST}"
-    if [ ! -d "$EXTRACTED" ]; then
-        rm -rf "$TMPDIR"
-        error "Unexpected archive structure."
+if [ "${1:-}" = "version" ]; then
+    if [ -z "${2:-}" ]; then
+        echo "v${CURRENT}"
+        exit 0
     fi
 
-    # Remove old code directories (handles deleted files between versions)
-    for dir in file_hunter file_hunter_core file_hunter_agent static; do
-        rm -rf "${SCRIPT_DIR:?}/$dir"
-    done
+    TARGET_TAG="${2}"
+    # Accept with or without v prefix
+    case "$TARGET_TAG" in
+        v*) ;;
+        *)  TARGET_TAG="v${TARGET_TAG}" ;;
+    esac
+    TARGET_VERSION="${TARGET_TAG#v}"
 
-    # Copy new files, preserving user data
-    for item in "$EXTRACTED"/*; do
-        name=$(basename "$item")
-        case "$name" in
-            data|config.json|venv) continue ;;
-        esac
-        cp -R "$item" "$SCRIPT_DIR/"
-    done
+    if [ "$CURRENT" = "$TARGET_VERSION" ]; then
+        info "Already on v${CURRENT}. Use './filehunter update --force' to reinstall."
+        exit 0
+    fi
 
-    rm -rf "$TMPDIR"
-    chmod +x "$SCRIPT_DIR/filehunter"
-
-    info "Updated to v${LATEST}. Restart with: ./filehunter"
+    info "Switching v${CURRENT} → v${TARGET_VERSION}..."
+    install_version "$TARGET_TAG"
+    info "Installed v${TARGET_VERSION}. Restart with: ./filehunter"
     exit 0
 fi
 
