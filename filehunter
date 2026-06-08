@@ -214,6 +214,44 @@ FH_HOST=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); prin
 FH_PORT=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('port',8000))")
 FH_AGENT_PORT=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('agent_port',8001))")
 
+# ── Check ports are available ────────────────────────────────────────
+
+FH_DB=$("$VENV_PYTHON" -c "import json; c=json.load(open('config.json')); print(c.get('database','data/file_hunter.db'))")
+FH_WEBDAV_PORT=$("$VENV_PYTHON" -c "
+import sqlite3, sys
+try:
+    db = sqlite3.connect('$FH_DB')
+    enabled = db.execute(\"SELECT value FROM settings WHERE key='webdavEnabled'\").fetchone()
+    if not enabled or enabled[0] != '1':
+        sys.exit(0)
+    port = db.execute(\"SELECT value FROM settings WHERE key='webdavPort'\").fetchone()
+    print(port[0] if port else '8008')
+except Exception:
+    pass
+" 2>/dev/null)
+
+BLOCKED=$("$VENV_PYTHON" -c "
+import socket, sys
+ports = [('Server', '$FH_HOST', $FH_PORT), ('Agent', '$FH_HOST', $FH_AGENT_PORT)]
+webdav_port = '$FH_WEBDAV_PORT'
+if webdav_port:
+    ports.append(('WebDAV', '0.0.0.0', int(webdav_port)))
+blocked = []
+for label, host, port in ports:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind((host, port))
+        s.close()
+    except OSError:
+        blocked.append(f'{label} port {port}')
+if blocked:
+    print(', '.join(blocked))
+" 2>/dev/null)
+
+if [ -n "$BLOCKED" ]; then
+    error "${BLOCKED} already in use — is File Hunter already running?"
+fi
+
 # ── Process management ────────────────────────────────────────────────
 
 AGENT_PID=""
