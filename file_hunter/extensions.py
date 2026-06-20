@@ -21,6 +21,7 @@ from file_hunter.services.queue_manager import is_location_running
 
 _extra_routes = []
 _extra_startup = []
+_extra_shutdown = []
 _extra_middlewares = []  # ASGI middleware classes, applied outermost-first
 _static_dirs = {}  # mount_path -> directory
 _public_paths = set()  # HTTP paths that bypass auth
@@ -37,6 +38,11 @@ def add_startup(fn):
     _extra_startup.append(fn)
 
 
+def add_shutdown(fn):
+    """Register an async callable to run during app shutdown."""
+    _extra_shutdown.append(fn)
+
+
 def add_static(path, directory):
     """Register a static file mount (path -> directory)."""
     _static_dirs[path] = directory
@@ -48,6 +54,10 @@ def get_routes():
 
 def get_startup_hooks():
     return list(_extra_startup)
+
+
+def get_shutdown_hooks():
+    return list(_extra_shutdown)
 
 
 def get_static_mounts():

@@ -240,6 +240,8 @@ async def on_startup():
 
 
 async def on_shutdown():
+    for hook in extensions.get_shutdown_hooks():
+        await hook()
     await stop_repair()
     await stop_housekeeping()
     await stop_queue_manager()
