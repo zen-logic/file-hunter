@@ -14,6 +14,13 @@ _PUBLIC_PATHS = {
 }
 
 
+_CORS_HEADERS = [
+    [b"access-control-allow-origin", b"*"],
+    [b"access-control-allow-methods", b"GET, POST, PATCH, DELETE, OPTIONS"],
+    [b"access-control-allow-headers", b"authorization, content-type"],
+]
+
+
 class AuthMiddleware:
     def __init__(self, app):
         self.app = app
@@ -26,6 +33,20 @@ class AuthMiddleware:
             if not path.startswith("/api/"):
                 await self.app(scope, receive, send)
                 return
+
+            # CORS preflight
+            method = scope.get("method", "")
+            if method == "OPTIONS":
+                response = JSONResponse(
+                    {},
+                    status_code=204,
+                    headers={h[0].decode(): h[1].decode() for h in _CORS_HEADERS},
+                )
+                await response(scope, receive, send)
+                return
+
+            # Add CORS headers to all API responses
+            send = self._cors_send(send)
 
             # Public auth endpoints
             if path in _PUBLIC_PATHS or path in get_public_paths():
@@ -91,6 +112,17 @@ class AuthMiddleware:
 
         else:
             await self.app(scope, receive, send)
+
+    @staticmethod
+    def _cors_send(send):
+        """Wrap send to inject CORS headers into HTTP responses."""
+        async def wrapped(message):
+            if message.get("type") == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.extend(_CORS_HEADERS)
+                message = {**message, "headers": headers}
+            await send(message)
+        return wrapped
 
     async def _reject_ws(self, scope, receive, send, code):
         """Accept then immediately close the WebSocket with an error code."""
