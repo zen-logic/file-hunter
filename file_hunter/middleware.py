@@ -2,7 +2,7 @@ from urllib.parse import parse_qs
 from starlette.responses import JSONResponse
 from file_hunter.db import read_db
 from file_hunter.services.auth import validate_session
-from file_hunter.extensions import get_public_ws_paths
+from file_hunter.extensions import get_public_paths, get_public_ws_paths
 
 # Paths that do not require authentication
 _PUBLIC_PATHS = {
@@ -28,7 +28,7 @@ class AuthMiddleware:
                 return
 
             # Public auth endpoints
-            if path in _PUBLIC_PATHS:
+            if path in _PUBLIC_PATHS or path in get_public_paths():
                 await self.app(scope, receive, send)
                 return
 

@@ -22,6 +22,7 @@ from file_hunter.services.queue_manager import is_location_running
 _extra_routes = []
 _extra_startup = []
 _static_dirs = {}  # mount_path -> directory
+_public_paths = set()  # HTTP paths that bypass auth
 _public_ws_paths = set()  # WS paths that handle their own auth
 
 
@@ -50,6 +51,15 @@ def get_startup_hooks():
 
 def get_static_mounts():
     return dict(_static_dirs)
+
+
+def add_public_path(path):
+    """Register an HTTP path that bypasses auth."""
+    _public_paths.add(path)
+
+
+def get_public_paths():
+    return set(_public_paths)
 
 
 def add_public_ws_path(path):
