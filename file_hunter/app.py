@@ -363,3 +363,7 @@ app = Starlette(
 )
 
 app = AuthMiddleware(app)
+
+# Extension middlewares wrap auth — they run first (outermost)
+for mw_cls in extensions.get_middlewares():
+    app = mw_cls(app)

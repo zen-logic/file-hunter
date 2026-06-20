@@ -21,6 +21,7 @@ from file_hunter.services.queue_manager import is_location_running
 
 _extra_routes = []
 _extra_startup = []
+_extra_middlewares = []  # ASGI middleware classes, applied outermost-first
 _static_dirs = {}  # mount_path -> directory
 _public_paths = set()  # HTTP paths that bypass auth
 _public_ws_paths = set()  # WS paths that handle their own auth
@@ -51,6 +52,19 @@ def get_startup_hooks():
 
 def get_static_mounts():
     return dict(_static_dirs)
+
+
+def add_middleware(cls):
+    """Register an ASGI middleware class to wrap the app.
+
+    Middlewares are applied outside AuthMiddleware so they run first.
+    Applied in registration order (first registered = outermost).
+    """
+    _extra_middlewares.append(cls)
+
+
+def get_middlewares():
+    return list(_extra_middlewares)
 
 
 def add_public_path(path):
