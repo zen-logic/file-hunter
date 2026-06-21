@@ -14,6 +14,7 @@ const Consolidate = {
     _stepMerge: null,
     _mergeList: null,
     _mergeNextBtn: null,
+    _mergeSelectAll: null,
 
     // DOM — destination step
     _stepDest: null,
@@ -47,6 +48,7 @@ const Consolidate = {
         this._filenameMatchCheck = document.getElementById('consolidate-filename-match');
         this._mergeList = document.getElementById('consolidate-merge-list');
         this._mergeNextBtn = document.getElementById('consolidate-merge-next');
+        this._mergeSelectAll = document.getElementById('consolidate-merge-select-all');
         this._treePicker = document.getElementById('consolidate-tree-picker');
         this._destDisplay = document.getElementById('consolidate-dest-display');
 
@@ -57,6 +59,16 @@ const Consolidate = {
         // Merge step
         document.getElementById('consolidate-merge-cancel').addEventListener('click', () => this.close());
         this._mergeNextBtn.addEventListener('click', () => this._showDestStep());
+        this._mergeSelectAll.addEventListener('change', () => {
+            if (this._mergeSelectAll.checked) {
+                this._dups.forEach(d => this._checkedDupIds.add(d.fileId));
+            } else {
+                this._checkedDupIds.clear();
+            }
+            this._mergeSelectAll.indeterminate = false;
+            this._mergeNextBtn.disabled = this._checkedDupIds.size === 0;
+            this._renderMergeList();
+        });
 
         // Destination step
         document.getElementById('consolidate-dest-cancel').addEventListener('click', () => this.close());
@@ -203,6 +215,8 @@ const Consolidate = {
     _showMergeStep() {
         this._checkedDupIds = new Set();
         this._mergeNextBtn.disabled = true;
+        this._mergeSelectAll.checked = false;
+        this._mergeSelectAll.indeterminate = false;
         this._renderMergeList();
         this._showStep(this._stepMerge);
     },
@@ -224,6 +238,7 @@ const Consolidate = {
                     this._checkedDupIds.delete(d.fileId);
                 }
                 this._mergeNextBtn.disabled = this._checkedDupIds.size === 0;
+                this._updateMergeSelectAllState();
             });
             label.appendChild(checkbox);
 
@@ -234,6 +249,13 @@ const Consolidate = {
 
             this._mergeList.appendChild(label);
         }
+    },
+
+    _updateMergeSelectAllState() {
+        const total = this._dups.length;
+        const n = this._checkedDupIds.size;
+        this._mergeSelectAll.checked = total > 0 && n >= total;
+        this._mergeSelectAll.indeterminate = n > 0 && n < total;
     },
 
     // ── Destination step ──

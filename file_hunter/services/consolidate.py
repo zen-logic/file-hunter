@@ -1167,7 +1167,18 @@ async def run_batch_consolidation(
         location_ids={dest_loc_id},
         source=f"batch consolidate ({len(file_ids)} files)",
     )
-    await recalculate_dup_counts(source=f"batch consolidate ({len(file_ids)} files)")
+    # Recount the hash groups we actually touched, so the denormalized
+    # files.dup_count (which the "duplicates only" filter reads) matches the
+    # now-reduced groups. Without the hashes this call is a no-op, leaving
+    # consolidated files stuck in duplicates-only results with a live badge
+    # of 0. hash_map was captured before stubbing, so it holds every group.
+    recalc_strong = {h for h, col in hash_map.values() if col == "hash_strong" and h}
+    recalc_fast = {h for h, col in hash_map.values() if col == "hash_fast" and h}
+    await recalculate_dup_counts(
+        strong_hashes=recalc_strong,
+        fast_hashes=recalc_fast,
+        source=f"batch consolidate ({len(file_ids)} files)",
+    )
 
     await broadcast(
         {
