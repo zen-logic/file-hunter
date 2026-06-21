@@ -123,21 +123,58 @@ async def search_by_hash(hash_val: str, *, page=0, sort="name", sort_dir="asc") 
     }
 
 
-# Active search cache state
-_search_id: str | None = None
-_search_db_path: Path | None = None
-_active_search_conn = None  # aiosqlite connection running the current search
+# ---------------------------------------------------------------------------
+# Search context — holds per-session search state (cache + cancel handle)
+# ---------------------------------------------------------------------------
+
+
+class SearchContext:
+    """Per-caller search state. Each context has its own search cache and
+    cancel handle so concurrent searches don't interfere."""
+
+    def __init__(self):
+        self.search_id: str | None = None
+        self.search_db_path: Path | None = None
+        self._active_conn = None
+
+    def cancel(self):
+        """Interrupt any running search query on this context."""
+        conn = self._active_conn
+        if conn is not None:
+            try:
+                conn._conn.interrupt()
+            except Exception:
+                pass
+
+    def set_active_conn(self, conn):
+        self._active_conn = conn
+
+    def clear_active_conn(self):
+        self._active_conn = None
+
+    def cleanup(self):
+        """Remove temp search DB if it exists."""
+        if self.search_db_path and os.path.exists(self.search_db_path):
+            try:
+                os.unlink(self.search_db_path)
+            except OSError:
+                pass
+        self.search_id = None
+        self.search_db_path = None
+
+
+# Shared context for the web UI (single-user cancel-on-new behaviour)
+_ui_context = SearchContext()
+
+
+# Legacy aliases for any code that imports these directly
+_search_id = None  # unused — kept so imports don't break
+_search_db_path = None  # unused
 
 
 def _cancel_active_search():
-    """Interrupt any running search query. Safe to call from any context."""
-    global _active_search_conn
-    conn = _active_search_conn
-    if conn is not None:
-        try:
-            conn._conn.interrupt()
-        except Exception:
-            pass
+    """Interrupt any running search on the shared UI context."""
+    _ui_context.cancel()
 
 
 _SEARCH_SCHEMA = """
@@ -178,14 +215,15 @@ def _search_db_dir() -> Path:
     return Path(config.get("data_dir", "data")) / "temp"
 
 
-async def _populate_search_db(db, where, params, search_path):
+async def _populate_search_db(db, where, params, search_path, ctx=None):
     """Run the search query and populate a temp SQLite DB with results."""
-    global _active_search_conn
-    _active_search_conn = db
+    if ctx is None:
+        ctx = _ui_context
+    ctx.set_active_conn(db)
     try:
         return await _do_populate_search_db(db, where, params, search_path)
     finally:
-        _active_search_conn = None
+        ctx.clear_active_conn()
 
 
 async def _do_populate_search_db(db, where, params, search_path):
@@ -561,6 +599,7 @@ async def search_files(
     sort_dir="asc",
     cached_total=None,
     search_id=None,
+    ctx=None,
 ):
     """Search files with optional filters. Returns paged envelope."""
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
@@ -692,7 +731,8 @@ async def search_files(
 
     where = " AND ".join(conditions) if conditions else "1=1"
 
-    global _search_id, _search_db_path
+    if ctx is None:
+        ctx = _ui_context
 
     total = 0
     folder_total = 0
@@ -701,30 +741,30 @@ async def search_files(
     # Cache check — files + folders are both in the cached DB
     if (
         search_id
-        and _search_id == search_id
-        and _search_db_path
-        and os.path.exists(_search_db_path)
+        and ctx.search_id == search_id
+        and ctx.search_db_path
+        and os.path.exists(ctx.search_db_path)
     ):
         items, total, folder_total = await asyncio.to_thread(
-            _read_search_page, _search_db_path, sort, sort_dir, page
+            _read_search_page, ctx.search_db_path, sort, sort_dir, page
         )
     elif include_files or include_folders:
-        _cancel_active_search()
+        ctx.cancel()
 
         search_dir = _search_db_dir()
         search_dir.mkdir(parents=True, exist_ok=True)
         new_id = secrets.token_hex(8)
         search_path = search_dir / f"search-{new_id}.db"
 
-        if _search_db_path and os.path.exists(_search_db_path):
+        if ctx.search_db_path and os.path.exists(ctx.search_db_path):
             try:
-                os.unlink(_search_db_path)
+                os.unlink(ctx.search_db_path)
             except OSError:
                 pass
 
         # Populate with file results
         if include_files:
-            await _populate_search_db(db, where, params, search_path)
+            await _populate_search_db(db, where, params, search_path, ctx=ctx)
         else:
             await asyncio.to_thread(_create_empty_search_db, str(search_path))
 
@@ -748,8 +788,8 @@ async def search_files(
                     _append_folder_results, str(search_path), folder_insert
                 )
 
-        _search_id = new_id
-        _search_db_path = search_path
+        ctx.search_id = new_id
+        ctx.search_db_path = search_path
         search_id = new_id
 
         items, total, folder_total = await asyncio.to_thread(
@@ -1090,6 +1130,7 @@ async def search_files_advanced(
     sort_dir="asc",
     cached_total=None,
     search_id=None,
+    ctx=None,
 ):
     """Search files with advanced include/exclude conditions."""
     show_hidden = await get_setting(db, "showHiddenFiles") == "1"
@@ -1118,7 +1159,8 @@ async def search_files_advanced(
 
     where = " AND ".join(where_parts) if where_parts else "1=1"
 
-    global _search_id, _search_db_path
+    if ctx is None:
+        ctx = _ui_context
 
     total = 0
     folder_total = 0
@@ -1127,30 +1169,30 @@ async def search_files_advanced(
     # Cache check — files + folders are both in the cached DB
     if (
         search_id
-        and _search_id == search_id
-        and _search_db_path
-        and os.path.exists(_search_db_path)
+        and ctx.search_id == search_id
+        and ctx.search_db_path
+        and os.path.exists(ctx.search_db_path)
     ):
         items, total, folder_total = await asyncio.to_thread(
-            _read_search_page, _search_db_path, sort, sort_dir, page
+            _read_search_page, ctx.search_db_path, sort, sort_dir, page
         )
     elif include_files or include_folders:
-        _cancel_active_search()
+        ctx.cancel()
 
         search_dir = _search_db_dir()
         search_dir.mkdir(parents=True, exist_ok=True)
         new_id = secrets.token_hex(8)
         search_path = search_dir / f"search-{new_id}.db"
 
-        if _search_db_path and os.path.exists(_search_db_path):
+        if ctx.search_db_path and os.path.exists(ctx.search_db_path):
             try:
-                os.unlink(_search_db_path)
+                os.unlink(ctx.search_db_path)
             except OSError:
                 pass
 
         # Populate with file results
         if include_files:
-            await _populate_search_db(db, where, where_params, search_path)
+            await _populate_search_db(db, where, where_params, search_path, ctx=ctx)
         else:
             await asyncio.to_thread(_create_empty_search_db, str(search_path))
 
@@ -1167,8 +1209,8 @@ async def search_files_advanced(
                     _append_folder_results, str(search_path), folder_insert
                 )
 
-        _search_id = new_id
-        _search_db_path = search_path
+        ctx.search_id = new_id
+        ctx.search_db_path = search_path
         search_id = new_id
 
         items, total, folder_total = await asyncio.to_thread(
