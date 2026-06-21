@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timezone
 
 from file_hunter.db import db_writer, read_db
-from file_hunter.hashes_db import hashes_writer
+from file_hunter.hashes_db import hashes_writer, mark_hashes_stale
 from file_hunter.helpers import post_op_stats
 from file_hunter.services.activity import (
     register,
@@ -33,6 +33,74 @@ from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
 
 logger = logging.getLogger("file_hunter")
+
+
+async def _reconcile_missing_dir(
+    location_id: int, folder_id: int | None, label: str
+):
+    """The directory we were asked to scan is gone from disk.
+
+    The catalog is the source of truth, so reflect reality: mark the folder
+    (or location root) and everything beneath it stale. Stale preserves the
+    records — a later scan that finds the path again clears it — so this never
+    silently deletes catalog data, it just stops the catalog claiming files
+    that no longer exist.
+    """
+    # Collect the affected folder and file ids (the whole subtree).
+    async with read_db() as db:
+        if folder_id:
+            folder_rows = await db.execute_fetchall(
+                "WITH RECURSIVE descendants(id) AS ("
+                "  SELECT ? UNION ALL"
+                "  SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id"
+                ") SELECT id FROM descendants",
+                (folder_id,),
+            )
+            folder_ids = [r["id"] for r in folder_rows]
+            file_ids: list[int] = []
+            for i in range(0, len(folder_ids), 500):
+                batch = folder_ids[i : i + 500]
+                ph = ",".join("?" for _ in batch)
+                rows = await db.execute_fetchall(
+                    f"SELECT id FROM files WHERE stale = 0 AND folder_id IN ({ph})",
+                    batch,
+                )
+                file_ids.extend(r["id"] for r in rows)
+        else:
+            folder_rows = await db.execute_fetchall(
+                "SELECT id FROM folders WHERE location_id = ?", (location_id,)
+            )
+            folder_ids = [r["id"] for r in folder_rows]
+            file_rows = await db.execute_fetchall(
+                "SELECT id FROM files WHERE location_id = ? AND stale = 0",
+                (location_id,),
+            )
+            file_ids = [r["id"] for r in file_rows]
+
+    # Mark folders and files stale, then their hashes. Acquire the write lock
+    # per batch rather than holding it across the whole loop — otherwise a large
+    # reconcile (e.g. a whole location) would starve every other catalog write
+    # for its full duration. Matches mark_hashes_stale()'s per-batch pattern.
+    for i in range(0, len(folder_ids), 500):
+        batch = folder_ids[i : i + 500]
+        ph = ",".join("?" for _ in batch)
+        async with db_writer() as wdb:
+            await wdb.execute(f"UPDATE folders SET stale = 1 WHERE id IN ({ph})", batch)
+    for i in range(0, len(file_ids), 500):
+        batch = file_ids[i : i + 500]
+        ph = ",".join("?" for _ in batch)
+        async with db_writer() as wdb:
+            await wdb.execute(f"UPDATE files SET stale = 1 WHERE id IN ({ph})", batch)
+    await mark_hashes_stale(file_ids)
+
+    logger.warning(
+        "Quick scan: %s is gone from disk — catalog reconciled, "
+        "marked %d folder(s) and %d file(s) stale",
+        label, len(folder_ids), len(file_ids),
+    )
+    await post_op_stats(
+        location_ids={location_id}, source=f"reconcile missing {label}"
+    )
 
 
 async def run_quick_scan(
@@ -81,7 +149,15 @@ async def run_quick_scan(
             label = location_name
 
     # Get listing from agent
-    listing = await dispatch("list_dir", location_id, path=scan_path)
+    try:
+        listing = await dispatch("list_dir", location_id, path=scan_path)
+    except FileNotFoundError:
+        # The scanned directory itself is gone from disk (not just items inside
+        # it). Reconcile the catalog to reality — mark this folder/location and
+        # everything under it stale — rather than raising and leaving the
+        # catalog claiming files that no longer exist.
+        await _reconcile_missing_dir(location_id, folder_id, label)
+        return
     disk_folders = {f["name"]: f for f in listing["folders"]}
     disk_files = {f["name"]: f for f in listing["files"]}
 

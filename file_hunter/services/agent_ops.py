@@ -89,7 +89,11 @@ async def open_agent_client(agent_id: int):
     """Create a persistent HTTP client for an agent. Call on agent connect."""
     await close_agent_client(agent_id)
     _agent_clients[agent_id] = httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0, connect=10.0),
+        # No read timeout. Agent operations (delete, move, scan) run as long as
+        # they need; only connection establishment is bounded. A timeout on
+        # operation *duration* is fragile — it fires on legitimately slow work
+        # and leaves catalog and disk in an uncertain state.
+        timeout=httpx.Timeout(None, connect=10.0),
         limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
     )
     logger.info("HTTP client opened for agent #%d", agent_id)
@@ -117,7 +121,7 @@ def _raise_agent_error(error_msg: str, status_code: int):
     raise OSError(error_msg)
 
 
-async def _post(host, port, token, path, body, timeout=60.0, agent_id=None):
+async def _post(host, port, token, path, body, timeout=None, agent_id=None):
     """POST JSON to agent and return the parsed data field."""
     url = f"http://{host}:{port}{path}"
     headers = {"Authorization": f"Bearer {token}"}
@@ -137,10 +141,12 @@ async def _post(host, port, token, path, body, timeout=60.0, agent_id=None):
     return result.get("data", {})
 
 
-async def _get(host, port, token, path, timeout=60.0, agent_id=None):
+async def _get(host, port, token, path, timeout=None, agent_id=None):
     """GET from agent and return the parsed data field."""
     url = f"http://{host}:{port}{path}"
     headers = {"Authorization": f"Bearer {token}"}
+    if timeout is None:
+        timeout = httpx.Timeout(None, connect=10.0)
     client = _get_client(agent_id) if agent_id else None
     if client:
         resp = await client.get(url, headers=headers, timeout=timeout)
@@ -186,7 +192,10 @@ async def _upload_multipart(
         if mtime is not None:
             form_data["mtime"] = str(mtime)
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(600.0, connect=10.0)
+            # No read timeout — disk images can run to hundreds of GB and take
+            # hours to upload; bounding the duration would fail them. Only the
+            # connection attempt is guarded.
+            timeout=httpx.Timeout(None, connect=10.0)
         ) as client:
             resp = await client.post(
                 url,
