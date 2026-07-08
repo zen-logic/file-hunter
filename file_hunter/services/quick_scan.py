@@ -152,10 +152,15 @@ async def run_quick_scan(
     try:
         listing = await dispatch("list_dir", location_id, path=scan_path)
     except FileNotFoundError:
-        # The scanned directory itself is gone from disk (not just items inside
-        # it). Reconcile the catalog to reality — mark this folder/location and
-        # everything under it stale — rather than raising and leaving the
-        # catalog claiming files that no longer exist.
+        if silent:
+            # Browse-triggered freshness check — the disk is probably
+            # unmounted. Don't stale the catalog just because a user
+            # clicked on an offline location in the tree.
+            return
+        # Deliberate scan: the directory is gone from disk. Reconcile
+        # the catalog to reality — mark this folder/location and
+        # everything under it stale — rather than leaving the catalog
+        # claiming files that no longer exist.
         await _reconcile_missing_dir(location_id, folder_id, label)
         return
     disk_folders = {f["name"]: f for f in listing["folders"]}
