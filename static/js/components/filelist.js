@@ -397,9 +397,22 @@ const FileList = {
                     if (this.onFolderOpen) this.onFolderOpen(items[curIdx]);
                 }
                 return;
+            case ' ':
+                // Enlarge the selected file without leaving the keyboard —
+                // space or escape closes it and the list is still where it was.
+                // Only swallows the keypress when a preview actually opened.
+                if (curIdx === -1 || items[curIdx].type === 'folder') return;
+                if (this.onPreview && this.onPreview(items[curIdx])) {
+                    e.preventDefault();
+                    // The modal's own keydown listener is registered after the
+                    // keyboard manager's, so without this the very keypress
+                    // that opened the preview would reach it and close it again.
+                    e.stopImmediatePropagation();
+                }
+                return;
             default:
-                // Triage keys: d, c, t, m
-                if ('dctm'.includes(e.key)) {
+                // Triage keys: d, c, t, m, z
+                if ('dctmz'.includes(e.key)) {
                     e.preventDefault();
                     const targets = this.selectedItems.size > 1
                         ? this.getSelection()
@@ -418,7 +431,24 @@ const FileList = {
 
     _scrollSelectedIntoView() {
         const el = this.el.querySelector('tr.selected:last-child') || this.el.querySelector('tr.selected');
-        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+        if (!el) return;
+
+        // The column header is sticky, so it overlays the top of the scroll
+        // container. scrollIntoView knows nothing about that and tucks the
+        // row underneath it when arrowing back up to the first entry — hence
+        // scrolling by hand with the header height excluded from the viewport.
+        const head = this.el.querySelector('thead');
+        const headerHeight = head ? head.getBoundingClientRect().height : 0;
+
+        const row = el.getBoundingClientRect();
+        const view = this.el.getBoundingClientRect();
+        const topLimit = view.top + headerHeight;
+
+        if (row.top < topLimit) {
+            this.el.scrollTop -= topLimit - row.top;
+        } else if (row.bottom > view.bottom) {
+            this.el.scrollTop += row.bottom - view.bottom;
+        }
     },
 
     renderEmpty() {

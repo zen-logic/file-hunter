@@ -34,9 +34,12 @@ async def get_slideshow_ids_from_search(
     Uses the existing search cache — no re-query, correct scope, fast.
     Returns empty list if the cache is missing or expired.
     """
-    if not search_id or search_id != _search_mod._search_id or not _search_mod._search_db_path:
+    # Read live off the web UI's search context — the cache moved there in
+    # 1.3.3 when search state became per-caller.
+    ctx = _search_mod._ui_context
+    if not search_id or search_id != ctx.search_id or not ctx.search_db_path:
         return []
-    path = str(_search_mod._search_db_path)
+    path = str(ctx.search_db_path)
     if not os.path.exists(path):
         return []
 

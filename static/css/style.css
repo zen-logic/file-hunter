@@ -911,6 +911,10 @@ body::after {
     background: var(--color-progress-fill);
 }
 
+.triage-btn.triage-zip {
+    background: var(--color-status-ok);
+}
+
 .triage-btn.triage-clear {
     background: transparent;
     color: var(--color-text-muted);
@@ -944,6 +948,10 @@ body::after {
 
 .triage-mark-move {
     background: var(--color-progress-fill);
+}
+
+.triage-mark-zip {
+    background: var(--color-status-ok);
 }
 
 .detail-pending-banner {

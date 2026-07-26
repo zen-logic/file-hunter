@@ -168,11 +168,6 @@ class SearchContext:
 _ui_context = SearchContext()
 
 
-# Legacy aliases for any code that imports these directly
-_search_id = None  # unused — kept so imports don't break
-_search_db_path = None  # unused
-
-
 def _cancel_active_search():
     """Interrupt any running search on the shared UI context."""
     _ui_context.cancel()

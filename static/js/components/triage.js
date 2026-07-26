@@ -6,14 +6,17 @@
  * Renders a bar above the file table showing action buttons with counts.
  */
 
-const OPERATIONS = ['delete', 'consolidate', 'tag', 'move'];
-const OP_LABELS = { delete: 'Delete', consolidate: 'Consolidate', tag: 'Tag', move: 'Move / Copy' };
-const OP_KEYS = { d: 'delete', c: 'consolidate', t: 'tag', m: 'move' };
+// 'zip' is appended deliberately — _execute indexes the first four to build
+// the SlideshowTriage.show(delete, consolidate, tag, move) argument list.
+const OPERATIONS = ['delete', 'consolidate', 'tag', 'move', 'zip'];
+const OP_LABELS = { delete: 'Delete', consolidate: 'Consolidate', tag: 'Tag', move: 'Move / Copy', zip: 'Download ZIP' };
+const OP_KEYS = { d: 'delete', c: 'consolidate', t: 'tag', m: 'move', z: 'zip' };
 const OP_CSS = {
     delete: 'triage-delete',
     consolidate: 'triage-consolidate',
     tag: 'triage-tag',
     move: 'triage-move',
+    zip: 'triage-zip',
 };
 
 const Triage = {
@@ -23,15 +26,18 @@ const Triage = {
         consolidate: new Map(),
         tag: new Map(),
         move: new Map(),
+        zip: new Map(),
     },
 
     _barEl: null,
     _onExecute: null,   // callback(op, items) — triggers the triage dialog
     _onRender: null,    // callback() — re-render file list badges
+    _onZip: null,       // callback(items) — starts a ZIP build, no dialog
 
-    init(onExecute, onRender) {
+    init(onExecute, onRender, onZip) {
         this._onExecute = onExecute;
         this._onRender = onRender;
+        this._onZip = onZip;
     },
 
     /** Mount the triage bar inside parentEl, before refEl. */
@@ -156,12 +162,19 @@ const Triage = {
         const items = Array.from(this._queues[op].values());
         if (items.length === 0) return;
 
-        // Build args for SlideshowTriage.show(delete, consolidate, tag, move)
-        const args = [[], [], [], []];
-        const idx = OPERATIONS.indexOf(op);
-        args[idx] = items;
+        if (op === 'zip') {
+            // No triage dialog — this starts a build immediately, the same as
+            // the Download ZIP button. The zip_ready socket message delivers
+            // the file, so nothing further is needed here.
+            if (this._onZip) this._onZip(items);
+        } else {
+            // Build args for SlideshowTriage.show(delete, consolidate, tag, move)
+            const args = [[], [], [], []];
+            const idx = OPERATIONS.indexOf(op);
+            args[idx] = items;
 
-        if (this._onExecute) this._onExecute(...args);
+            if (this._onExecute) this._onExecute(...args);
+        }
 
         // Clear this queue after triggering
         this._queues[op].clear();

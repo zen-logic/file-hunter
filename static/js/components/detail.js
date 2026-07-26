@@ -2,6 +2,7 @@ import API from '../api.js';
 import ConfirmModal from './confirm.js';
 import Tree from './tree.js';
 import Toast from './toast.js';
+import Triage from './triage.js';
 import icons from '../icons.js';
 
 function _isScanning(locId) {
@@ -297,6 +298,25 @@ const Detail = {
                 else if (e.key === 'c') { this._slideshowToggleMark('consolidate'); }
                 else if (e.key === 't') { this._slideshowToggleMark('tag'); }
                 else if (e.key === 'm') { this._slideshowToggleMark('move'); }
+            } else if (e.key === ' ') {
+                // Plain preview only — space closes, mirroring the space that
+                // opened it. Slideshow and playlist own space in the branch
+                // above (autoplay / play-pause), so the two never collide.
+                e.preventDefault();
+                this._closePreviewModal();
+            } else if ('dctmz'.includes(e.key)) {
+                // Plain preview marks into the same session queues the file
+                // list uses, so the count lands in the triage bar above the
+                // list. Slideshow keeps its own accumulate-then-dialog flow.
+                const fileId = this._previewModal._fileId;
+                if (fileId) {
+                    e.preventDefault();
+                    Triage.handleKey(e.key, [{
+                        id: fileId,
+                        name: this._previewModal._fileName,
+                        type: 'file',
+                    }]);
+                }
             }
         });
     },
@@ -345,6 +365,20 @@ const Detail = {
         m.downloadBtn.classList.remove('hidden');
         m.fullscreenBtn.classList.remove('hidden');
         m.overlay.classList.remove('hidden');
+    },
+
+    /** Open the large preview for a file the panel is already showing.
+     *  Returns true if the modal was opened. */
+    openPreviewFor(file) {
+        const detail = this._lastDetail;
+        // Only act once the panel has caught up with the list — arrowing
+        // fast would otherwise enlarge the previous file.
+        if (!detail || !detail.id || detail.id !== file.id) return false;
+        // The zoom button exists only where _buildPreview produced a preview,
+        // so its presence is the same "can this be previewed" test the UI uses.
+        if (!document.getElementById('preview-zoom-btn')) return false;
+        this._openPreviewModal(detail);
+        return true;
     },
 
     _downloadPreviewFile() {

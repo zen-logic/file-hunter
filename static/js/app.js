@@ -516,6 +516,22 @@ Detail.slideshowTriage = SlideshowTriage;
 Triage.init(
     (del, con, tag, mov) => SlideshowTriage.show(del, con, tag, mov),
     () => FileList.render(),
+    async (items) => {
+        const resp = await API.post('/api/batch/download', {
+            file_ids: items.map(i => i.id),
+            folder_ids: [],
+        });
+        if (resp.ok) {
+            const n = items.length;
+            Activity.started('zip-' + resp.data.jobId, {
+                label: 'Building ZIP: triage selection',
+                detail: `0/${resp.data.total} files`,
+                log: `ZIP build started: <b>${n} file${n !== 1 ? 's' : ''}</b>`,
+            });
+        } else {
+            Toast.error(resp.data?.detail || 'Download failed.');
+        }
+    },
 );
 ImportCatalog.init();
 RepairCatalog.init();
@@ -986,6 +1002,9 @@ FileList.onSelectingAll = () => {
 };
 
 FileList.onBreadcrumbNav = (nodeId) => Tree.navigateTo(nodeId);
+
+// Space in the file list enlarges the selected file, if it can be previewed.
+FileList.onPreview = (file) => Detail.openPreviewFor(file);
 
 Detail.init({
     async onNavigateToFolder(nodeId, fileId) {
