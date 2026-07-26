@@ -180,7 +180,6 @@ async def run_import(
                         r["file_type_low"],
                         r["file_size"],
                         "",  # description
-                        "",  # tags
                         r["created_date"],
                         r["modified_date"],
                         now,  # date_cataloged
@@ -208,9 +207,9 @@ async def run_import(
                     "INSERT INTO files "
                     "(filename, full_path, rel_path, location_id, folder_id, "
                     "file_type_high, file_type_low, file_size, "
-                    "description, tags, created_date, modified_date, "
+                    "description, created_date, modified_date, "
                     "date_cataloged, date_last_seen, hidden) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(location_id, rel_path) DO UPDATE SET "
                     "filename=excluded.filename, full_path=excluded.full_path, "
                     "folder_id=excluded.folder_id, "
@@ -221,8 +220,7 @@ async def run_import(
                     "modified_date=excluded.modified_date, "
                     "date_last_seen=excluded.date_last_seen, "
                     "hidden=excluded.hidden, "
-                    "description=COALESCE(description, ''), "
-                    "tags=COALESCE(tags, '')",
+                    "description=COALESCE(description, '')",
                     catalog_batch,
                 )
 

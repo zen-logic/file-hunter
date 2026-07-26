@@ -17,6 +17,7 @@ from file_hunter.db import open_connection, read_db
 from file_hunter.hashes_db import get_file_hashes, read_hashes
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.settings import get_setting
+from file_hunter.services.tags import parse_tags, tag_filter_sql
 from file_hunter.stats_db import _stats_db_path
 
 logger = logging.getLogger(__name__)
@@ -648,10 +649,10 @@ async def search_files(
         conditions.append("f.description LIKE ? ESCAPE '\\'")
         params.append(f"%{_escape_like(description)}%")
 
-    if tags:
-        for tag in [t.strip() for t in tags.split(",") if t.strip()]:
-            conditions.append("f.tags LIKE ? ESCAPE '\\'")
-            params.append(f"%{_escape_like(tag)}%")
+    tag_frag, tag_params = tag_filter_sql(parse_tags(tags))
+    if tag_frag:
+        conditions.append(tag_frag)
+        params.extend(tag_params)
 
     size_min_bytes = parse_size(size_min) if size_min else None
     size_max_bytes = parse_size(size_max) if size_max else None
@@ -886,15 +887,7 @@ def build_condition_sql(cond):
     elif field == "tags":
         if not value:
             return None, []
-        tag_list = [t.strip() for t in value.split(",") if t.strip()]
-        if not tag_list:
-            return None, []
-        frags = []
-        params = []
-        for tag in tag_list:
-            frags.append("f.tags LIKE ? ESCAPE '\\'")
-            params.append(f"%{_escape_like(tag)}%")
-        return "(" + " AND ".join(frags) + ")", params
+        return tag_filter_sql(parse_tags(value))
 
     elif field == "size":
         min_val = cond.get("min", "")

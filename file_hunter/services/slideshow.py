@@ -23,6 +23,7 @@ from file_hunter.services.search import (
     parse_size,
 )
 from file_hunter.services.settings import get_setting
+from file_hunter.services.tags import parse_tags, tag_filter_sql
 
 
 async def get_slideshow_ids_from_search(
@@ -166,11 +167,10 @@ async def _ids_for_search(db, search_params, hidden_filter):
         conditions.append("f.description LIKE ?")
         params.append(f"%{description}%")
 
-    tags = search_params.get("tags")
-    if tags:
-        for tag in [t.strip() for t in tags.split(",") if t.strip()]:
-            conditions.append("f.tags LIKE ?")
-            params.append(f"%{tag}%")
+    tag_frag, tag_params = tag_filter_sql(parse_tags(search_params.get("tags")))
+    if tag_frag:
+        conditions.append(tag_frag)
+        params.extend(tag_params)
 
     size_min = search_params.get("sizeMin")
     size_max = search_params.get("sizeMax")

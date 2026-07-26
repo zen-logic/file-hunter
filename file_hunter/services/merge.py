@@ -22,6 +22,7 @@ from file_hunter.services.activity import (
 from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
 from file_hunter.services.sizes import recalculate_location_sizes
+from file_hunter.services.tags import copy_file_tags
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
@@ -504,10 +505,10 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                             """INSERT OR IGNORE INTO files
                                (filename, full_path, rel_path, location_id, folder_id,
                                 file_type_high, file_type_low, file_size,
-                                description, tags,
+                                description,
                                 created_date, modified_date, date_cataloged, date_last_seen,
                                 scan_id, hidden)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)""",
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)""",
                             (
                                 dest_file_name,
                                 actual_dest,
@@ -518,7 +519,6 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                                 type_low,
                                 file_size,
                                 src_file.get("description") or "",
-                                src_file.get("tags") or "",
                                 src_file.get("created_date", now_iso),
                                 src_file.get("modified_date", now_iso),
                                 now_iso,
@@ -531,6 +531,8 @@ async def run_merge(source_id, source_info, destination_id, dest_info, mode="mov
                             (dest_loc_id, dest_file_rel),
                         )
                         new_dest_file_id = new_rows[0]["id"] if new_rows else None
+                        if new_dest_file_id:
+                            await copy_file_tags(wdb, src_file["id"], new_dest_file_id)
 
                     # Register hashes for the new destination file
                     if new_dest_file_id:
@@ -831,9 +833,9 @@ async def _upsert_sources_record(
                 """INSERT OR IGNORE INTO files
                    (filename, full_path, rel_path, location_id, folder_id,
                     file_type_high, file_type_low, file_size,
-                    description, tags,
+                    description,
                     created_date, modified_date, date_cataloged, date_last_seen, scan_id)
-                   VALUES (?, ?, ?, ?, ?, 'text', 'sources', ?, '', '',
+                   VALUES (?, ?, ?, ?, ?, 'text', 'sources', ?, '',
                            ?, ?, ?, ?, NULL)""",
                 (
                     sources_name,
@@ -858,7 +860,7 @@ async def _load_source_files(db, source_id, source_info):
         rows = await db.execute_fetchall(
             """SELECT fi.id, fi.filename, fi.full_path, fi.rel_path, fi.location_id,
                       fi.folder_id, fi.file_type_high, fi.file_type_low, fi.file_size,
-                      fi.description, fi.tags,
+                      fi.description,
                       fi.created_date, fi.modified_date,
                       fi.hidden, l.name as location_name
                FROM files fi
@@ -877,7 +879,7 @@ async def _load_source_files(db, source_id, source_info):
                )
                SELECT fi.id, fi.filename, fi.full_path, fi.rel_path, fi.location_id,
                       fi.folder_id, fi.file_type_high, fi.file_type_low, fi.file_size,
-                      fi.description, fi.tags,
+                      fi.description,
                       fi.created_date, fi.modified_date,
                       fi.hidden, l.name as location_name
                FROM files fi

@@ -9,8 +9,9 @@ from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.delete import delete_folder
-from file_hunter.services.files import move_file, update_file
+from file_hunter.services.files import move_file
 from file_hunter.services.locations import move_folder
+from file_hunter.services.tags import add_file_tags, parse_tags, remove_file_tags
 from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
@@ -387,37 +388,32 @@ async def batch_tag(
 ):
     """Add and/or remove tags on multiple files as a background task.
 
-    Iterates each file, reads its current tags, applies additions (deduped)
-    and removals, then writes back via update_file(). Broadcasts completion
+    Additions and removals are applied directly to file_tags — no
+    read-modify-write of the file's existing tags. Broadcasts completion
     via WebSocket.
 
     Runs as a background task — registers activity and broadcasts completion.
     """
+    add_tags = parse_tags(add_tags)
+    remove_tags = parse_tags(remove_tags)
+
     act_name = f"batch-tag-{id(file_ids)}"
     tag_label = ", ".join(add_tags) if add_tags else ", ".join(remove_tags)
     register(act_name, "Writing tags...", tag_label)
     updated = 0
+    tag_cache = {}
 
     try:
         for fid in file_ids:
             async with db_writer() as db:
                 row = await db.execute_fetchall(
-                    "SELECT tags FROM files WHERE id = ?", (fid,)
+                    "SELECT 1 FROM files WHERE id = ?", (fid,)
                 )
                 if not row:
                     continue
 
-                current_raw = row[0]["tags"] or ""
-                current = [t.strip() for t in current_raw.split(",") if t.strip()]
-
-                for tag in add_tags:
-                    if tag not in current:
-                        current.append(tag)
-
-                for tag in remove_tags:
-                    current = [t for t in current if t != tag]
-
-                await update_file(db, fid, tags=current)
+                await add_file_tags(db, fid, add_tags, tag_cache)
+                await remove_file_tags(db, fid, remove_tags)
                 updated += 1
     finally:
         unregister(act_name)

@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sqlite3
+import time
 from contextlib import asynccontextmanager
 
 import aiosqlite
@@ -65,6 +66,17 @@ CREATE TABLE IF NOT EXISTS files (
     date_last_seen TEXT,
     scan_id INTEGER REFERENCES scans(id) ON DELETE SET NULL,
     UNIQUE(location_id, rel_path)
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS file_tags (
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (file_id, tag_id)
 );
 
 CREATE TABLE IF NOT EXISTS consolidation_jobs (
@@ -156,6 +168,7 @@ CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);
 CREATE INDEX IF NOT EXISTS idx_consolidation_jobs_pending ON consolidation_jobs(source_location_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_files_location_hash ON files(location_id, hash_strong);
+CREATE INDEX IF NOT EXISTS idx_file_tags_tag ON file_tags(tag_id);
 
 CREATE TABLE IF NOT EXISTS saved_searches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -368,7 +381,103 @@ async def init_db(db: aiosqlite.Connection):
     )
     await db.commit()
 
+    await _migrate_tags(db)
+
     return not exists
+
+
+async def _migrate_tags(db: aiosqlite.Connection):
+    """Backfill the tags/file_tags tables from the legacy files.tags column.
+
+    Purely additive — the legacy column is left intact, matching every other
+    migration in this module. Runs once, gated on the `tags_migrated` setting.
+
+    Batched by file id and committed per batch, with throttled progress on
+    stdout so a long run on a large catalog is visibly making headway. An
+    interrupted run leaves the flag unset and restarts on the next boot,
+    which is safe because every insert is INSERT OR IGNORE.
+    """
+    from file_hunter.services.settings import get_setting, set_setting
+    from file_hunter.services.tags import get_or_create_tag_ids, parse_tags
+
+    if await get_setting(db, "tags_migrated") == "1":
+        return
+
+    cursor = await db.execute("PRAGMA table_info(files)")
+    columns = [row["name"] for row in await cursor.fetchall()]
+    if "tags" not in columns:
+        await set_setting(db, "tags_migrated", "1")
+        await db.commit()
+        return
+
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM files WHERE tags IS NOT NULL AND tags != ''"
+    )
+    total = (await cursor.fetchone())[0]
+    if total == 0:
+        await set_setting(db, "tags_migrated", "1")
+        await db.commit()
+        return
+
+    print(f"\nMigrating tags on {total:,} files\n")
+
+    BATCH = 5000
+    last_id = 0
+    done = 0
+    tag_cache = {}
+    t0 = time.monotonic()
+    last_print = t0
+
+    while True:
+        cursor = await db.execute(
+            "SELECT id, tags FROM files "
+            "WHERE id > ? AND tags IS NOT NULL AND tags != '' "
+            "ORDER BY id LIMIT ?",
+            (last_id, BATCH),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            break
+
+        pairs = []
+        for row in rows:
+            last_id = row["id"]
+            names = parse_tags(row["tags"])
+            if not names:
+                continue
+            for tag_id in await get_or_create_tag_ids(db, names, tag_cache):
+                pairs.append((row["id"], tag_id))
+
+        if pairs:
+            await db.executemany(
+                "INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?, ?)",
+                pairs,
+            )
+        await db.commit()
+        done += len(rows)
+
+        now = time.monotonic()
+        if now - last_print >= 1.0:
+            elapsed = now - t0
+            rate = done / elapsed if elapsed > 0 else 0
+            pct = done / total * 100 if total else 100
+            remaining = (total - done) / rate if rate > 0 else 0
+            print(
+                f"\r  {done:>10,} / {total:,}  ({pct:5.1f}%)  "
+                f"{rate:,.0f} files/sec  ETA {remaining:.0f}s\033[K",
+                end="",
+                flush=True,
+            )
+            last_print = now
+
+    await set_setting(db, "tags_migrated", "1")
+    await db.commit()
+
+    elapsed = time.monotonic() - t0
+    print(
+        f"\r  {done:,} / {total:,} files, {len(tag_cache):,} distinct tags, "
+        f"{elapsed:.1f}s\033[K"
+    )
 
 
 async def open_connection() -> aiosqlite.Connection:

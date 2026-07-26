@@ -23,6 +23,12 @@ from file_hunter.stats_db import update_stats_for_files
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.locations import check_location_online
 from file_hunter.services.settings import get_setting
+from file_hunter.services.tags import (
+    copy_file_tags,
+    get_file_tags,
+    parse_tags,
+    set_file_tags,
+)
 
 PAGE_SIZE = 120
 
@@ -303,7 +309,7 @@ async def get_file_detail(db, file_id: int):
     row = await db.execute_fetchall(
         """SELECT f.id, f.filename, f.full_path, f.rel_path, f.location_id,
                   f.folder_id, f.file_type_high, f.file_type_low, f.file_size,
-                  f.description, f.tags, f.created_date, f.modified_date,
+                  f.description, f.created_date, f.modified_date,
                   f.date_cataloged, f.date_last_seen, f.stale, f.hidden, f.pending_op,
                   l.name as location_name, l.root_path as location_root_path
            FROM files f
@@ -367,7 +373,7 @@ async def get_file_detail(db, file_id: int):
                     }
                 )
 
-    tags = [t.strip() for t in f["tags"].split(",") if t.strip()] if f["tags"] else []
+    tags = await get_file_tags(db, file_id)
 
     location_online = await asyncio.to_thread(
         check_location_online, f["location_id"], f["location_root_path"]
@@ -461,34 +467,32 @@ async def update_file(db, file_id: int, description: str = None, tags: list = No
         db: Writable database connection (called inside execute_write).
         file_id: Numeric file ID.
         description: New description string, or None to leave unchanged.
-        tags: New tag list (joined as comma-separated), or None to leave unchanged.
+        tags: Replacement tag list (any caller format — normalised here), or
+            None to leave unchanged. An empty list clears the file's tags.
 
     Returns:
         None.
 
     Side effects:
-        DB write + commit on the files table. No-op if both description and
-        tags are None.
+        DB write + commit. Description writes to the files table; tags are
+        replaced wholesale in file_tags. No-op if both are None.
 
     Called by:
         Route handler file_update (POST /api/files/{id}/update).
         batch_tag() in batch.py (per-file tag update).
     """
-    parts = []
-    params = []
-    if description is not None:
-        parts.append("description = ?")
-        params.append(description)
-    if tags is not None:
-        parts.append("tags = ?")
-        params.append(",".join(tags))
-    if not parts:
+    if description is None and tags is None:
         return
-    params.append(file_id)
-    await db.execute(
-        f"UPDATE files SET {', '.join(parts)} WHERE id = ?",
-        params,
-    )
+
+    if description is not None:
+        await db.execute(
+            "UPDATE files SET description = ? WHERE id = ?",
+            (description, file_id),
+        )
+
+    if tags is not None:
+        await set_file_tags(db, file_id, parse_tags(tags))
+
     await db.commit()
 
 
@@ -503,7 +507,8 @@ async def insert_file_copy(db, *, source_file_id, source_row, filename,
         db: Writable database connection.
         source_file_id: ID of the source file (for hash lookup).
         source_row: Dict with source file metadata — must include:
-            file_size, description, tags, created_date, modified_date.
+            file_size, description, created_date, modified_date. Tags are
+            copied from the source file's own associations, not from here.
         filename: Destination filename.
         full_path: Destination absolute path.
         rel_path: Destination relative path.
@@ -519,20 +524,20 @@ async def insert_file_copy(db, *, source_file_id, source_row, filename,
     cursor = await db.execute(
         """INSERT INTO files (filename, full_path, rel_path, location_id,
               folder_id, file_type_high, file_type_low, file_size,
-              description, tags, created_date, modified_date,
+              description, created_date, modified_date,
               date_cataloged, date_last_seen)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             filename, full_path, rel_path, location_id, folder_id,
             type_high, type_low, source_row["file_size"],
             source_row.get("description") or "",
-            source_row.get("tags") or "",
             source_row.get("created_date"),
             source_row.get("modified_date"),
             now_iso, now_iso,
         ),
     )
     new_file_id = cursor.lastrowid
+    await copy_file_tags(db, source_file_id, new_file_id)
 
     # Copy hash record from source
     src_hashes = await get_file_hashes([source_file_id])

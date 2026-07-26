@@ -24,6 +24,7 @@ from file_hunter.services.activity import (
 )
 from file_hunter.services.dup_counts import recalculate_dup_counts
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
+from file_hunter.services.tags import get_merged_tags, parse_tags, set_file_tags
 from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.agent import get_agent_location_ids
 from file_hunter.ws.scan import broadcast
@@ -217,7 +218,7 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
             f"""SELECT f.id, f.filename, f.full_path, f.rel_path,
                       f.location_id, f.folder_id, f.dup_exclude,
                       f.file_type_high, f.file_type_low, f.file_size,
-                      f.description, f.tags,
+                      f.description,
                       f.created_date, f.modified_date, f.date_cataloged,
                       l.name as location_name, l.root_path,
                       a.name as agent_name
@@ -234,23 +235,20 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
 
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    # Merge tags, description, and earliest modified_date across all copies
-    all_tags: set[str] = set()
+    # Merge description and earliest modified_date across all copies
     earliest_modified = None
     merged_description = ""
     for copy in all_copies:
-        raw = copy.get("tags") or ""
-        for t in raw.split(","):
-            t = t.strip()
-            if t:
-                all_tags.add(t)
         md = copy.get("modified_date")
         if md and (earliest_modified is None or md < earliest_modified):
             earliest_modified = md
         desc = (copy.get("description") or "").strip()
         if desc and not merged_description:
             merged_description = desc
-    merged_tags = ",".join(sorted(all_tags))
+
+    # The survivor inherits every tag any copy carried
+    async with read_db() as db:
+        merged_tags = await get_merged_tags(db, [c["id"] for c in all_copies])
 
     return {
         "selected": selected,
@@ -628,14 +626,14 @@ async def run_consolidation(
             # Apply merged metadata to canonical
             async with db_writer() as wdb:
                 await wdb.execute(
-                    "UPDATE files SET tags = ?, description = ?, modified_date = ? WHERE id = ?",
+                    "UPDATE files SET description = ?, modified_date = ? WHERE id = ?",
                     (
-                        merged_tags,
                         merged_description or selected.get("description") or "",
                         earliest_modified or selected["modified_date"],
                         canonical_id,
                     ),
                 )
+                await set_file_tags(wdb, canonical_id, merged_tags)
 
         elif mode == "move_to":
             # Resolve destination path and location_id
@@ -675,14 +673,14 @@ async def run_consolidation(
                 # Apply merged metadata
                 async with db_writer() as wdb:
                     await wdb.execute(
-                        "UPDATE files SET tags = ?, description = ?, modified_date = ? WHERE id = ?",
+                        "UPDATE files SET description = ?, modified_date = ? WHERE id = ?",
                         (
-                            merged_tags,
                             merged_description or existing_at_dest.get("description") or "",
                             earliest_modified or existing_at_dest["modified_date"],
                             canonical_id,
                         ),
                     )
+                    await set_file_tags(wdb, canonical_id, merged_tags)
             else:
                 # Name collision: check catalog instead of filesystem
                 canonical_path = dest_file_path
@@ -1420,9 +1418,9 @@ async def _ensure_canonical_record(
             """INSERT INTO files
                (filename, full_path, rel_path, location_id, folder_id,
                 file_type_high, file_type_low, file_size,
-                description, tags,
+                description,
                 created_date, modified_date, date_cataloged, date_last_seen, scan_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
             (
                 source["filename"],
                 canonical_path,
@@ -1433,7 +1431,6 @@ async def _ensure_canonical_record(
                 type_low,
                 file_size,
                 source.get("description", ""),
-                source.get("tags", ""),
                 source.get("created_date", now_iso),
                 source.get("modified_date", now_iso),
                 now_iso,
@@ -1441,6 +1438,7 @@ async def _ensure_canonical_record(
             ),
         )
         new_id = cursor.lastrowid
+        await set_file_tags(wdb, new_id, parse_tags(source.get("tags")))
 
     # Register hashes for the new file record
     hash_partial = source.get("hash_partial")
@@ -1503,9 +1501,9 @@ async def _upsert_sources_record(
                 """INSERT OR IGNORE INTO files
                    (filename, full_path, rel_path, location_id, folder_id,
                     file_type_high, file_type_low, file_size,
-                    description, tags,
+                    description,
                     created_date, modified_date, date_cataloged, date_last_seen, scan_id)
-                   VALUES (?, ?, ?, ?, ?, 'text', 'sources', ?, '', '',
+                   VALUES (?, ?, ?, ?, ?, 'text', 'sources', ?, '',
                            ?, ?, ?, ?, NULL)""",
                 (
                     sources_name,

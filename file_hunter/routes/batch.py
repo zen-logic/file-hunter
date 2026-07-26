@@ -8,6 +8,7 @@ from file_hunter.services.batch import (
     batch_collect_files,
 )
 from file_hunter.services.queue_manager import enqueue
+from file_hunter.services.tags import parse_tags
 from file_hunter.services.zip_download import start_build
 from file_hunter.helpers import post_op_stats
 from file_hunter.ws.scan import broadcast
@@ -65,8 +66,8 @@ async def batch_tag_route(request: Request):
     """POST /api/batch/tag — add/remove tags on multiple files."""
     body = await request.json()
     file_ids = body.get("file_ids", [])
-    add_tags = body.get("add_tags", [])
-    remove_tags = body.get("remove_tags", [])
+    add_tags = parse_tags(body.get("add_tags"))
+    remove_tags = parse_tags(body.get("remove_tags"))
 
     if not file_ids:
         return json_error("No files specified.")
