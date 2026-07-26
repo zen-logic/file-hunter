@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 
+from file_hunter.services.tags import get_or_create_tag_ids, parse_tags
 from file_hunter.testdata import create_test_locations
 
 
@@ -676,14 +677,29 @@ async def seed_db(db):
         ),
     ]
 
+    # Each tuple still carries its tag text at TAG_POS, the position the
+    # retained files.tags column used to occupy. It is split out here and
+    # written to file_tags instead — seeding runs after the tags migration
+    # has already stamped itself done, so nothing else would pick it up.
+    TAG_POS = 12
+    tag_cache = {}
+
     for f in files:
         await db.execute(
             """INSERT INTO files (id, filename, full_path, rel_path, location_id, folder_id,
                file_type_high, file_type_low, file_size, hash_fast, hash_strong,
-               description, tags, created_date, modified_date, date_cataloged,
+               description, created_date, modified_date, date_cataloged,
                date_last_seen, scan_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            f,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            f[:TAG_POS] + f[TAG_POS + 1 :],
         )
+
+        names = parse_tags(f[TAG_POS])
+        if names:
+            for tag_id in await get_or_create_tag_ids(db, names, tag_cache):
+                await db.execute(
+                    "INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?, ?)",
+                    (f[0], tag_id),
+                )
 
     await db.commit()

@@ -4,14 +4,14 @@ import logging
 
 from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import get_file_hashes, read_hashes, remove_file_hashes
-from file_hunter.helpers import parse_prefixed_id, post_op_stats
+from file_hunter.helpers import expand_to_duplicates, parse_prefixed_id, post_op_stats
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.delete import delete_folder
 from file_hunter.services.files import move_file
 from file_hunter.services.locations import move_folder
-from file_hunter.services.tags import add_file_tags, parse_tags, remove_file_tags
+from file_hunter.services.tags import add_tags_to_files, parse_tags, remove_file_tags
 from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
@@ -388,9 +388,9 @@ async def batch_tag(
 ):
     """Add and/or remove tags on multiple files as a background task.
 
-    Additions and removals are applied directly to file_tags — no
-    read-modify-write of the file's existing tags. Broadcasts completion
-    via WebSocket.
+    Additions propagate to every active duplicate of the selected files —
+    the same copies the UI's dup badge counts. Removals apply only to the
+    files the user actually selected. Broadcasts completion via WebSocket.
 
     Runs as a background task — registers activity and broadcasts completion.
     """
@@ -401,26 +401,34 @@ async def batch_tag(
     tag_label = ", ".join(add_tags) if add_tags else ", ".join(remove_tags)
     register(act_name, "Writing tags...", tag_label)
     updated = 0
-    tag_cache = {}
+    propagated = 0
 
     try:
-        for fid in file_ids:
-            async with db_writer() as db:
-                row = await db.execute_fetchall(
-                    "SELECT 1 FROM files WHERE id = ?", (fid,)
-                )
-                if not row:
-                    continue
+        async with read_db() as db:
+            ph = ",".join("?" for _ in file_ids)
+            rows = await db.execute_fetchall(
+                f"SELECT id FROM files WHERE id IN ({ph})", list(file_ids)
+            )
+        valid_ids = [r["id"] for r in rows]
+        updated = len(valid_ids)
 
-                await add_file_tags(db, fid, add_tags, tag_cache)
-                await remove_file_tags(db, fid, remove_tags)
-                updated += 1
+        if add_tags and valid_ids:
+            targets = await expand_to_duplicates(valid_ids)
+            propagated = len(targets) - len(valid_ids)
+            async with db_writer() as db:
+                await add_tags_to_files(db, targets, add_tags)
+
+        if remove_tags:
+            for fid in valid_ids:
+                async with db_writer() as db:
+                    await remove_file_tags(db, fid, remove_tags)
     finally:
         unregister(act_name)
 
     await broadcast({
         "type": "batch_tag_completed",
         "updated": updated,
+        "propagated": propagated,
         "add_tags": add_tags,
         "remove_tags": remove_tags,
     })

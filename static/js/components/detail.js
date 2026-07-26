@@ -1,6 +1,7 @@
 import API from '../api.js';
 import ConfirmModal from './confirm.js';
 import Tree from './tree.js';
+import Toast from './toast.js';
 import icons from '../icons.js';
 
 function _isScanning(locId) {
@@ -1443,6 +1444,11 @@ const Detail = {
                     detail.tags = res.data.tags;
                     this._lastDetail = res.data;
                     this.renderFile({ id: detail.id, type: 'file' });
+                    // Tags propagate to every duplicate; removal doesn't.
+                    const dups = res.data.tagsPropagated || 0;
+                    if (dups > 0) {
+                        Toast.info(`Also tagged ${dups} duplicate${dups !== 1 ? 's' : ''}`);
+                    }
                 }
             };
             addBtn.addEventListener('click', addTag);

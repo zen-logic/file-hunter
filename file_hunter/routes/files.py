@@ -185,12 +185,15 @@ async def file_update(request: Request):
     description = body.get("description")
     tags = body.get("tags")
 
-    await execute_write(update_file, file_id, description=description, tags=tags)
+    propagated = await execute_write(
+        update_file, file_id, description=description, tags=tags
+    )
 
     async with read_db() as db:
         detail = await get_file_detail(db, file_id)
     if not detail:
         return json_error("File not found.", 404)
+    detail["tagsPropagated"] = propagated or 0
     return json_ok(detail)
 
 

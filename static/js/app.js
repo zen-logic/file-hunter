@@ -1732,11 +1732,14 @@ WS.on('batch_move_progress', (msg) => {
 
 WS.on('batch_tag_completed', async (msg) => {
     const n = msg.updated || 0;
+    const dups = msg.propagated || 0;
     const tags = (msg.add_tags || []).concat(msg.remove_tags || []);
     const label = tags.length === 1 ? `"${tags[0]}"` : `${tags.length} tags`;
     const verb = (msg.add_tags || []).length ? 'Tagged' : 'Untagged';
-    ActivityLog.add(`${verb} <b>${n} file${n !== 1 ? 's' : ''}</b> with ${label}`);
-    Toast.success(`${verb} ${n} file${n !== 1 ? 's' : ''}`);
+    // Additions propagate to duplicates; removals apply only to the selection.
+    const extra = dups > 0 ? ` + ${dups} duplicate${dups !== 1 ? 's' : ''}` : '';
+    ActivityLog.add(`${verb} <b>${n} file${n !== 1 ? 's' : ''}${extra}</b> with ${label}`);
+    Toast.success(`${verb} ${n} file${n !== 1 ? 's' : ''}${extra}`);
     await refreshDetailPanel();
 });
 

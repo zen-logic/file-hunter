@@ -1143,8 +1143,6 @@ async def move_folder(
 
     if copy:
         # Insert new folder and file records — source stays untouched
-        now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
-
         # Map old folder IDs to new folder IDs
         folder_id_map = {}
 
@@ -1187,7 +1185,7 @@ async def move_folder(
         for fid in all_folder_ids:
             file_rows = await db.execute_fetchall(
                 """SELECT id, filename, rel_path, file_size,
-                          description, tags, created_date, modified_date
+                          description, created_date, modified_date
                    FROM files WHERE folder_id = ?""",
                 (fid,),
             )

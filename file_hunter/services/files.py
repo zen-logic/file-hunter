@@ -8,6 +8,7 @@ from file_hunter.core import classify_file
 from file_hunter.db import execute_write
 from file_hunter.hashes_db import get_file_hashes, hashes_writer, read_hashes
 from file_hunter.helpers import (
+    expand_to_duplicates,
     parse_folder_id,
     parse_location_id,
     parse_mtime,
@@ -24,10 +25,11 @@ from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.locations import check_location_online
 from file_hunter.services.settings import get_setting
 from file_hunter.services.tags import (
+    add_tags_to_files,
     copy_file_tags,
     get_file_tags,
     parse_tags,
-    set_file_tags,
+    remove_file_tags,
 )
 
 PAGE_SIZE = 120
@@ -467,22 +469,25 @@ async def update_file(db, file_id: int, description: str = None, tags: list = No
         db: Writable database connection (called inside execute_write).
         file_id: Numeric file ID.
         description: New description string, or None to leave unchanged.
-        tags: Replacement tag list (any caller format — normalised here), or
-            None to leave unchanged. An empty list clears the file's tags.
+        tags: The file's complete tag list after the edit (any caller format
+            — normalised here), or None to leave unchanged. An empty list
+            clears this file's tags.
 
     Returns:
-        None.
+        int: How many *other* files received a propagated tag. Zero when
+        nothing was added or the file has no duplicates.
 
     Side effects:
-        DB write + commit. Description writes to the files table; tags are
-        replaced wholesale in file_tags. No-op if both are None.
+        DB write + commit. Description writes to the files table. Tags are
+        diffed against the file's current set: newly added tags are also
+        applied to every active duplicate, removed tags are dropped from
+        this file only. No-op if both arguments are None.
 
     Called by:
         Route handler file_update (POST /api/files/{id}/update).
-        batch_tag() in batch.py (per-file tag update).
     """
     if description is None and tags is None:
-        return
+        return 0
 
     if description is not None:
         await db.execute(
@@ -490,10 +495,22 @@ async def update_file(db, file_id: int, description: str = None, tags: list = No
             (description, file_id),
         )
 
+    propagated = 0
     if tags is not None:
-        await set_file_tags(db, file_id, parse_tags(tags))
+        wanted = parse_tags(tags)
+        current = await get_file_tags(db, file_id)
+        added = [name for name in wanted if name not in set(current)]
+        removed = [name for name in current if name not in set(wanted)]
+
+        if removed:
+            await remove_file_tags(db, file_id, removed)
+        if added:
+            targets = await expand_to_duplicates([file_id])
+            propagated = len(targets) - 1
+            await add_tags_to_files(db, targets, added)
 
     await db.commit()
+    return propagated
 
 
 async def insert_file_copy(db, *, source_file_id, source_row, filename,

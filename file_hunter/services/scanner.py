@@ -126,7 +126,10 @@ async def _upsert_file(
     dup_exclude: int = 0,
     inode: int = 0,
 ) -> int:
-    """Insert or update a file record. Preserves description and tags on update.
+    """Insert or update a file record. Preserves description on update.
+
+    Tags are untouched — they live in file_tags, keyed on the file id this
+    returns, so an update never disturbs them.
 
     Hashes are NOT written here — they belong in hashes.db only.
     """
@@ -167,10 +170,10 @@ async def _upsert_file(
             """INSERT INTO files
                (filename, full_path, rel_path, location_id, folder_id,
                 file_type_high, file_type_low, file_size,
-                description, tags,
+                description,
                 created_date, modified_date, date_cataloged, date_last_seen,
                 scan_id, stale, hidden, dup_exclude, inode)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
             (
                 filename,
                 full_path,

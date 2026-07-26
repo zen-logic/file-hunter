@@ -88,9 +88,9 @@ async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None)
             """INSERT OR IGNORE INTO files
                (filename, full_path, rel_path, location_id, folder_id,
                 file_type_high, file_type_low, file_size,
-                description, tags,
+                description,
                 created_date, modified_date, date_cataloged, date_last_seen)
-               VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?, '', '', ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?, '', ?, ?, ?, ?)""",
             (
                 filename,
                 csv_path,

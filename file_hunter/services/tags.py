@@ -223,6 +223,34 @@ async def add_file_tags(db, file_id: int, names: list[str], cache: dict = None):
     )
 
 
+async def add_tags_to_files(db, file_ids, names: list[str], cache: dict = None):
+    """Add the same tags to many files in one write.
+
+    Used for the add path, which propagates across duplicates — see
+    helpers.expand_to_duplicates. Removal deliberately has no equivalent:
+    untagging applies only to the file the user acted on.
+
+    Parameters:
+        db: Writable database connection (called inside a write context).
+        file_ids: Numeric file IDs.
+        names: Already-normalised tag names.
+        cache: Optional name -> id dict shared across calls.
+
+    Side effects:
+        Inserts into `file_tags` (and `tags` as needed). Does not commit.
+    """
+    file_ids = list(file_ids)
+    if not file_ids or not names:
+        return
+    tag_ids = await get_or_create_tag_ids(db, names, cache)
+    pairs = [(fid, tid) for fid in file_ids for tid in tag_ids]
+    for i in range(0, len(pairs), 5000):
+        await db.executemany(
+            "INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?, ?)",
+            pairs[i : i + 5000],
+        )
+
+
 async def remove_file_tags(db, file_id: int, names: list[str]):
     """Remove tags from a file.
 

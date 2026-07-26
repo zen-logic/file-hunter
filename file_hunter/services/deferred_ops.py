@@ -371,17 +371,18 @@ async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
         mtime=parse_mtime(f["modified_date"]),
     )
 
-    # Read source file's description and tags
+    # Read source file's metadata — tags come from the source's own
+    # associations inside insert_file_copy, not from this row.
     async with read_db() as rdb:
         src_row = await rdb.execute_fetchall(
-            "SELECT file_size, description, tags, created_date, modified_date FROM files WHERE id = ?",
+            "SELECT file_size, description, created_date, modified_date FROM files WHERE id = ?",
             (file_id,),
         )
     src = dict(src_row[0]) if src_row else {"file_size": f["file_size"]}
 
     # Insert new catalog entry + hash copy
     async with db_writer() as wdb:
-        new_file_id = await insert_file_copy(
+        await insert_file_copy(
             wdb,
             source_file_id=file_id,
             source_row=src,

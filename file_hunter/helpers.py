@@ -3,7 +3,7 @@
 import os
 from datetime import datetime
 
-from file_hunter.hashes_db import get_file_hashes
+from file_hunter.hashes_db import get_file_hashes, read_hashes
 
 
 def parse_mtime(value) -> float | None:
@@ -128,6 +128,49 @@ async def get_effective_hashes(
         else:
             hf = h.get("hash_fast")
             result[fid] = (hf, "hash_fast") if hf else (None, None)
+    return result
+
+
+async def expand_to_duplicates(file_ids: list[int]) -> set[int]:
+    """Widen a set of file IDs to include every active duplicate of each.
+
+    A "duplicate" is the same set the UI's dup badge counts: a row in
+    active_hashes (excluded = 0, stale = 0) matching on the file's effective
+    hash — strong where it exists, otherwise fast. Copies in offline
+    locations are included; they aren't stale, just unreachable.
+
+    Parameters:
+        file_ids: Numeric file IDs to expand.
+
+    Returns:
+        The input IDs plus the IDs of all their active duplicates. Files
+        with no hash yet expand to themselves only.
+    """
+    if not file_ids:
+        return set()
+
+    effective = await get_effective_hashes(list(file_ids))
+    by_column: dict[str, set[str]] = {"hash_strong": set(), "hash_fast": set()}
+    for file_hash, column in effective.values():
+        if file_hash and column:
+            by_column[column].add(file_hash)
+
+    result = set(file_ids)
+    if not any(by_column.values()):
+        return result
+
+    async with read_hashes() as hdb:
+        for column, hashes in by_column.items():
+            hash_list = list(hashes)
+            for i in range(0, len(hash_list), 500):
+                batch = hash_list[i : i + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows = await hdb.execute_fetchall(
+                    f"SELECT file_id FROM active_hashes "
+                    f"WHERE {column} IN ({placeholders})",
+                    batch,
+                )
+                result.update(r["file_id"] for r in rows)
     return result
 
 

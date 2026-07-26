@@ -163,6 +163,14 @@ async def run_quick_scan(
         # claiming files that no longer exist.
         await _reconcile_missing_dir(location_id, folder_id, label)
         return
+    except ConnectionError:
+        # The agent itself is unreachable, so we learned nothing about what
+        # is on disk — never reconcile from this. Browsing an offline
+        # location is routine, so stay quiet; a deliberate scan still
+        # raises so the caller can report it.
+        if silent:
+            return
+        raise
     disk_folders = {f["name"]: f for f in listing["folders"]}
     disk_files = {f["name"]: f for f in listing["files"]}
 
@@ -311,10 +319,10 @@ async def run_quick_scan(
                         """INSERT INTO files
                            (filename, full_path, rel_path, location_id, folder_id,
                             file_type_high, file_type_low, file_size,
-                            description, tags,
+                            description,
                             created_date, modified_date, date_cataloged, date_last_seen,
                             scan_id, stale, hidden, dup_exclude, inode)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, NULL, 0, ?, ?, ?)""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, NULL, 0, ?, ?, ?)""",
                         (
                             name,
                             full,
