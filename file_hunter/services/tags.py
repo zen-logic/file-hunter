@@ -126,11 +126,16 @@ async def list_all_tags(db) -> list[str]:
 
 
 def tag_filter_sql(names: list[str], file_col: str = "f.id"):
-    """Build a SQL fragment matching files carrying *all* the given tags.
+    """Build a SQL fragment matching files carrying *any* of the given tags.
 
     Resolves to a single uncorrelated subquery so the (small) set of matching
     file IDs is computed once rather than re-evaluated per candidate row —
     which matters on a large catalog, where a tag is highly selective.
+
+    Multiple tags are ORed. Advanced search supplies the other operators:
+    two single-tag conditions give AND, since conditions are joined with AND,
+    and an excluded condition negates the whole fragment — so excluding
+    several tags matches files carrying none of them.
 
     Parameters:
         names: Already-normalised tag names.
@@ -146,11 +151,10 @@ def tag_filter_sql(names: list[str], file_col: str = "f.id"):
         f"{file_col} IN ("
         f"SELECT ft.file_id FROM file_tags ft "
         f"JOIN tags t ON t.id = ft.tag_id "
-        f"WHERE t.name IN ({placeholders}) "
-        f"GROUP BY ft.file_id HAVING COUNT(DISTINCT ft.tag_id) = ?"
+        f"WHERE t.name IN ({placeholders})"
         f")"
     )
-    return fragment, list(names) + [len(names)]
+    return fragment, list(names)
 
 
 async def copy_file_tags(db, source_file_id: int, dest_file_id: int):
