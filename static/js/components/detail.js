@@ -75,6 +75,7 @@ const Detail = {
     onNavigateToFile: null,
     onNavigateToFolder: null,
     onShowDuplicates: null,
+    onPreviewNavigate: null,    // arrow keys while the preview is open
 
     init(opts) {
         this.el = document.getElementById('detail-content');
@@ -304,6 +305,13 @@ const Detail = {
                 // above (autoplay / play-pause), so the two never collide.
                 e.preventDefault();
                 this._closePreviewModal();
+            } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                // Move the list underneath; renderFile swaps the preview to
+                // whatever ends up selected, including across page boundaries.
+                e.preventDefault();
+                if (this.onPreviewNavigate) {
+                    this.onPreviewNavigate(e.key === 'ArrowDown' ? 1 : -1);
+                }
             } else if ('dctmz'.includes(e.key)) {
                 // Plain preview marks into the same session queues the file
                 // list uses, so the count lands in the triage bar above the
@@ -923,6 +931,15 @@ const Detail = {
             }
         }
         this._lastDetail = detail;
+
+        // Keep an open plain preview in step with the selection, so the arrow
+        // keys walk the list and the enlarged view follows without reaching for
+        // the mouse. Slideshow drives its own navigation, so leave it alone.
+        if (this._previewModal
+            && !this._previewModal.overlay.classList.contains('hidden')
+            && this._slideshowTotal === 0) {
+            this._openPreviewModal(detail);
+        }
 
         const tags = detail.tags || [];
         const dups = detail.duplicates || [];

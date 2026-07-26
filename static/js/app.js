@@ -1006,6 +1006,10 @@ FileList.onBreadcrumbNav = (nodeId) => Tree.navigateTo(nodeId);
 // Space in the file list enlarges the selected file, if it can be previewed.
 FileList.onPreview = (file) => Detail.openPreviewFor(file);
 
+// Arrow keys keep working while the preview is open — the list advances and
+// the enlarged view follows the selection.
+Detail.onPreviewNavigate = (delta) => FileList.moveSelection(delta);
+
 Detail.init({
     async onNavigateToFolder(nodeId, fileId) {
         if (fileId) FileList.pendingFocusFile = fileId;

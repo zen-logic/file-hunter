@@ -62,6 +62,7 @@ const FileList = {
     onFolderOpen: null,
     onDeselect: null,
     onMultiSelect: null,
+    onPreview: null,            // space — enlarge the selected file
     onSelectingAll: null,
     onBreadcrumbNav: null,
     currentBreadcrumb: null,
@@ -320,7 +321,7 @@ const FileList = {
             case 'ArrowDown':
                 e.preventDefault();
                 if (curIdx === items.length - 1 && this.currentPage < totalPages - 1) {
-                    this._goToPage(this.currentPage + 1, 'first');
+                    this._goToPage(this.currentPage + 1, 'first', e.shiftKey);
                     return;
                 }
                 newIdx = curIdx < items.length - 1 ? curIdx + 1 : curIdx;
@@ -341,7 +342,7 @@ const FileList = {
             case 'ArrowUp':
                 e.preventDefault();
                 if (curIdx === 0 && this.currentPage > 0) {
-                    this._goToPage(this.currentPage - 1, 'last');
+                    this._goToPage(this.currentPage - 1, 'last', e.shiftKey);
                     return;
                 }
                 newIdx = curIdx > 0 ? curIdx - 1 : 0;
@@ -427,6 +428,19 @@ const FileList = {
         this._selectOnly(file, newIdx);
         this.render();
         this._fireSelectionChange();
+    },
+
+    /** Move the selection one row, as if the arrow key had been pressed.
+     *  Used by the preview modal, which swallows keys before the keyboard
+     *  manager can route them here. Goes through handleKey so paging at the
+     *  list boundaries behaves identically. */
+    moveSelection(delta) {
+        this.handleKey({
+            key: delta > 0 ? 'ArrowDown' : 'ArrowUp',
+            shiftKey: false,
+            preventDefault() {},
+            stopImmediatePropagation() {},
+        });
     },
 
     _scrollSelectedIntoView() {
@@ -747,19 +761,24 @@ const FileList = {
         this._renderContent();
     },
 
-    async _goToPage(n, selectPosition) {
+    async _goToPage(n, selectPosition, extend = false) {
         const totalPages = this._totalPages();
         this.currentPage = Math.max(0, Math.min(n, totalPages - 1));
 
         await (this._searchMode ? this._fetchSearch() : this._fetchFolder());
 
-        // Keyboard navigation: set cursor on first/last item without clearing selection
+        // Keyboard navigation: set cursor on the first/last item of the new page.
         if (selectPosition) {
             const items = this._getDisplayItems();
             if (items.length > 0) {
                 const file = selectPosition === 'last' ? items[items.length - 1] : items[0];
                 const idx = selectPosition === 'last' ? items.length - 1 : 0;
                 this._anchorIdx = idx;
+                // Only shift-extend carries the previous page's selection over.
+                // Plain navigation moves a cursor, so crossing a page boundary
+                // must leave exactly one row selected — otherwise it reports a
+                // multi-selection and the detail panel stops following along.
+                if (!extend) this.selectedItems.clear();
                 this.selectedItems.set(itemKey(file), file);
                 this.render();
                 this._fireSelectionChange();
