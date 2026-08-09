@@ -1,6 +1,7 @@
 """File listing, detail, and update operations."""
 
 import asyncio
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -20,6 +21,7 @@ from file_hunter.services import fs
 from file_hunter.services.agent_ops import dispatch
 from file_hunter.ws.scan import broadcast
 from file_hunter.services.deferred_ops import queue_deferred_op
+from file_hunter.services.op_result_log import append_row, create_log
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.locations import check_location_online
@@ -31,6 +33,8 @@ from file_hunter.services.tags import (
     parse_tags,
     remove_file_tags,
 )
+
+logger = logging.getLogger("file_hunter")
 
 PAGE_SIZE = 120
 
@@ -585,6 +589,8 @@ async def move_file(
     destination_folder_id: str = None,
     skip_post_processing: bool = False,
     copy: bool = False,
+    shared_csv_path: str | None = None,
+    shared_csv_loc_id: int | None = None,
 ):
     """Move, copy, and/or rename a file on disk and update the catalog.
 
@@ -822,6 +828,95 @@ async def move_file(
                 final_location_id,
                 added=[(final_folder_id, file_size, new_type_high, hidden)],
             )
+
+        # Write .moved stub at source and log to CSV
+        if moved and (cross_location or final_folder_id != f["folder_id"]):
+            now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            dest_loc_name = dest.get("location_name") or dest["name"]
+
+            # Build and write stub at old path
+            stub_text = (
+                f"Moved by File Hunter\n"
+                f"Original: {old_name}\n"
+                f"Moved to: {dest_loc_name}: {new_rel_path}\n"
+                f"Date: {now_iso}\n"
+            )
+            stub_path = f["full_path"] + ".moved"
+            stub_name = old_name + ".moved"
+            stub_rel = f["rel_path"] + ".moved"
+            stub_size = len(stub_text.encode())
+
+            try:
+                await fs.file_write_text(stub_path, stub_text, src_loc_id)
+
+                # Catalog record for the stub
+                await db.execute(
+                    "DELETE FROM files WHERE location_id = ? AND rel_path = ?",
+                    (src_loc_id, stub_rel),
+                )
+                await db.execute(
+                    """INSERT INTO files
+                       (filename, full_path, rel_path, location_id, folder_id,
+                        file_type_high, file_type_low, file_size,
+                        description, created_date, modified_date,
+                        date_cataloged, date_last_seen)
+                       VALUES (?, ?, ?, ?, ?, 'text', 'moved', ?,
+                               '', ?, ?, ?, ?)""",
+                    (
+                        stub_name, stub_path, stub_rel, src_loc_id,
+                        f["folder_id"], stub_size,
+                        now_iso, now_iso, now_iso, now_iso,
+                    ),
+                )
+                await db.commit()
+
+                await update_stats_for_files(
+                    src_loc_id,
+                    added=[(f["folder_id"], stub_size, "text", 0)],
+                )
+            except Exception as e:
+                logger.warning("Stub write failed for %s: %s", f["full_path"], e)
+
+            # CSV report
+            owns_csv = shared_csv_path is None
+            if owns_csv:
+                csv_path = await create_log(dest_dir, final_location_id, "move")
+                csv_loc_id = final_location_id
+            else:
+                csv_path = shared_csv_path
+                csv_loc_id = shared_csv_loc_id
+
+            await append_row(
+                csv_path, csv_loc_id,
+                f["location_name"], f["full_path"],
+                dest_loc_name, new_full_path,
+                "moved",
+            )
+
+            if owns_csv:
+                csv_filename = os.path.basename(csv_path)
+                csv_rel = os.path.relpath(csv_path, final_root)
+                st = await fs.file_stat(csv_path, final_location_id)
+                csv_size = st["size"] if st else 0
+                await db.execute(
+                    """INSERT OR IGNORE INTO files
+                       (filename, full_path, rel_path, location_id, folder_id,
+                        file_type_high, file_type_low, file_size,
+                        description, created_date, modified_date,
+                        date_cataloged, date_last_seen)
+                       VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?,
+                               '', ?, ?, ?, ?)""",
+                    (
+                        csv_filename, csv_path, csv_rel, final_location_id,
+                        final_folder_id, csv_size,
+                        now_iso, now_iso, now_iso, now_iso,
+                    ),
+                )
+                await db.commit()
+                await update_stats_for_files(
+                    final_location_id,
+                    added=[(final_folder_id, csv_size, "text", 0)],
+                )
 
         result_id = file_id
 

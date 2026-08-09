@@ -1,16 +1,22 @@
 """Batch operations — delete, move, tag, and download multiple items."""
 
 import logging
+import os
 
 from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import get_file_hashes, read_hashes, remove_file_hashes
-from file_hunter.helpers import expand_to_duplicates, parse_prefixed_id, post_op_stats
+from file_hunter.helpers import (
+    expand_to_duplicates,
+    post_op_stats,
+    resolve_target,
+)
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.delete import delete_folder
 from file_hunter.services.files import move_file
 from file_hunter.services.locations import move_folder
+from file_hunter.services.op_result_log import create_log
 from file_hunter.services.tags import add_tags_to_files, parse_tags, remove_file_tags
 from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
@@ -296,6 +302,10 @@ async def batch_move(
         for r in fld_rows:
             name_map[r["id"]] = r["name"]
 
+    # Resolve destination once — used for CSV and post_op_stats
+    dest = await resolve_target(db, destination_folder_id)
+    dest_loc_id = dest["location_id"] if dest else None
+
     # Capture source locations before moves change them
     if file_ids:
         ph = ",".join("?" for _ in file_ids)
@@ -311,6 +321,15 @@ async def batch_move(
         )
         for r in src_rows:
             affected_loc_ids.add(r["location_id"])
+
+    # Shared CSV for batch file moves (not copies)
+    csv_path = None
+    csv_loc_id = None
+    csv_folder_id = None
+    if file_ids and not copy and dest:
+        csv_path = await create_log(dest["abs_path"], dest_loc_id, "move")
+        csv_loc_id = dest_loc_id
+        csv_folder_id = dest.get("folder_id")
 
     try:
         # Move folders
@@ -350,6 +369,8 @@ async def batch_move(
                     destination_folder_id=destination_folder_id,
                     skip_post_processing=True,
                     copy=copy,
+                    shared_csv_path=csv_path,
+                    shared_csv_loc_id=csv_loc_id,
                 )
                 moved_files += 1
             except (ValueError, OSError) as e:
@@ -359,16 +380,36 @@ async def batch_move(
     finally:
         unregister(act_name)
 
-    # Post-processing once — recalc all affected locations
-    kind, num_id = parse_prefixed_id(destination_folder_id)
-    if kind == "loc":
-        dest_loc_id = num_id
-    else:
-        row = await db.execute_fetchall(
-            "SELECT location_id FROM folders WHERE id = ?", (num_id,)
-        )
-        dest_loc_id = row[0]["location_id"] if row else None
+    # Add shared CSV to catalog
+    if csv_path and moved_files > 0:
+        from datetime import datetime, timezone
 
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        csv_filename = os.path.basename(csv_path)
+        csv_rel = os.path.relpath(csv_path, dest["root_path"])
+        st = await fs.file_stat(csv_path, csv_loc_id)
+        csv_size = st["size"] if st else 0
+        await db.execute(
+            """INSERT OR IGNORE INTO files
+               (filename, full_path, rel_path, location_id, folder_id,
+                file_type_high, file_type_low, file_size,
+                description, created_date, modified_date,
+                date_cataloged, date_last_seen)
+               VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?,
+                       '', ?, ?, ?, ?)""",
+            (
+                csv_filename, csv_path, csv_rel, csv_loc_id,
+                csv_folder_id, csv_size,
+                now_iso, now_iso, now_iso, now_iso,
+            ),
+        )
+        await db.commit()
+        await update_stats_for_files(
+            csv_loc_id,
+            added=[(csv_folder_id, csv_size, "text", 0)],
+        )
+
+    # Post-processing once — recalc all affected locations
     if dest_loc_id:
         affected_loc_ids.add(dest_loc_id)
     await post_op_stats(
