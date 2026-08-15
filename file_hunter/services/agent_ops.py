@@ -11,6 +11,7 @@ import logging
 import httpx
 
 from file_hunter.db import read_db
+from file_hunter_core.paths import norm_inode
 
 logger = logging.getLogger("file_hunter")
 
@@ -481,11 +482,8 @@ def _parse_tsv_line(line: str) -> dict | None:
         return None
     t = parts[0]
     if t == "F" and len(parts) >= 6:
-        # Reinterpret as signed 64-bit for SQLite — handles both old
-        # agents (unsigned) and new agents (already signed)
-        ino = int(parts[5])
-        if ino >= 2**63:
-            ino -= 2**64
+        # Handles both old agents (unsigned) and new agents (already signed)
+        ino = norm_inode(int(parts[5]))
         return {
             "type": "file",
             "rel_path": parts[1],

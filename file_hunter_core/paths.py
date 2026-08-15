@@ -33,3 +33,17 @@ def safe_path(path: str) -> bytes:
     decoded back with os.fsdecode() for file operations.
     """
     return os.fsencode(path)
+
+
+def norm_inode(ino: int) -> int:
+    """Wrap an inode number into the signed 64-bit range SQLite accepts.
+
+    Some filesystems (exFAT via fskit on macOS, several FUSE drivers)
+    hand out unsigned 64-bit inode numbers. Anything at or above 2**63
+    raises OverflowError on insert, which kills a scan for one file.
+    Wrapping is lossless within a filesystem: values stay unique and
+    keep their order, which is all the column is used for (file
+    identity and inode-ordered reads).
+    """
+    ino &= (1 << 64) - 1
+    return ino - (1 << 64) if ino >= (1 << 63) else ino

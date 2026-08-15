@@ -26,6 +26,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from file_hunter_core.hasher import hash_file_partial_sync
+from file_hunter_core.paths import norm_inode
 
 logger = logging.getLogger("file_hunter_agent")
 
@@ -108,11 +109,7 @@ def walk_tree(
                 tz=timezone.utc,
             ).isoformat(timespec="seconds")
 
-            # Reinterpret as signed 64-bit for SQLite compatibility —
-            # lossless, preserves sort order within a filesystem
-            ino = st.st_ino
-            if ino >= 2**63:
-                ino -= 2**64
+            ino = norm_inode(st.st_ino)
             dir_files.append((ino, entry.path, rel_path, st.st_size, mtime, ctime))
 
         # Build chunk: D record + F records (no hashes)
