@@ -1125,7 +1125,8 @@ async def move_folder(
                UNION ALL
                SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
            )
-           SELECT d.id, fo.rel_path FROM desc d JOIN folders fo ON fo.id = d.id""",
+           SELECT d.id, fo.rel_path, fo.name, fo.parent_id
+           FROM desc d JOIN folders fo ON fo.id = d.id""",
         (folder_id,),
     )
 
@@ -1139,7 +1140,16 @@ async def move_folder(
     else:
         await fs.dir_move(src_abs, dest_abs, src_loc_id)
 
-    new_hidden = 1 if effective_name.startswith(".") else 0
+    # Determine destination parent's hidden state for cascade
+    if dest_parent_fld_id is None:
+        dest_parent_hidden = 0
+    else:
+        ph_row = await db.execute_fetchall(
+            "SELECT hidden FROM folders WHERE id = ?", (dest_parent_fld_id,)
+        )
+        dest_parent_hidden = ph_row[0]["hidden"] if ph_row else 0
+
+    new_hidden = 1 if (dest_parent_hidden or effective_name.startswith(".")) else 0
 
     if copy:
         # Insert new folder and file records — source stays untouched
@@ -1154,27 +1164,20 @@ async def move_folder(
         )
         folder_id_map[folder_id] = cursor.lastrowid
 
-        # Insert descendant folder copies (sorted by depth)
+        # Insert descendant folder copies (sorted by depth), cascade hidden
+        hidden_map = {folder_id: new_hidden}
         sorted_descs = sorted(desc_folder_rows, key=lambda r: r["rel_path"].count("/"))
         for df in sorted_descs:
             new_desc_rel = new_prefix + df["rel_path"][len(old_prefix):]
-            # Find the parent of this descendant in the original tree
-            orig_parent = await db.execute_fetchall(
-                "SELECT parent_id FROM folders WHERE id = ?", (df["id"],)
-            )
-            orig_parent_id = orig_parent[0]["parent_id"] if orig_parent else folder_id
-            new_parent_id = folder_id_map.get(orig_parent_id, folder_id_map[folder_id])
-
-            orig_row = await db.execute_fetchall(
-                "SELECT name, hidden FROM folders WHERE id = ?", (df["id"],)
-            )
-            df_name = orig_row[0]["name"] if orig_row else os.path.basename(new_desc_rel)
-            df_hidden = orig_row[0]["hidden"] if orig_row else 0
+            new_parent_id = folder_id_map.get(df["parent_id"], folder_id_map[folder_id])
+            parent_hidden = hidden_map.get(df["parent_id"], 0)
+            df_hidden = 1 if (parent_hidden or df["name"].startswith(".")) else 0
+            hidden_map[df["id"]] = df_hidden
 
             cursor = await db.execute(
                 """INSERT INTO folders (location_id, parent_id, name, rel_path, hidden, stale)
                    VALUES (?, ?, ?, ?, ?, 0)""",
-                (dest_loc_id, new_parent_id, df_name, new_desc_rel, df_hidden),
+                (dest_loc_id, new_parent_id, df["name"], new_desc_rel, df_hidden),
             )
             folder_id_map[df["id"]] = cursor.lastrowid
 
@@ -1190,9 +1193,11 @@ async def move_folder(
                 (fid,),
             )
             new_folder_id = folder_id_map[fid]
+            folder_hidden = hidden_map.get(fid, new_hidden)
             for fr in file_rows:
                 new_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
                 new_full_path = os.path.join(dest_root, new_file_rel)
+                file_hidden = 1 if (fr["filename"].startswith(".") or folder_hidden) else 0
                 await insert_file_copy(
                     db,
                     source_file_id=fr["id"],
@@ -1202,6 +1207,7 @@ async def move_folder(
                     rel_path=new_file_rel,
                     location_id=dest_loc_id,
                     folder_id=new_folder_id,
+                    hidden=file_hidden,
                 )
 
         await db.commit()
@@ -1213,34 +1219,38 @@ async def move_folder(
             (dest_parent_fld_id, effective_name, new_rel, dest_loc_id, new_hidden, folder_id),
         )
 
-        # Update descendant folders: replace rel_path prefix
-        for df in desc_folder_rows:
+        # Update descendant folders: replace rel_path prefix, cascade hidden
+        hidden_map = {folder_id: new_hidden}
+        sorted_descs = sorted(
+            desc_folder_rows, key=lambda r: r["rel_path"].count("/")
+        )
+        for df in sorted_descs:
             new_desc_rel = new_prefix + df["rel_path"][len(old_prefix):]
-            params = (
-                [new_desc_rel, dest_loc_id, df["id"]]
-                if cross_location
-                else [new_desc_rel, src_loc_id, df["id"]]
-            )
+            parent_hidden = hidden_map.get(df["parent_id"], 0)
+            df_hidden = 1 if (parent_hidden or df["name"].startswith(".")) else 0
+            hidden_map[df["id"]] = df_hidden
+            loc_id = dest_loc_id if cross_location else src_loc_id
             await db.execute(
-                "UPDATE folders SET rel_path = ?, location_id = ? WHERE id = ?",
-                params,
+                "UPDATE folders SET rel_path = ?, location_id = ?, hidden = ? WHERE id = ?",
+                (new_desc_rel, loc_id, df_hidden, df["id"]),
             )
 
         # Update all files in folder + descendants
         all_folder_ids = [folder_id] + [df["id"] for df in desc_folder_rows]
         for fid in all_folder_ids:
             file_rows = await db.execute_fetchall(
-                "SELECT id, full_path, rel_path FROM files WHERE folder_id = ?",
+                "SELECT id, filename, full_path, rel_path FROM files WHERE folder_id = ?",
                 (fid,),
             )
+            folder_hidden = hidden_map.get(fid, new_hidden)
             for fr in file_rows:
                 new_file_rel = new_prefix + fr["rel_path"][len(old_prefix):]
                 new_full_path = os.path.join(dest_root, new_file_rel)
-                update_params = [new_full_path, new_file_rel]
+                file_hidden = 1 if (fr["filename"].startswith(".") or folder_hidden) else 0
                 if cross_location:
                     await db.execute(
-                        "UPDATE files SET full_path = ?, rel_path = ?, location_id = ? WHERE id = ?",
-                        update_params + [dest_loc_id, fr["id"]],
+                        "UPDATE files SET full_path = ?, rel_path = ?, location_id = ?, hidden = ? WHERE id = ?",
+                        (new_full_path, new_file_rel, dest_loc_id, file_hidden, fr["id"]),
                     )
                     async with hashes_writer() as hdb:
                         await hdb.execute(
@@ -1249,8 +1259,8 @@ async def move_folder(
                         )
                 else:
                     await db.execute(
-                        "UPDATE files SET full_path = ?, rel_path = ? WHERE id = ?",
-                        update_params + [fr["id"]],
+                        "UPDATE files SET full_path = ?, rel_path = ?, hidden = ? WHERE id = ?",
+                        (new_full_path, new_file_rel, file_hidden, fr["id"]),
                     )
 
         await db.commit()

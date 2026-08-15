@@ -518,7 +518,8 @@ async def update_file(db, file_id: int, description: str = None, tags: list = No
 
 
 async def insert_file_copy(db, *, source_file_id, source_row, filename,
-                          full_path, rel_path, location_id, folder_id):
+                          full_path, rel_path, location_id, folder_id,
+                          hidden=0):
     """Insert a new file record as a copy of an existing file.
 
     Creates the catalog entry and duplicates the hash record from hashes.db.
@@ -535,6 +536,7 @@ async def insert_file_copy(db, *, source_file_id, source_row, filename,
         rel_path: Destination relative path.
         location_id: Destination location ID.
         folder_id: Destination folder ID (or None for location root).
+        hidden: Hidden flag for the new file (default 0).
 
     Returns:
         int: The new file ID.
@@ -546,15 +548,15 @@ async def insert_file_copy(db, *, source_file_id, source_row, filename,
         """INSERT INTO files (filename, full_path, rel_path, location_id,
               folder_id, file_type_high, file_type_low, file_size,
               description, created_date, modified_date,
-              date_cataloged, date_last_seen)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              date_cataloged, date_last_seen, hidden)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             filename, full_path, rel_path, location_id, folder_id,
             type_high, type_low, source_row["file_size"],
             source_row.get("description") or "",
             source_row.get("created_date"),
             source_row.get("modified_date"),
-            now_iso, now_iso,
+            now_iso, now_iso, hidden,
         ),
     )
     new_file_id = cursor.lastrowid
