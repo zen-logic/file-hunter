@@ -1666,6 +1666,7 @@ const Detail = {
                     <button class="btn btn-sm" id="detail-merge-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Merge</button>
                     <button class="btn btn-sm" id="detail-treemap-btn"${s.online ? '' : ' disabled title="Location is offline"'}>Storage Map</button>
                     <button class="btn btn-sm" id="detail-rename-location">Rename</button>
+                    ${s.staleFiles > 0 ? `<button class="btn btn-sm" id="detail-reset-stale"${_disabledIf(false, _isScanning(locId))}>Reset Stale</button>` : ''}
                     <button class="btn btn-danger btn-sm" id="detail-delete-location"${_disabledIf(false, _isScanning(locId))}>Delete Location</button>
                 </div>
             </div>
@@ -1801,6 +1802,7 @@ const Detail = {
                     <button class="btn btn-sm" id="detail-merge-btn"${_disabledIf(off, false, miss)}>Merge</button>
                     <button class="btn btn-sm" id="detail-rename-folder"${_disabledIf(off, sc, miss)}>Rename</button>
                     <button class="btn btn-sm" id="detail-move-folder"${_disabledIf(off, sc, miss)}>Move / Copy</button>
+                    ${s.staleFiles > 0 ? `<button class="btn btn-sm" id="detail-reset-stale"${_disabledIf(false, sc)}>Reset Stale</button>` : ''}
                     <button class="btn btn-danger btn-sm" id="detail-delete-folder"${_disabledIf(off, sc)}>Delete Folder</button>
                     `; })()}
                 </div>
@@ -1953,7 +1955,8 @@ const Detail = {
                 const btn = document.getElementById('detail-slideshow');
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
-                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'slideshow', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
+                const sp = this.getSortParams ? this.getSortParams() : { sort: 'name', sortDir: 'asc' };
+                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'slideshow', sort: sp.sort, sortDir: sp.sortDir });
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No images available';
                     setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
@@ -1965,7 +1968,8 @@ const Detail = {
                 const btn = document.getElementById('detail-playlist');
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
-                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'playlist', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
+                const sp2 = this.getSortParams ? this.getSortParams() : { sort: 'name', sortDir: 'asc' };
+                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'playlist', sort: sp2.sort, sortDir: sp2.sortDir });
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No videos available';
                     setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);

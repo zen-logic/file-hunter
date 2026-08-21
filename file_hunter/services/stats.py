@@ -207,9 +207,15 @@ async def _refresh_location(db, loc, stats_row=None):
     """Refresh cached stats for a single location."""
     location_id = loc["id"]
 
-    folder_rows = await db.execute_fetchall(
-        "SELECT COUNT(*) as c FROM folders WHERE location_id = ?",
-        (location_id,),
+    folder_rows, stale_rows = await asyncio.gather(
+        db.execute_fetchall(
+            "SELECT COUNT(*) as c FROM folders WHERE location_id = ?",
+            (location_id,),
+        ),
+        db.execute_fetchall(
+            "SELECT COUNT(*) as c FROM files WHERE location_id = ? AND stale = 1",
+            (location_id,),
+        ),
     )
 
     file_count = (stats_row["file_count"] if stats_row else 0) or 0
@@ -217,6 +223,7 @@ async def _refresh_location(db, loc, stats_row=None):
     dup_count = (stats_row["duplicate_count"] if stats_row else 0) or 0
     hidden_count = (stats_row["hidden_count"] if stats_row else 0) or 0
     folder_count = folder_rows[0]["c"]
+    stale_count = stale_rows[0]["c"]
 
     tc_raw = (stats_row["type_counts"] if stats_row else "{}") or "{}"
     tc = json.loads(tc_raw)
@@ -239,6 +246,7 @@ async def _refresh_location(db, loc, stats_row=None):
         "totalSizeFormatted": format_size(total_size),
         "duplicateFiles": dup_count,
         "hiddenFiles": hidden_count,
+        "staleFiles": stale_count,
         "typeBreakdown": type_breakdown,
         "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
         "scheduleDays": schedule_days,
@@ -393,9 +401,13 @@ async def get_location_stats(db, location_id: int):
         )
     sr = stats_row[0] if stats_row else None
 
-    folder_rows, online = await asyncio.gather(
+    folder_rows, stale_rows, online = await asyncio.gather(
         db.execute_fetchall(
             "SELECT COUNT(*) as c FROM folders WHERE location_id = ?",
+            (location_id,),
+        ),
+        db.execute_fetchall(
+            "SELECT COUNT(*) as c FROM files WHERE location_id = ? AND stale = 1",
             (location_id,),
         ),
         asyncio.to_thread(check_location_online, location_id, loc["root_path"]),
@@ -427,6 +439,7 @@ async def get_location_stats(db, location_id: int):
         "totalSizeFormatted": format_size(total_size),
         "duplicateFiles": dup_count,
         "hiddenFiles": hidden_count,
+        "staleFiles": stale_rows[0]["c"],
         "typeBreakdown": type_breakdown,
         "scheduleEnabled": bool(loc["scan_schedule_enabled"]),
         "scheduleDays": schedule_days,
@@ -500,6 +513,7 @@ async def get_folder_stats(db, folder_id: int):
     (
         subfolder_rows,
         chain_rows,
+        stale_rows,
         loc_online,
     ) = await asyncio.gather(
         db.execute_fetchall(
@@ -521,6 +535,15 @@ async def get_folder_stats(db, folder_id: int):
                    SELECT id, name FROM chain ORDER BY depth DESC""",
             (folder_id,),
         ),
+        db.execute_fetchall(
+            """WITH RECURSIVE descendants(id) AS (
+                       SELECT ? UNION ALL
+                       SELECT fo.id FROM folders fo JOIN descendants d ON fo.parent_id = d.id
+                   )
+                   SELECT COUNT(*) as c FROM files
+                   WHERE stale = 1 AND folder_id IN (SELECT id FROM descendants)""",
+            (folder_id,),
+        ),
         asyncio.to_thread(
             check_location_online, fld["location_id"], fld["location_root_path"]
         ),
@@ -531,6 +554,7 @@ async def get_folder_stats(db, folder_id: int):
     dup_count = (fs["duplicate_count"] if fs else 0) or 0
     hidden_count = (fs["hidden_count"] if fs else 0) or 0
     subfolder_count = subfolder_rows[0]["c"]
+    stale_count = stale_rows[0]["c"]
 
     # Build breadcrumb from chain query results
     breadcrumb = [{"nodeId": f"loc-{fld['location_id']}", "name": fld["location_name"]}]
@@ -551,6 +575,7 @@ async def get_folder_stats(db, folder_id: int):
         "duplicateFiles": dup_count,
         "hiddenFiles": hidden_count,
         "subfolderCount": subfolder_count,
+        "staleFiles": stale_count,
         "dupExcluded": bool(fld["dup_exclude"]),
         "favourite": bool(fld["is_favourite"]),
         "breadcrumb": breadcrumb,

@@ -1577,7 +1577,7 @@ async def _broadcast_location_children(location_id: int):
                       EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
                FROM folders f
                WHERE f.location_id = ? AND f.parent_id IS NULL{hidden_filter}
-               ORDER BY f.name""",
+               ORDER BY f.name COLLATE NOCASE""",
             (location_id,),
         )
     children = []

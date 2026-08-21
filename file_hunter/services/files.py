@@ -40,7 +40,7 @@ PAGE_SIZE = 120
 
 
 SORT_COLUMNS = {
-    "name": "f.filename",
+    "name": "f.filename COLLATE NOCASE",
     "type": "f.file_type_low",
     "size": "f.file_size",
     "date": "f.modified_date",
@@ -110,7 +110,7 @@ async def list_files(
         folders = await db.execute_fetchall(
             f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, fld.stale, fld.is_favourite, l.root_path
                FROM folders fld JOIN locations l ON l.id = fld.location_id
-               WHERE fld.location_id = ? AND fld.parent_id IS NULL{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name""",
+               WHERE fld.location_id = ? AND fld.parent_id IS NULL{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name COLLATE NOCASE""",
             [loc_id] + folder_name_params,
         )
     elif folder_id.startswith("fld-"):
@@ -121,7 +121,7 @@ async def list_files(
         folders = await db.execute_fetchall(
             f"""SELECT fld.id, fld.name, fld.rel_path, fld.hidden, fld.stale, fld.is_favourite, l.root_path, fld.location_id
                FROM folders fld JOIN locations l ON l.id = fld.location_id
-               WHERE fld.parent_id = ?{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name""",
+               WHERE fld.parent_id = ?{folder_hidden_filter}{folder_name_filter} ORDER BY fld.name COLLATE NOCASE""",
             [fld_id] + folder_name_params,
         )
     else:

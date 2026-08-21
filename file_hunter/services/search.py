@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 PAGE_SIZE = 120
 
 SORT_COLUMNS = {
-    "name": "f.filename",
+    "name": "f.filename COLLATE NOCASE",
     "type": "f.file_type_low",
     "size": "f.file_size",
     "date": "f.modified_date",
@@ -198,7 +198,7 @@ CREATE INDEX idx_results_dups ON results(dup_count);
 """
 
 RESULT_SORT_COLUMNS = {
-    "name": "filename",
+    "name": "filename COLLATE NOCASE",
     "type": "file_type_low",
     "size": "file_size",
     "date": "modified_date",
@@ -420,7 +420,7 @@ async def _build_scope_sql(db, location_id=None, folder_id=None):
 
 
 SORT_COLUMNS = {
-    "name": "f.filename",
+    "name": "f.filename COLLATE NOCASE",
     "type": "f.file_type_low",
     "size": "f.file_size",
     "date": "f.modified_date",

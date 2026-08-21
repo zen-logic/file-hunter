@@ -90,6 +90,7 @@ async function refreshDetailPanel() {
             wireDownloadZipBtn();
             wireMergeBtn();
             wireTreemapBtn();
+            wireResetStaleBtn();
             wireFavouriteBtn();
             if (result && result.online !== undefined && result.online !== selectedNode.online) {
                 Tree.updateOnlineStatus([selectedNode.id], result.online);
@@ -102,6 +103,7 @@ async function refreshDetailPanel() {
             wireRenameFolderBtn();
             wireMoveFolder();
             wireDeleteFolderBtn();
+            wireResetStaleBtn();
             wireFavouriteBtn();
             if (result) updateLocationOnline(result.locationId, result.locationOnline);
         }
@@ -260,6 +262,36 @@ function wireMoveFolder(node) {
                 { id: target.id, name: target.name || target.label },
                 target.id
             );
+        });
+    }
+}
+
+function wireResetStaleBtn(node) {
+    const btn = document.getElementById('detail-reset-stale');
+    const target = node || selectedNode;
+    if (btn && target) {
+        btn.addEventListener('click', async () => {
+            const isLoc = String(target.id).startsWith('loc-');
+            const numId = String(target.id).replace(/^(loc-|fld-)/, '');
+            const label = target.name || target.label;
+            const ok = await ConfirmModal.open({
+                title: 'Reset Stale',
+                message: `Remove all stale files and folders from "${label}"? This cannot be undone.`,
+                confirmLabel: 'Reset Stale',
+            });
+            if (!ok) return;
+            btn.disabled = true;
+            btn.textContent = 'Resetting…';
+            const url = isLoc
+                ? `/api/locations/${numId}/reset-stale`
+                : `/api/folders/${numId}/reset-stale`;
+            const res = await API.post(url);
+            if (!res.ok) {
+                btn.disabled = false;
+                btn.textContent = 'Reset Stale';
+                Toast.error(res.data?.detail || 'Reset stale failed.');
+            }
+            // Completion handled by WebSocket stale_reset_complete
         });
     }
 }
@@ -645,6 +677,7 @@ RenameLocationModal.init(async (node, newName) => {
         wireDownloadZipBtn();
         wireMergeBtn();
         wireTreemapBtn();
+        wireResetStaleBtn();
         wireFavouriteBtn();
     }
     return { ok: true };
@@ -834,6 +867,7 @@ Tree.init(async (node) => {
         wireDownloadZipBtn();
         wireMergeBtn();
         wireTreemapBtn();
+        wireResetStaleBtn();
         wireFavouriteBtn();
         if (result && result.online !== undefined && result.online !== node.online) {
             Tree.updateOnlineStatus([node.id], result.online);
@@ -845,6 +879,7 @@ Tree.init(async (node) => {
         wireRenameFolderBtn();
         wireMoveFolder();
         wireDeleteFolderBtn();
+        wireResetStaleBtn();
         wireFavouriteBtn();
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
     }
@@ -934,6 +969,7 @@ FileList.init(async (file) => {
         wireDownloadZipBtn();
         wireMergeBtn();
         wireTreemapBtn();
+        wireResetStaleBtn();
         wireFavouriteBtn();
         if (result && result.online !== undefined && node && result.online !== node.online) {
             Tree.updateOnlineStatus([node.id], result.online);
@@ -950,6 +986,7 @@ FileList.init(async (file) => {
         wireRenameFolderBtn();
         wireMoveFolder();
         wireDeleteFolderBtn();
+        wireResetStaleBtn();
         wireFavouriteBtn();
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
         wireSlideshowBtn();
@@ -967,6 +1004,7 @@ FileList.init(async (file) => {
             wireDownloadZipBtn();
             wireMergeBtn();
             wireTreemapBtn();
+            wireResetStaleBtn();
             wireFavouriteBtn();
             if (result && result.online !== undefined && result.online !== selectedNode.online) {
                 Tree.updateOnlineStatus([selectedNode.id], result.online);
@@ -979,6 +1017,7 @@ FileList.init(async (file) => {
             wireRenameFolderBtn();
             wireMoveFolder();
             wireDeleteFolderBtn();
+            wireResetStaleBtn();
             wireFavouriteBtn();
             if (result) updateLocationOnline(result.locationId, result.locationOnline);
         }
@@ -1009,6 +1048,7 @@ FileList.onPreview = (file) => Detail.openPreviewFor(file);
 // Arrow keys keep working while the preview is open — the list advances and
 // the enlarged view follows the selection.
 Detail.onPreviewNavigate = (delta) => FileList.moveSelection(delta);
+Detail.getSortParams = () => ({ sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
 
 Detail.init({
     async onNavigateToFolder(nodeId, fileId) {
@@ -1744,6 +1784,29 @@ WS.on('batch_deleted', async (msg) => {
     await reloadTreeAndFileList(selectedFile ? selectedFile.id : null);
     await StatusBar.loadStats();
     await refreshDetailPanel();
+});
+
+WS.on('stale_reset_progress', (msg) => {
+    Activity.progress('reset-stale', {
+        label: `Resetting stale: ${msg.label}`,
+        detail: `${msg.done}/${msg.total} files`,
+    });
+});
+
+WS.on('stale_reset_complete', async (msg) => {
+    Activity.completed('reset-stale');
+    const files = msg.staleFiles || 0;
+    const folders = msg.staleFolders || 0;
+    ActivityLog.add(`Reset stale: <b>${files} files, ${folders} folders removed</b>`);
+    Toast.success(`Removed ${files} stale file${files !== 1 ? 's' : ''}, ${folders} folder${folders !== 1 ? 's' : ''}`);
+    await reloadTreeAndFileList();
+    await StatusBar.loadStats();
+    await refreshDetailPanel();
+});
+
+WS.on('stale_reset_error', (msg) => {
+    Activity.completed('reset-stale');
+    Toast.error(`Reset stale failed: ${msg.error}`);
 });
 
 WS.on('batch_move_progress', (msg) => {

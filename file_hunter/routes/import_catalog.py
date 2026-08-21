@@ -58,7 +58,7 @@ async def import_catalog_upload(request: Request):
                 "SELECT id, name, status FROM agents ORDER BY id"
             )
             locations = await db.execute_fetchall(
-                "SELECT id, name, root_path, agent_id FROM locations ORDER BY name"
+                "SELECT id, name, root_path, agent_id FROM locations ORDER BY name COLLATE NOCASE"
             )
 
         return json_ok(

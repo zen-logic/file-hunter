@@ -597,6 +597,16 @@ async def _handle_batch_tag(op_id: int, agent_id: int | None, params: dict):
     )
 
 
+async def _handle_reset_stale(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.delete import reset_stale
+
+    await reset_stale(
+        folder_id=params.get("folder_id"),
+        location_id=params.get("location_id"),
+        label=params.get("label", ""),
+    )
+
+
 _HANDLERS = {
     "scan_dir": _handle_scan_dir,
     "backfill_location": _handle_backfill_location,
@@ -607,6 +617,7 @@ _HANDLERS = {
     "batch_consolidate": _handle_batch_consolidate,
     "batch_rehash": _handle_batch_rehash,
     "batch_tag": _handle_batch_tag,
+    "reset_stale": _handle_reset_stale,
 }
 
 

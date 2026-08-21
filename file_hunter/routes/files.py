@@ -847,3 +847,42 @@ async def folder_delete(request: Request):
         }
     )
     return json_ok(result)
+
+
+async def folder_reset_stale(request: Request):
+    """POST /api/folders/{id:int}/reset-stale — remove stale entries under a folder."""
+    from file_hunter.services.queue_manager import enqueue
+
+    folder_id = int(request.path_params["id"])
+    # Look up name for the activity label
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT name FROM folders WHERE id = ?", (folder_id,)
+        )
+    if not row:
+        return json_error("Folder not found.", 404)
+    label = row[0]["name"]
+    op_id = await enqueue("reset_stale", None, {
+        "folder_id": folder_id,
+        "label": label,
+    })
+    return json_ok({"started": True, "op_id": op_id})
+
+
+async def location_reset_stale(request: Request):
+    """POST /api/locations/{id:int}/reset-stale — remove stale entries in a location."""
+    from file_hunter.services.queue_manager import enqueue
+
+    location_id = int(request.path_params["id"])
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT name FROM locations WHERE id = ?", (location_id,)
+        )
+    if not row:
+        return json_error("Location not found.", 404)
+    label = row[0]["name"]
+    op_id = await enqueue("reset_stale", None, {
+        "location_id": location_id,
+        "label": label,
+    })
+    return json_ok({"started": True, "op_id": op_id})

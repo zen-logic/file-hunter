@@ -34,7 +34,7 @@ async def get_tree(db):
         "SELECT id, name, root_path, date_added, date_last_scanned FROM locations ORDER BY name COLLATE NOCASE"
     )
     folders = await db.execute_fetchall(
-        "SELECT id, location_id, parent_id, name, rel_path FROM folders ORDER BY name"
+        "SELECT id, location_id, parent_id, name, rel_path FROM folders ORDER BY name COLLATE NOCASE"
     )
 
     # Group folders by location_id
@@ -109,7 +109,7 @@ async def get_shallow_tree(db):
                   EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
            FROM folders f
            WHERE f.parent_id IS NULL{hidden_filter}
-           ORDER BY f.name"""
+           ORDER BY f.name COLLATE NOCASE"""
     )
 
     # Fetch sizes from stats.db
@@ -220,7 +220,7 @@ async def get_children(db, folder_ids: list[int]):
                    EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
             FROM folders f
             WHERE f.parent_id IN ({placeholders}){hidden_filter}
-            ORDER BY f.name""",
+            ORDER BY f.name COLLATE NOCASE""",
         folder_ids,
     )
 
@@ -319,7 +319,7 @@ async def get_expand_path(db, target_id: int):
                        EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
                 FROM folders f
                 WHERE f.parent_id IN ({placeholders}){hidden_filter}
-                ORDER BY f.name""",
+                ORDER BY f.name COLLATE NOCASE""",
             parent_ids_to_fetch,
         )
 
@@ -364,7 +364,7 @@ async def get_expand_path(db, target_id: int):
                   EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
            FROM folders f
            WHERE f.location_id = ? AND f.parent_id IS NULL{hidden_filter}
-           ORDER BY f.name""",
+           ORDER BY f.name COLLATE NOCASE""",
         (location_id,),
     )
 
@@ -725,7 +725,7 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
                       EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id) AS has_children
                FROM folders f
                WHERE f.location_id = ? AND f.parent_id IS NULL
-               ORDER BY f.name""",
+               ORDER BY f.name COLLATE NOCASE""",
             (location_id,),
         )
         direct_row = await db.execute_fetchall(
@@ -739,7 +739,7 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
                       EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id) AS has_children
                FROM folders f
                WHERE f.parent_id = ?
-               ORDER BY f.name""",
+               ORDER BY f.name COLLATE NOCASE""",
             (parent_folder_id,),
         )
         # Direct files in this folder

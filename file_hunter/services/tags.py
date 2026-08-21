@@ -78,7 +78,7 @@ async def get_file_tags(db, file_id: int) -> list[str]:
     rows = await db.execute_fetchall(
         "SELECT t.name FROM file_tags ft "
         "JOIN tags t ON t.id = ft.tag_id "
-        "WHERE ft.file_id = ? ORDER BY t.name",
+        "WHERE ft.file_id = ? ORDER BY t.name COLLATE NOCASE",
         (file_id,),
     )
     return [row["name"] for row in rows]
@@ -103,7 +103,7 @@ async def get_merged_tags(db, file_ids: list[int]) -> list[str]:
     rows = await db.execute_fetchall(
         f"SELECT DISTINCT t.name FROM file_tags ft "
         f"JOIN tags t ON t.id = ft.tag_id "
-        f"WHERE ft.file_id IN ({placeholders}) ORDER BY t.name",
+        f"WHERE ft.file_id IN ({placeholders}) ORDER BY t.name COLLATE NOCASE",
         list(file_ids),
     )
     return [row["name"] for row in rows]
@@ -121,7 +121,7 @@ async def list_all_tags(db) -> list[str]:
     Returns:
         Every tag name known to the catalog.
     """
-    rows = await db.execute_fetchall("SELECT name FROM tags ORDER BY name")
+    rows = await db.execute_fetchall("SELECT name FROM tags ORDER BY name COLLATE NOCASE")
     return [row["name"] for row in rows]
 
 

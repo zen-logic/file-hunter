@@ -27,7 +27,7 @@ from file_hunter.services.tags import parse_tags, tag_filter_sql
 
 # Sort column maps — same keys as FileList.sortKey on the client
 _FOLDER_SORT = {
-    "name": "f.filename",
+    "name": "f.filename COLLATE NOCASE",
     "type": "f.file_type_low",
     "size": "f.file_size",
     "date": "f.modified_date",
@@ -35,7 +35,7 @@ _FOLDER_SORT = {
 }
 
 _SEARCH_SORT = {
-    "name": "filename",
+    "name": "filename COLLATE NOCASE",
     "type": "file_type_low",
     "size": "file_size",
     "date": "modified_date",
@@ -281,7 +281,7 @@ async def _ids_for_search(db, search_params, hidden_filter):
     rows = await db.execute_fetchall(
         f"""SELECT f.id FROM files f
             WHERE {full_where}
-            ORDER BY f.filename""",
+            ORDER BY f.filename COLLATE NOCASE""",
         full_params,
     )
 
@@ -320,7 +320,7 @@ async def _ids_for_advanced_search(db, search_params, hidden_filter):
     rows = await db.execute_fetchall(
         f"""SELECT f.id FROM files f
             WHERE {full_where}
-            ORDER BY f.filename""",
+            ORDER BY f.filename COLLATE NOCASE""",
         full_params,
     )
 

@@ -1,5 +1,6 @@
 """Delete service — remove files and folders from disk and catalog."""
 
+import logging
 import os
 
 from file_hunter.hashes_db import (
@@ -8,11 +9,15 @@ from file_hunter.hashes_db import (
     read_hashes,
     remove_file_hashes,
 )
-from file_hunter.db import read_db
+from file_hunter.db import db_writer, read_db
 from file_hunter.helpers import get_effective_hash, post_op_stats
 from file_hunter.services import fs
+from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.stats_db import apply_dup_deltas, remove_folder_stats, update_stats_for_files
+from file_hunter.ws.scan import broadcast
+
+logger = logging.getLogger("file_hunter")
 
 
 async def delete_file(db, file_id: int) -> dict:
@@ -463,3 +468,197 @@ async def delete_folder(db, folder_id: int) -> dict:
         "file_count": file_count,
         "deleted_from_disk": deleted_from_disk,
     }
+
+
+async def reset_stale(
+    *, folder_id: int = None, location_id: int = None, label: str = ""
+):
+    """Remove all stale files and folders from the catalog under a subtree.
+
+    Runs as a background task via the queue manager. Manages its own write
+    connections per batch so the write lock is not held for the duration.
+
+    Stale entries are files/folders marked stale by a scan that found them
+    gone from disk. This purges them from the catalog entirely — no disk I/O
+    since the files are already gone.
+
+    Cleanup chain matches delete_folder: hashes.db, stats.db, dup counts,
+    file_tags (CASCADE), and post_op_stats broadcast.
+    """
+    act_name = f"reset-stale-{folder_id or location_id}"
+    register(act_name, f"Resetting stale: {label}", "collecting…")
+
+    try:
+        # --- Determine scope (read-only) ---
+        async with read_db() as db:
+            if folder_id is not None:
+                loc_row = await db.execute_fetchall(
+                    "SELECT location_id FROM folders WHERE id = ?", (folder_id,)
+                )
+                if not loc_row:
+                    return
+                loc_id = loc_row[0]["location_id"]
+
+                desc_rows = await db.execute_fetchall(
+                    """WITH RECURSIVE descendants(id) AS (
+                           SELECT ? UNION ALL
+                           SELECT f.id FROM folders f
+                           JOIN descendants d ON f.parent_id = d.id
+                       )
+                       SELECT id FROM descendants""",
+                    (folder_id,),
+                )
+                scope_folder_ids = [r["id"] for r in desc_rows]
+                ph = ",".join("?" for _ in scope_folder_ids)
+                file_where = f"stale = 1 AND folder_id IN ({ph})"
+                file_params = scope_folder_ids
+                stale_folder_where = f"stale = 1 AND id IN ({ph}) AND id != ?"
+                stale_folder_params = scope_folder_ids + [folder_id]
+            else:
+                loc_id = location_id
+                file_where = "stale = 1 AND location_id = ?"
+                file_params = [location_id]
+                stale_folder_where = "stale = 1 AND location_id = ?"
+                stale_folder_params = [location_id]
+
+            stale_files = await db.execute_fetchall(
+                f"""SELECT id, folder_id, file_size, file_type_high, hidden
+                    FROM files WHERE {file_where}""",
+                file_params,
+            )
+
+        stale_file_ids = [r["id"] for r in stale_files]
+        total = len(stale_file_ids)
+
+        if not total:
+            await broadcast(
+                {"type": "stale_reset_complete", "staleFiles": 0, "staleFolders": 0}
+            )
+            return
+
+        update(act_name, progress=f"0/{total} files")
+        await broadcast(
+            {"type": "stale_reset_progress", "done": 0, "total": total, "label": label}
+        )
+
+        # --- Collect hashes for dup recount ---
+        affected_strong: set[str] = set()
+        affected_fast: set[str] = set()
+        dup_file_ids: set[int] = set()
+        hconn = await open_hashes_connection()
+        try:
+            for i in range(0, len(stale_file_ids), 500):
+                batch = stale_file_ids[i : i + 500]
+                bph = ",".join("?" for _ in batch)
+                hash_rows = await hconn.execute_fetchall(
+                    f"SELECT file_id, hash_strong, hash_fast, dup_count "
+                    f"FROM file_hashes WHERE file_id IN ({bph})",
+                    batch,
+                )
+                for r in hash_rows:
+                    if r["hash_strong"]:
+                        affected_strong.add(r["hash_strong"])
+                    elif r["hash_fast"]:
+                        affected_fast.add(r["hash_fast"])
+                    if (r["dup_count"] or 0) > 0:
+                        dup_file_ids.add(r["file_id"])
+        finally:
+            await hconn.close()
+
+        # --- Delete stale files in batches ---
+        removed_deltas = [
+            (r["folder_id"], r["file_size"] or 0, r["file_type_high"], r["hidden"])
+            for r in stale_files
+        ]
+        done = 0
+        for i in range(0, len(stale_file_ids), 500):
+            batch = stale_file_ids[i : i + 500]
+            bph = ",".join("?" for _ in batch)
+            async with db_writer() as db:
+                await db.execute(f"DELETE FROM files WHERE id IN ({bph})", batch)
+            done += len(batch)
+            update(act_name, progress=f"{done}/{total} files")
+            await broadcast(
+                {
+                    "type": "stale_reset_progress",
+                    "done": done,
+                    "total": total,
+                    "label": label,
+                }
+            )
+
+        # --- Delete stale folders that are now empty ---
+        stale_folder_ids = []
+        while True:
+            async with db_writer() as db:
+                empty_stale = await db.execute_fetchall(
+                    f"""SELECT id FROM folders
+                        WHERE {stale_folder_where}
+                        AND NOT EXISTS (
+                            SELECT 1 FROM files WHERE folder_id = folders.id)
+                        AND NOT EXISTS (
+                            SELECT 1 FROM folders f2
+                            WHERE f2.parent_id = folders.id)""",
+                    stale_folder_params,
+                )
+                if not empty_stale:
+                    break
+                batch_ids = [r["id"] for r in empty_stale]
+                stale_folder_ids.extend(batch_ids)
+                bph = ",".join("?" for _ in batch_ids)
+                await db.execute(
+                    f"DELETE FROM folders WHERE id IN ({bph})", batch_ids
+                )
+
+        # --- Cleanup hashes.db ---
+        await remove_file_hashes(stale_file_ids)
+
+        # --- Cleanup stats.db ---
+        if removed_deltas:
+            await update_stats_for_files(loc_id, removed=removed_deltas)
+        if stale_folder_ids:
+            await remove_folder_stats(stale_folder_ids)
+
+        # --- Dup count deltas ---
+        if dup_file_ids:
+            dup_deltas = [
+                (r["folder_id"], -1)
+                for r in stale_files
+                if r["id"] in dup_file_ids
+            ]
+            if dup_deltas:
+                async with read_db() as rdb:
+                    fp_rows = await rdb.execute_fetchall(
+                        "SELECT id, parent_id FROM folders WHERE location_id = ?",
+                        (loc_id,),
+                    )
+                folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
+                await apply_dup_deltas(loc_id, folder_parents, dup_deltas)
+
+        file_count = len(stale_file_ids)
+        folder_count = len(stale_folder_ids)
+        logger.info(
+            "Reset stale: removed %d file(s), %d folder(s) from location #%d",
+            file_count, folder_count, loc_id,
+        )
+
+        await post_op_stats(
+            location_ids={loc_id},
+            strong_hashes=affected_strong or None,
+            fast_hashes=affected_fast or None,
+            source="reset stale",
+        )
+
+        await broadcast(
+            {
+                "type": "stale_reset_complete",
+                "staleFiles": file_count,
+                "staleFolders": folder_count,
+            }
+        )
+
+    except Exception as exc:
+        logger.exception("Reset stale failed: %s", exc)
+        await broadcast({"type": "stale_reset_error", "error": str(exc)})
+    finally:
+        unregister(act_name)
