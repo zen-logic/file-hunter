@@ -421,13 +421,32 @@ async def _handle_transcode_complete(agent_id: int, msg: dict):
         await conn.commit()
         return cursor.lastrowid
 
-    file_id = await execute_write(_insert)
+    import sqlite3 as _sqlite3
 
-    # Update stats
-    await update_stats_for_files(
-        location_id,
-        added=[(folder_id, size, file_type_high, src["hidden"])],
-    )
+    try:
+        file_id = await execute_write(_insert)
+    except _sqlite3.IntegrityError:
+        # Already cataloged (previous attempt committed the insert but
+        # crashed before resolve_pending ran, so the op was re-queued)
+        async with read_db() as db:
+            existing = await db.execute_fetchall(
+                "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
+                (location_id, rel_path),
+            )
+        if existing:
+            file_id = existing[0]["id"]
+            logger.info("Transcode output already cataloged: %s (file #%d)", filename, file_id)
+        else:
+            raise
+
+        # Stats were likely already updated by the previous attempt —
+        # skip to avoid double-counting
+    else:
+        # First successful insert — update stats
+        await update_stats_for_files(
+            location_id,
+            added=[(folder_id, size, file_type_high, src["hidden"])],
+        )
 
     invalidate_stats_cache()
     await post_op_stats(location_ids={location_id}, source="transcode")

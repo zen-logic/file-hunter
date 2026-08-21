@@ -82,4 +82,6 @@ async def run_transcode(op_id: int, agent_id: int | None, params: dict):
         raise
 
     if result and result.get("type") == "transcode_error":
-        raise OSError(result.get("error", "Transcode failed"))
+        # RuntimeError so the queue manager marks it failed, not re-queued
+        # (OSError is caught as "agent unavailable" and retried forever)
+        raise RuntimeError(result.get("error", "Transcode failed"))
