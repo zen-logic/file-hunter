@@ -632,7 +632,11 @@ async def get_queue_status_for_broadcast() -> dict:
     """Build the queue state dict in the format the frontend expects."""
     status = await get_queue_status()
 
-    # Split running ops by type so frontend can show correct badges
+    # Split running ops by type so frontend can show correct badges.
+    # Transcode is a file-level operation with its own progress UI —
+    # it must not affect location tree badges.
+    _NO_TREE_BADGE = {"transcode"}
+
     scanning_ids = []
     backfilling_ids = []
     all_running_ids = []
@@ -642,8 +646,10 @@ async def get_queue_status_for_broadcast() -> dict:
         loc_id = item.get("location_id")
         if not loc_id:
             continue
-        all_running_ids.append(loc_id)
         op_type = item.get("type", "")
+        if op_type in _NO_TREE_BADGE:
+            continue
+        all_running_ids.append(loc_id)
         if op_type == "scan_dir":
             scanning_ids.append(loc_id)
         elif op_type in ("backfill_location", "hash_file"):
@@ -658,7 +664,7 @@ async def get_queue_status_for_broadcast() -> dict:
             "queued_at": item.get("created_at", ""),
         }
         for item in status
-        if item.get("status") == "pending"
+        if item.get("status") == "pending" and item.get("type", "") not in _NO_TREE_BADGE
     ]
     return {
         "running_location_ids": all_running_ids,

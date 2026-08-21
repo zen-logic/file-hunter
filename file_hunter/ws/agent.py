@@ -661,7 +661,27 @@ async def agent_ws_endpoint(websocket: WebSocket):
                     )
 
             elif msg_type == "transcode_complete":
-                await _handle_transcode_complete(agent_id, msg)
+                try:
+                    await _handle_transcode_complete(agent_id, msg)
+                except Exception as e:
+                    logger.exception(
+                        "Agent #%d: transcode_complete handler failed: %s",
+                        agent_id, e,
+                    )
+                    # Unblock the queue so the operation can fail cleanly
+                    # rather than staying stuck as "running" forever
+                    from file_hunter.services.transcode import resolve_pending
+                    path = msg.get("path", "")
+                    resolve_pending(path, {
+                        "type": "transcode_error",
+                        "error": f"Catalog entry failed: {e}",
+                    })
+                    await broadcast({
+                        "type": "transcode_error",
+                        "agentId": agent_id,
+                        "path": path,
+                        "error": f"Catalog entry failed: {e}",
+                    })
 
             elif msg_type == "transcode_progress":
                 # Enrich with file_id and update server-side activity
