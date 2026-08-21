@@ -363,6 +363,13 @@ async def run_quick_scan(
                                 cat["hidden"],
                             )
                         )
+                    # Reclassify if the type map has changed
+                    type_high, type_low = classify_file(name)
+                    if type_high != cat["file_type_high"]:
+                        await db.execute(
+                            "UPDATE files SET file_type_high = ?, file_type_low = ? WHERE id = ?",
+                            (type_high, type_low, cat["id"]),
+                        )
 
             # Missing files — mark stale
             for name, cat in cat_file_names.items():

@@ -1245,6 +1245,7 @@ async def _diff_and_update(
 
     # Mark all seen files with current scan_id — batched to avoid holding writer
     # Scoped to scan_prefix for subfolder scans (don't touch files we didn't scan)
+    # Also reclassify any files whose type no longer matches the current classify map
     seen_scope = ""
     seen_params: list = [location_id]
     if scan_prefix:
@@ -1256,12 +1257,13 @@ async def _diff_and_update(
         )
         seen_params.extend([location_id, scan_prefix, scan_prefix + "/%"])
     async with read_db() as rdb:
-        seen_ids = await rdb.execute_fetchall(
-            f"SELECT id FROM files WHERE location_id = ? AND stale = 0{seen_scope}",
+        seen_rows = await rdb.execute_fetchall(
+            f"SELECT id, filename, file_type_high FROM files "
+            f"WHERE location_id = ? AND stale = 0{seen_scope}",
             seen_params,
         )
-    if seen_ids:
-        seen_id_list = [r["id"] for r in seen_ids]
+    if seen_rows:
+        seen_id_list = [r["id"] for r in seen_rows]
         for i in range(0, len(seen_id_list), 5000):
             batch = seen_id_list[i : i + 5000]
             ph = ",".join("?" for _ in batch)
@@ -1272,6 +1274,23 @@ async def _diff_and_update(
                     [scan_id, now_iso] + batch,
                 )
             await asyncio.sleep(0)
+
+        # Reclassify files whose type has changed in the classification map
+        reclass = [
+            (classify_file(r["filename"]), r)
+            for r in seen_rows
+            if classify_file(r["filename"])[0] != r["file_type_high"]
+        ]
+        if reclass:
+            async with db_writer() as db:
+                for (type_high, type_low), r in reclass:
+                    await db.execute(
+                        "UPDATE files SET file_type_high = ?, file_type_low = ? WHERE id = ?",
+                        (type_high, type_low, r["id"]),
+                    )
+            logger.info(
+                "Rescan: reclassified %d file(s) for %s", len(reclass), location_name
+            )
 
     # --- Phase 2c: insert new files ---
     if new_rows:
