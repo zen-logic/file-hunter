@@ -790,7 +790,7 @@ function wireSlideshowBtn() {
             const btn = document.getElementById('detail-slideshow');
             btn.disabled = true;
             btn.textContent = 'Loading\u2026';
-            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'slideshow' });
+            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'slideshow', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
             if (Detail._slideshowTotal === 0) {
                 btn.textContent = 'No images available';
                 setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
@@ -802,7 +802,7 @@ function wireSlideshowBtn() {
             const btn = document.getElementById('detail-playlist');
             btn.disabled = true;
             btn.textContent = 'Loading\u2026';
-            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'playlist' });
+            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'playlist', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
             if (Detail._slideshowTotal === 0) {
                 btn.textContent = 'No videos available';
                 setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);

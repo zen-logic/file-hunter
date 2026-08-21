@@ -25,9 +25,27 @@ from file_hunter.services.search import (
 from file_hunter.services.settings import get_setting
 from file_hunter.services.tags import parse_tags, tag_filter_sql
 
+# Sort column maps — same keys as FileList.sortKey on the client
+_FOLDER_SORT = {
+    "name": "f.filename",
+    "type": "f.file_type_low",
+    "size": "f.file_size",
+    "date": "f.modified_date",
+    "dups": "f.dup_count",
+}
+
+_SEARCH_SORT = {
+    "name": "filename",
+    "type": "file_type_low",
+    "size": "file_size",
+    "date": "modified_date",
+    "dups": "dup_count",
+}
+
 
 async def get_slideshow_ids_from_search(
-    search_id: str, *, media_type: str = "image"
+    search_id: str, *, media_type: str = "image",
+    sort: str = "name", sort_dir: str = "asc",
 ) -> list[int]:
     """Pull media IDs from the cached search results DB.
 
@@ -43,11 +61,14 @@ async def get_slideshow_ids_from_search(
     if not os.path.exists(path):
         return []
 
+    col = _SEARCH_SORT.get(sort, "filename")
+    direction = "DESC" if sort_dir == "desc" else "ASC"
+
     def _read(p, mt):
         sdb = sqlite3.connect(p)
         sdb.row_factory = sqlite3.Row
         rows = sdb.execute(
-            "SELECT file_id FROM results WHERE file_type_high = ? ORDER BY filename",
+            f"SELECT file_id FROM results WHERE file_type_high = ? ORDER BY {col} {direction}",
             (mt,),
         ).fetchall()
         sdb.close()
@@ -56,7 +77,10 @@ async def get_slideshow_ids_from_search(
     return await asyncio.to_thread(_read, path, media_type)
 
 
-async def get_slideshow_ids(db, *, folder_id=None, media_type: str = "image"):
+async def get_slideshow_ids(
+    db, *, folder_id=None, media_type: str = "image",
+    sort: str = "name", sort_dir: str = "asc",
+):
     """Return list of IDs for media files (image or video).
 
     folder_id must be provided.
@@ -66,7 +90,9 @@ async def get_slideshow_ids(db, *, folder_id=None, media_type: str = "image"):
     hidden_filter = "" if show_hidden else " AND f.hidden = 0"
 
     if folder_id:
-        return await _ids_for_folder(db, folder_id, hidden_filter, media_type)
+        return await _ids_for_folder(
+            db, folder_id, hidden_filter, media_type, sort=sort, sort_dir=sort_dir,
+        )
     return []
 
 
@@ -101,7 +127,10 @@ async def _get_online_loc_filter(db, base_where, base_params):
     return f"f.location_id IN ({placeholders})", list(online_ids)
 
 
-async def _ids_for_folder(db, folder_id, hidden_filter, media_type="image"):
+async def _ids_for_folder(
+    db, folder_id, hidden_filter, media_type="image",
+    *, sort="name", sort_dir="asc",
+):
     """All media IDs in a folder/location root on online locations."""
     try:
         kind, num_id = parse_prefixed_id(folder_id)
@@ -125,10 +154,13 @@ async def _ids_for_folder(db, folder_id, hidden_filter, media_type="image"):
     full_where = f"{base_where} AND {loc_filter}"
     full_params = params + loc_params
 
+    col = _FOLDER_SORT.get(sort, "f.filename")
+    direction = "DESC" if sort_dir == "desc" else "ASC"
+
     rows = await db.execute_fetchall(
         f"""SELECT f.id FROM files f
             WHERE {full_where}
-            ORDER BY f.filename""",
+            ORDER BY {col} {direction}""",
         full_params,
     )
 

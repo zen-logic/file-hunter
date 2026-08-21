@@ -486,13 +486,14 @@ const Detail = {
         // Fetch all IDs in one call — no per-window queries during navigation
         const p = params;
         const mediaType = this._slideshowMode === 'playlist' ? 'video' : 'image';
+        const sortParams = `&sort=${encodeURIComponent(p.sort || 'name')}&sortDir=${encodeURIComponent(p.sortDir || 'asc')}`;
         let url;
         if (p.type === 'folder') {
-            url = `/api/slideshow-ids?folder_id=${encodeURIComponent(p.folderId)}&mediaType=${mediaType}`;
+            url = `/api/slideshow-ids?folder_id=${encodeURIComponent(p.folderId)}&mediaType=${mediaType}${sortParams}`;
         } else if (p.searchId) {
-            url = `/api/slideshow-ids?searchId=${encodeURIComponent(p.searchId)}&mediaType=${mediaType}`;
+            url = `/api/slideshow-ids?searchId=${encodeURIComponent(p.searchId)}&mediaType=${mediaType}${sortParams}`;
         } else {
-            url = `/api/slideshow-ids?${new URLSearchParams(p.searchParams).toString()}&mediaType=${mediaType}`;
+            url = `/api/slideshow-ids?${new URLSearchParams(p.searchParams).toString()}&mediaType=${mediaType}${sortParams}`;
         }
         const res = await API.get(url);
         if (!res.ok) return;
@@ -1952,7 +1953,7 @@ const Detail = {
                 const btn = document.getElementById('detail-slideshow');
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
-                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'slideshow' });
+                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'slideshow', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No images available';
                     setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
@@ -1964,7 +1965,7 @@ const Detail = {
                 const btn = document.getElementById('detail-playlist');
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
-                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'playlist' });
+                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'playlist', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No videos available';
                     setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);
