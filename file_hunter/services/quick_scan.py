@@ -31,6 +31,7 @@ from file_hunter.services.dup_counts import (
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
+from file_hunter_core.paths import norm_inode
 
 logger = logging.getLogger("file_hunter")
 
@@ -338,7 +339,7 @@ async def run_quick_scan(
                             now_iso,
                             is_hidden,
                             parent_dup_exclude,
-                            info.get("inode", 0),
+                            norm_inode(info.get("inode") or 0),
                         ),
                     )
                     new_files += 1
