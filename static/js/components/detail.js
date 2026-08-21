@@ -280,6 +280,7 @@ const Detail = {
         });
         document.addEventListener('keydown', (e) => {
             if (overlay.classList.contains('hidden')) return;
+            if (e.metaKey || e.ctrlKey) return;
             if (e.key === 'Escape') {
                 if (document.fullscreenElement) return; // browser handles fullscreen exit
                 this._closePreviewModal();
