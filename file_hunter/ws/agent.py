@@ -335,6 +335,101 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     return location_ids
 
 
+async def _handle_transcode_complete(agent_id: int, msg: dict):
+    """Create a catalog entry for a newly transcoded file, then broadcast."""
+    from file_hunter.core import classify_file
+    from file_hunter.helpers import post_op_stats
+    from file_hunter.stats_db import update_stats_for_files
+    from file_hunter_core.paths import norm_inode
+
+    output_path = msg.get("output", "")
+    filename = msg.get("filename", "")
+    size = msg.get("size", 0)
+    mtime = msg.get("mtime")
+    ctime = msg.get("ctime")
+    inode = norm_inode(msg.get("inode") or 0)
+
+    # Find the source file's location and folder from the output path
+    async with read_db() as db:
+        # Match by the directory — the source file is in the same folder
+        source_path = msg.get("path", "")
+        source_row = await db.execute_fetchall(
+            "SELECT id, location_id, folder_id, hidden, dup_exclude "
+            "FROM files WHERE full_path = ?",
+            (source_path,),
+        )
+    if not source_row:
+        logger.warning("Transcode complete but source file not in catalog: %s", source_path)
+        await broadcast({**msg, "agentId": agent_id})
+        return
+
+    src = source_row[0]
+    location_id = src["location_id"]
+    folder_id = src["folder_id"]
+
+    # Build rel_path from location root
+    async with read_db() as db:
+        loc_row = await db.execute_fetchall(
+            "SELECT root_path FROM locations WHERE id = ?", (location_id,)
+        )
+    if not loc_row:
+        await broadcast({**msg, "agentId": agent_id})
+        return
+
+    root_path = loc_row[0]["root_path"]
+    if output_path.startswith(root_path):
+        rel_path = output_path[len(root_path):].lstrip("/").lstrip("\\")
+    else:
+        rel_path = filename
+
+    file_type_high, file_type_low = classify_file(filename)
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    mtime_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(timespec="seconds") if mtime else now_iso
+    ctime_iso = datetime.fromtimestamp(ctime, tz=timezone.utc).isoformat(timespec="seconds") if ctime else now_iso
+
+    async def _insert(conn):
+        cursor = await conn.execute(
+            """INSERT INTO files
+               (filename, full_path, rel_path, location_id, folder_id,
+                file_type_high, file_type_low, file_size,
+                description,
+                created_date, modified_date, date_cataloged, date_last_seen,
+                stale, hidden, dup_exclude, inode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?)""",
+            (
+                filename, output_path, rel_path, location_id, folder_id,
+                file_type_high, file_type_low, size,
+                ctime_iso, mtime_iso, now_iso, now_iso,
+                src["hidden"], src["dup_exclude"], inode,
+            ),
+        )
+        await conn.commit()
+        return cursor.lastrowid
+
+    file_id = await execute_write(_insert)
+
+    # Update stats
+    await update_stats_for_files(
+        location_id,
+        added=[(folder_id, size, file_type_high, src["hidden"])],
+    )
+
+    invalidate_stats_cache()
+    await post_op_stats(location_ids={location_id}, source="transcode")
+
+    await broadcast({
+        "type": "transcode_complete",
+        "agentId": agent_id,
+        "fileId": file_id,
+        "filename": filename,
+        "path": output_path,
+        "size": size,
+        "folderId": folder_id,
+        "locationId": location_id,
+    })
+    logger.info("Transcode cataloged: %s (file #%d)", filename, file_id)
+
+
 async def agent_ws_endpoint(websocket: WebSocket):
     """Handle an incoming agent WebSocket connection."""
     qs = websocket.scope.get("query_string", b"").decode()
@@ -544,6 +639,9 @@ async def agent_ws_endpoint(websocket: WebSocket):
                         agent_id,
                         len(agent_locations),
                     )
+
+            elif msg_type == "transcode_complete":
+                await _handle_transcode_complete(agent_id, msg)
 
             else:
                 msg["agentId"] = agent_id

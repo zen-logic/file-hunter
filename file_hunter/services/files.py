@@ -18,7 +18,7 @@ from file_hunter.helpers import (
 )
 from file_hunter.hashes_db import mark_hashes_stale
 from file_hunter.services import fs
-from file_hunter.services.agent_ops import dispatch
+from file_hunter.services.agent_ops import dispatch, location_agent_has_capability
 from file_hunter.ws.scan import broadcast
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.op_result_log import append_row, create_log
@@ -436,6 +436,13 @@ async def get_file_detail(db, file_id: int):
         cur = row2[0]["parent_id"]
     breadcrumb.extend(reversed(chain))
 
+    # Check agent capabilities for video files
+    can_transcode = False
+    if (f["file_type_high"] or "").lower() == "video" and location_online:
+        can_transcode = await location_agent_has_capability(
+            f["location_id"], "ffmpeg"
+        )
+
     return {
         "id": f["id"],
         "name": f["filename"],
@@ -463,6 +470,7 @@ async def get_file_detail(db, file_id: int):
         "duplicates": dups,
         "dupTotal": dup_total,
         "breadcrumb": breadcrumb,
+        "canTranscode": can_transcode,
     }
 
 

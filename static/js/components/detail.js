@@ -969,7 +969,8 @@ const Detail = {
         const moveFileBtn = detail.id && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-move-file" style="margin-top:0.4rem"${fileScanDisable || (fileMissing ? ` disabled title="${disabledReason}"` : '')}>Move / Copy</button>` : '';
         const deleteFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-danger btn-sm" id="detail-delete-file" style="margin-top:0.4rem"${fileScanDisable}>Delete</button>` : '';
         const ignoreFileBtn = detail.id && !hasPendingOp ? `<button class="btn btn-sm" id="detail-ignore-file" style="margin-top:0.4rem">Ignore files like this\u2026</button>` : '';
-        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${ignoreFileBtn}${deleteFileBtn}</div>` : '';
+        const transcodeBtn = detail.canTranscode && detail.online && !hasPendingOp ? `<button class="btn btn-sm" id="detail-transcode" style="margin-top:0.4rem">Transcode</button>` : '';
+        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}${ignoreFileBtn}${deleteFileBtn}</div>` : '';
 
         let html = `
             <div class="detail-section">

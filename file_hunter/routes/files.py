@@ -886,3 +886,28 @@ async def location_reset_stale(request: Request):
         "label": label,
     })
     return json_ok({"started": True, "op_id": op_id})
+
+
+async def file_transcode(request: Request):
+    """POST /api/files/{id:int}/transcode — start a video transcode on the agent."""
+    from file_hunter.services.agent_ops import dispatch, location_agent_has_capability
+
+    file_id = int(request.path_params["id"])
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT full_path, location_id, file_type_high FROM files WHERE id = ?",
+            (file_id,),
+        )
+    if not row:
+        return json_error("File not found.", 404)
+    f = row[0]
+    if (f["file_type_high"] or "").lower() != "video":
+        return json_error("File is not a video.")
+    has_ffmpeg = await location_agent_has_capability(f["location_id"], "ffmpeg")
+    if not has_ffmpeg:
+        return json_error("Agent does not support transcoding.")
+    try:
+        await dispatch("transcode", f["location_id"], path=f["full_path"])
+    except ConnectionError:
+        return json_error("Agent is offline.", 503)
+    return json_ok({"started": True})

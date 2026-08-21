@@ -79,6 +79,7 @@ async function refreshDetailPanel() {
             wireRenameFileBtn();
             wireMoveFileBtn();
             wireIgnoreFileBtn();
+            wireTranscodeBtn();
         }
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
     } else if (selectedNode) {
@@ -227,6 +228,24 @@ function wireIgnoreFileBtn() {
                 locationId: locId ? parseInt(locId, 10) : null,
                 locationName: lastDetail.locationName || null,
             });
+        });
+    }
+}
+
+function wireTranscodeBtn() {
+    const btn = document.getElementById('detail-transcode');
+    if (btn && selectedFile) {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            btn.textContent = 'Starting…';
+            const res = await API.post(`/api/files/${selectedFile.id}/transcode`);
+            if (res.ok) {
+                btn.textContent = 'Transcoding…';
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Transcode';
+                Toast.error(res.data?.detail || 'Transcode failed to start.');
+            }
         });
     }
 }
@@ -458,6 +477,7 @@ function startApp(user) {
             wireRenameFileBtn();
             wireMoveFileBtn();
             wireIgnoreFileBtn();
+            wireTranscodeBtn();
             if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
         },
     });
@@ -934,6 +954,7 @@ FileList.init(async (file) => {
         wireRenameFileBtn();
         wireMoveFileBtn();
         wireIgnoreFileBtn();
+        wireTranscodeBtn();
     }
     if (result) {
         updateLocationOnline(result.locationId, result.locationOnline);
@@ -1091,6 +1112,7 @@ Detail.init({
         wireRenameFileBtn();
         wireMoveFileBtn();
         wireIgnoreFileBtn();
+        wireTranscodeBtn();
         if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
     },
 });
@@ -1807,6 +1829,34 @@ WS.on('stale_reset_complete', async (msg) => {
 WS.on('stale_reset_error', (msg) => {
     Activity.completed('reset-stale');
     Toast.error(`Reset stale failed: ${msg.error}`);
+});
+
+WS.on('transcode_progress', (msg) => {
+    const pct = msg.percent != null ? `${msg.percent}%` : msg.status || 'working';
+    Activity.progress('transcode', { label: 'Transcoding', detail: pct });
+});
+
+WS.on('transcode_complete', async (msg) => {
+    Activity.completed('transcode');
+    ActivityLog.add(`Transcode complete: <b>${msg.filename}</b>`);
+    Toast.success(`Transcode complete: ${msg.filename}`);
+    if (selectedNode) {
+        await FileList.showFolder(selectedNode.id);
+    }
+    await StatusBar.loadStats();
+    await refreshDetailPanel();
+});
+
+WS.on('transcode_error', (msg) => {
+    Activity.completed('transcode');
+    Toast.error(`Transcode failed: ${msg.error}`);
+    refreshDetailPanel();
+});
+
+WS.on('transcode_cancelled', (msg) => {
+    Activity.completed('transcode');
+    Toast.success('Transcode cancelled.');
+    refreshDetailPanel();
 });
 
 WS.on('batch_move_progress', (msg) => {

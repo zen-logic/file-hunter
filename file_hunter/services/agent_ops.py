@@ -332,6 +332,18 @@ async def dispatch(operation: str, location_id: int, **kwargs):
             mtime=kwargs.get("mtime"),
         )
 
+    elif operation == "transcode":
+        await _post(
+            host, port, token, "/transcode", {"path": kwargs["path"]},
+            agent_id=agent_id,
+        )
+
+    elif operation == "transcode_cancel":
+        await _post(
+            host, port, token, "/transcode/cancel", {},
+            agent_id=agent_id,
+        )
+
     else:
         raise ValueError(f"Unknown agent operation: {operation}")
 
