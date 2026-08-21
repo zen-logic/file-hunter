@@ -236,6 +236,13 @@ function wireTranscodeBtn() {
     const btn = document.getElementById('detail-transcode');
     if (btn && selectedFile) {
         btn.addEventListener('click', async () => {
+            const name = selectedFile.name || '';
+            const ok = await ConfirmModal.open({
+                title: 'Transcode Video',
+                message: `Transcode "${name}" to H.264 MP4? This will create a new file alongside the original.`,
+                confirmLabel: 'Transcode',
+            });
+            if (!ok) return;
             btn.disabled = true;
             btn.textContent = 'Starting…';
             const res = await API.post(`/api/files/${selectedFile.id}/transcode`);
@@ -1831,15 +1838,23 @@ WS.on('stale_reset_error', (msg) => {
     Toast.error(`Reset stale failed: ${msg.error}`);
 });
 
+WS.on('transcode_started', (msg) => {
+    ActivityLog.add(`Queued for conversion: <b>${msg.filename}</b>`);
+});
+
 WS.on('transcode_progress', (msg) => {
-    const pct = msg.percent != null ? `${msg.percent}%` : msg.status || 'working';
-    Activity.progress('transcode', { label: 'Transcoding', detail: pct });
+    const pct = msg.percent != null ? `${msg.percent}%` : '';
+    // Update the button if viewing the file being converted
+    const btn = document.getElementById('detail-transcode');
+    if (btn && selectedFile && msg.fileId === selectedFile.id) {
+        btn.disabled = true;
+        btn.textContent = pct ? `Converting ${pct}` : 'Converting…';
+    }
 });
 
 WS.on('transcode_complete', async (msg) => {
-    Activity.completed('transcode');
-    ActivityLog.add(`Transcode complete: <b>${msg.filename}</b>`);
-    Toast.success(`Transcode complete: ${msg.filename}`);
+    ActivityLog.add(`Conversion complete: <b>${msg.filename}</b>`);
+    Toast.success(`Conversion complete: ${msg.filename}`);
     if (selectedNode) {
         await FileList.showFolder(selectedNode.id);
     }
@@ -1848,14 +1863,12 @@ WS.on('transcode_complete', async (msg) => {
 });
 
 WS.on('transcode_error', (msg) => {
-    Activity.completed('transcode');
-    Toast.error(`Transcode failed: ${msg.error}`);
+    Toast.error(`Conversion failed: ${msg.error}`);
     refreshDetailPanel();
 });
 
 WS.on('transcode_cancelled', (msg) => {
-    Activity.completed('transcode');
-    Toast.success('Transcode cancelled.');
+    Toast.success('Conversion cancelled.');
     refreshDetailPanel();
 });
 

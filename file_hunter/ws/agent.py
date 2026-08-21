@@ -335,6 +335,21 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     return location_ids
 
 
+async def _lookup_transcode_info(path: str) -> tuple[int | None, int | None]:
+    """Look up the file_id and op_id for a running transcode by source path."""
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT id, params FROM operation_queue "
+            "WHERE type = 'transcode' AND status = 'running' "
+            "AND json_extract(params, '$.path') = ?",
+            (path,),
+        )
+    if row:
+        params = json.loads(row[0]["params"])
+        return params.get("file_id"), row[0]["id"]
+    return None, None
+
+
 async def _handle_transcode_complete(agent_id: int, msg: dict):
     """Create a catalog entry for a newly transcoded file, then broadcast."""
     from file_hunter.core import classify_file
@@ -417,6 +432,8 @@ async def _handle_transcode_complete(agent_id: int, msg: dict):
     invalidate_stats_cache()
     await post_op_stats(location_ids={location_id}, source="transcode")
 
+    from file_hunter.services.transcode import resolve_pending
+
     await broadcast({
         "type": "transcode_complete",
         "agentId": agent_id,
@@ -428,6 +445,9 @@ async def _handle_transcode_complete(agent_id: int, msg: dict):
         "locationId": location_id,
     })
     logger.info("Transcode cataloged: %s (file #%d)", filename, file_id)
+
+    # Unblock the queue handler so it can complete and free the agent slot
+    resolve_pending(msg.get("path", ""), {"type": "transcode_complete"})
 
 
 async def agent_ws_endpoint(websocket: WebSocket):
@@ -642,6 +662,30 @@ async def agent_ws_endpoint(websocket: WebSocket):
 
             elif msg_type == "transcode_complete":
                 await _handle_transcode_complete(agent_id, msg)
+
+            elif msg_type == "transcode_progress":
+                # Enrich with file_id and update server-side activity
+                path = msg.get("path", "")
+                file_id, op_id = await _lookup_transcode_info(path)
+                if file_id:
+                    msg["fileId"] = file_id
+                if op_id:
+                    from file_hunter.services.activity import update
+                    pct = msg.get("percent")
+                    progress = f"{pct}%" if pct is not None else msg.get("status", "")
+                    update(f"op-{op_id}", progress=progress)
+                msg["agentId"] = agent_id
+                await broadcast(msg)
+
+            elif msg_type in ("transcode_error", "transcode_cancelled"):
+                from file_hunter.services.transcode import resolve_pending
+                path = msg.get("path", "")
+                file_id, _ = await _lookup_transcode_info(path)
+                if file_id:
+                    msg["fileId"] = file_id
+                resolve_pending(path, msg)
+                msg["agentId"] = agent_id
+                await broadcast(msg)
 
             else:
                 msg["agentId"] = agent_id

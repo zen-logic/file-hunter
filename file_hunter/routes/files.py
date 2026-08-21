@@ -889,13 +889,14 @@ async def location_reset_stale(request: Request):
 
 
 async def file_transcode(request: Request):
-    """POST /api/files/{id:int}/transcode — start a video transcode on the agent."""
-    from file_hunter.services.agent_ops import dispatch, location_agent_has_capability
+    """POST /api/files/{id:int}/transcode — queue a video transcode on the agent."""
+    from file_hunter.services.agent_ops import location_agent_has_capability, _get_agent_id
+    from file_hunter.services.queue_manager import enqueue
 
     file_id = int(request.path_params["id"])
     async with read_db() as db:
         row = await db.execute_fetchall(
-            "SELECT full_path, location_id, file_type_high FROM files WHERE id = ?",
+            "SELECT filename, full_path, location_id, file_type_high FROM files WHERE id = ?",
             (file_id,),
         )
     if not row:
@@ -906,8 +907,12 @@ async def file_transcode(request: Request):
     has_ffmpeg = await location_agent_has_capability(f["location_id"], "ffmpeg")
     if not has_ffmpeg:
         return json_error("Agent does not support transcoding.")
-    try:
-        await dispatch("transcode", f["location_id"], path=f["full_path"])
-    except ConnectionError:
-        return json_error("Agent is offline.", 503)
-    return json_ok({"started": True})
+    agent_id = await _get_agent_id(f["location_id"])
+    op_id = await enqueue("transcode", agent_id, {
+        "file_id": file_id,
+        "filename": f["filename"],
+        "path": f["full_path"],
+        "location_id": f["location_id"],
+        "location_name": f["filename"],
+    })
+    return json_ok({"started": True, "op_id": op_id})

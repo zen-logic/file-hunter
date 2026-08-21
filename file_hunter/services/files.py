@@ -436,12 +436,24 @@ async def get_file_detail(db, file_id: int):
         cur = row2[0]["parent_id"]
     breadcrumb.extend(reversed(chain))
 
-    # Check agent capabilities for video files
+    # Check agent capabilities and transcode queue status for video files
     can_transcode = False
+    transcode_status = None  # None = idle, "queued", "converting"
     if (f["file_type_high"] or "").lower() == "video" and location_online:
         can_transcode = await location_agent_has_capability(
             f["location_id"], "ffmpeg"
         )
+        if can_transcode:
+            # Check if THIS file is queued or running for transcode
+            tq_row = await db.execute_fetchall(
+                "SELECT status FROM operation_queue "
+                "WHERE type = 'transcode' AND status IN ('pending', 'running') "
+                "AND json_extract(params, '$.file_id') = ?",
+                (file_id,),
+            )
+            if tq_row:
+                s = tq_row[0]["status"]
+                transcode_status = "converting" if s == "running" else "queued"
 
     return {
         "id": f["id"],
@@ -471,6 +483,7 @@ async def get_file_detail(db, file_id: int):
         "dupTotal": dup_total,
         "breadcrumb": breadcrumb,
         "canTranscode": can_transcode,
+        "transcodeStatus": transcode_status,
     }
 
 

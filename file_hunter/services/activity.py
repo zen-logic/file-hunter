@@ -22,6 +22,7 @@ _OP_LABELS = {
     "backfill_location": "Hashing:",
     "rehash_partial": "Re-hashing:",
     "hash_file": "Hashing file:",
+    "transcode": "Converting:",
 }
 
 
