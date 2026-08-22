@@ -24,7 +24,6 @@
                 <button class="btn" id="btn-scan" disabled>Scan</button>
                 <button class="btn" id="btn-upload" disabled>Upload</button>
                 <button class="btn" id="btn-consolidate" disabled>Consolidate</button>
-                <button class="btn" id="btn-import-catalog">Import</button>
             </div>
             <div class="toolbar-icons">
                 <button class="btn btn-icon" id="btn-search" title="Search">
@@ -523,71 +522,6 @@
                 <div id="about-content"></div>
                 <div class="modal-actions">
                     <button class="btn" id="about-close">Close</button>
-                </div>
-            </div>
-        </div>
-        <div id="import-catalog-modal" class="modal-overlay hidden">
-            <div class="modal-dialog modal-dialog-wide">
-                <h2 class="modal-title">Import Catalog</h2>
-                <div id="import-step-upload">
-                    <div class="modal-field">
-                        <label class="modal-label">Catalog file</label>
-                        <div class="modal-input-row">
-                            <input type="text" class="modal-input" id="import-file-name" readonly placeholder="No file selected">
-                            <button class="btn" id="import-file-browse">Browse...</button>
-                        </div>
-                    </div>
-                    <p id="import-upload-error" class="modal-error hidden"></p>
-                    <div class="modal-actions">
-                        <button class="btn" id="import-cancel-1">Cancel</button>
-                        <button class="btn btn-primary" id="import-upload-btn" disabled>Upload</button>
-                    </div>
-                </div>
-                <div id="import-step-config" class="hidden">
-                    <div class="modal-field">
-                        <label class="modal-label">Catalog info</label>
-                        <div id="import-catalog-info" class="modal-text"></div>
-                    </div>
-                    <div class="modal-field">
-                        <label class="modal-label" for="import-agent">Agent</label>
-                        <select class="modal-input" id="import-agent"></select>
-                    </div>
-                    <div class="modal-field">
-                        <label class="modal-label" for="import-location">Location</label>
-                        <select class="modal-input" id="import-location"></select>
-                    </div>
-                    <div id="import-new-loc-fields" class="hidden">
-                        <div class="modal-field">
-                            <label class="modal-label" for="import-new-loc-name">Location name</label>
-                            <input type="text" class="modal-input" id="import-new-loc-name">
-                        </div>
-                        <div class="modal-field">
-                            <label class="modal-label" for="import-new-loc-path">Root path</label>
-                            <input type="text" class="modal-input" id="import-new-loc-path">
-                        </div>
-                    </div>
-                    <p id="import-config-error" class="modal-error hidden"></p>
-                    <div class="modal-actions">
-                        <button class="btn" id="import-cancel-2">Cancel</button>
-                        <button class="btn btn-primary" id="import-run-btn">Import</button>
-                    </div>
-                </div>
-                <div id="import-step-progress" class="hidden">
-                    <div class="modal-field">
-                        <label class="modal-label">Progress</label>
-                        <div class="import-progress-bar">
-                            <div class="import-progress-fill" id="import-progress-fill"></div>
-                        </div>
-                        <div id="import-progress-text" class="modal-text" style="margin-top:0.25rem"></div>
-                    </div>
-                </div>
-                <div id="import-step-done" class="hidden">
-                    <div class="modal-field">
-                        <div id="import-done-text" class="modal-text"></div>
-                    </div>
-                    <div class="modal-actions">
-                        <button class="btn btn-primary" id="import-done-close">Done</button>
-                    </div>
                 </div>
             </div>
         </div>

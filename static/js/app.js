@@ -27,7 +27,6 @@ import Toast from './components/toast.js';
 import Upload from './components/upload.js';
 import SlideshowTriage from './components/slideshow-triage.js';
 import Triage from './components/triage.js';
-import ImportCatalog from './components/importcatalog.js';
 import RepairCatalog from './components/repaircatalog.js';
 import ScanConfirm from './components/scanconfirm.js';
 import Keyboard from './keyboard.js';
@@ -39,7 +38,6 @@ let selectedFile = null;
 let selectedFileDups = [];
 const scanBtn = document.getElementById('btn-scan');
 const consolidateBtn = document.getElementById('btn-consolidate');
-const uploadBtn = document.getElementById('btn-upload');
 
 async function reloadTreeAndFileList(focusFileId) {
     // Only numeric IDs are focusable files — ignore folder IDs (fld-xxx)
@@ -615,7 +613,6 @@ Triage.init(
         }
     },
 );
-ImportCatalog.init();
 RepairCatalog.init();
 Merge.init(async ({ source_id, destination_id, mode }) => {
     await API.post('/api/merge', { source_id, destination_id, mode });
@@ -1594,12 +1591,31 @@ WS.on('server_activity', (msg) => {
     Activity.sync(msg);
 });
 
+WS.on('size_recalc_started', (msg) => {
+    if (!msg.locationIds) return;
+    for (const lid of msg.locationIds) {
+        Tree.updateLocationSize(lid, null);
+        const key = `loc-${lid}`;
+        const el = Tree._findItemEl(key);
+        if (el) {
+            const sizeSpan = el.querySelector('.tree-size');
+            if (sizeSpan) {
+                sizeSpan.textContent = 'updating…';
+                sizeSpan.classList.add('tree-size-scanning');
+            }
+        }
+    }
+    StatusBar.renderActivity('active', 'Updating sizes…');
+});
+
 WS.on('size_recalc_completed', async msg => {
     ActivityLog.add('Location sizes recalculated');
+    StatusBar.renderActivity('idle');
     await Tree.reload();
     if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
-    StatusBar.loadStats();
+    await StatusBar.loadStats();
     Detail.refreshStats();
+    Toast.success('Sizes updated');
 });
 WS.on('dup_recalc_started', (msg) => {
     if (msg.locationIds) {
@@ -1867,11 +1883,12 @@ WS.on('transcode_started', (msg) => {
 
 WS.on('transcode_progress', (msg) => {
     const pct = msg.percent != null ? `${msg.percent}%` : '';
+    const enc = msg.encoder ? ` [${msg.encoder}]` : '';
     // Update the button if viewing the file being converted
     const btn = document.getElementById('detail-transcode');
     if (btn && selectedFile && msg.fileId === selectedFile.id) {
         btn.disabled = true;
-        btn.textContent = pct ? `Converting ${pct}` : 'Converting…';
+        btn.textContent = pct ? `Converting ${pct}${enc}` : `Converting…${enc}`;
     }
 });
 

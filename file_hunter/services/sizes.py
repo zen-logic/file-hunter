@@ -36,8 +36,14 @@ async def _bg_recalc_sizes(location_ids: list[int]):
     activity_name = f"size-recalc-{id(location_ids)}"
     register(activity_name, "Size recalc")
     try:
+        await broadcast({"type": "size_recalc_started", "locationIds": location_ids})
         for lid in location_ids:
             await recalculate_location_sizes(lid)
+        # Clear stats cache so the next API request reads the fresh values
+        # from stats.db — without this, the cache refresh that ran during
+        # the recalc has already filled the cache with stale data.
+        from file_hunter.services.stats import invalidate_stats_cache
+        invalidate_stats_cache()
         await broadcast({"type": "size_recalc_completed", "locationIds": location_ids})
     except Exception:
         log.error("Background size recalc failed", exc_info=True)

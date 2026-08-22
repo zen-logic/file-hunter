@@ -225,8 +225,7 @@ async def full_dup_recount(
         - Writes dup_count to hashes.db via hashes_writer().
         - Writes denormalized dup_count to catalog files table via db_writer().
 
-    Callers: routes/stats.py catalog repair endpoint, routes/import_catalog.py
-    post-import recount.
+    Callers: routes/stats.py catalog repair endpoint.
 
     Implementation: one GROUP BY per hash type (hash_strong, hash_fast) on a
     dedicated connection. Builds a complete {hash: count} map in memory, then

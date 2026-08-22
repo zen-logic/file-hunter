@@ -122,11 +122,6 @@ from file_hunter.routes.update import (
     check_release,
     apply_release,
 )
-from file_hunter.routes.import_catalog import (
-    import_catalog_upload,
-    import_catalog_run,
-    import_catalog_progress,
-)
 from file_hunter.middleware import AuthMiddleware
 from file_hunter import extensions
 from file_hunter.hashes_db import init_hashes_db, close_hashes_db
@@ -348,9 +343,6 @@ app = Starlette(
         Route("/api/ignore/check", check_ignore, methods=["GET"]),
         Route("/api/ignore/count", count_ignore_matches, methods=["GET"]),
         Route("/api/ignore/{id:int}", delete_ignore_rule, methods=["DELETE"]),
-        Route("/api/import-catalog/upload", import_catalog_upload, methods=["POST"]),
-        Route("/api/import-catalog/run", import_catalog_run, methods=["POST"]),
-        Route("/api/import-catalog/progress", import_catalog_progress, methods=["GET"]),
         Route("/api/stats", stats, methods=["GET"]),
         Route("/api/stats/repair", repair_catalog, methods=["POST"]),
         Route("/api/stats/repair-progress", repair_catalog_progress, methods=["GET"]),
