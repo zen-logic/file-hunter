@@ -131,6 +131,17 @@ const FSBrowser = {
                     this._renderTree(); // show spinner immediately
                     await this._loadEntries(entry.path);
                     this._renderTree(); // replace spinner with children
+                    const sel = this.treeContainer.querySelector('.ct-selected');
+                    if (sel) {
+                        const selDepth = sel.querySelectorAll('.ct-indent').length;
+                        let last = sel;
+                        let sib = sel.nextElementSibling;
+                        while (sib && sib.querySelectorAll('.ct-indent').length > selDepth) {
+                            last = sib;
+                            sib = sib.nextElementSibling;
+                        }
+                        if (last !== sel) last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+                    }
                     return;
                 }
             } else {

@@ -657,6 +657,20 @@
                 </div>
             </div>
         </div>
+        <div id="transcode-quality-modal" class="modal-overlay hidden">
+            <div class="modal-dialog" style="max-width:340px">
+                <h2 class="modal-title">Transcode Video</h2>
+                <p id="transcode-quality-filename" class="modal-text" style="margin-bottom:0.8rem"></p>
+                <div style="display:flex;flex-direction:column;gap:0.5rem">
+                    <button class="btn" data-quality="low">Low <span style="opacity:0.5;font-size:0.85em">— fastest, smallest</span></button>
+                    <button class="btn" data-quality="medium">Medium <span style="opacity:0.5;font-size:0.85em">— balanced</span></button>
+                    <button class="btn" data-quality="high">High <span style="opacity:0.5;font-size:0.85em">— best quality</span></button>
+                </div>
+                <div class="modal-actions" style="margin-top:0.8rem">
+                    <button class="btn" id="transcode-quality-cancel">Cancel</button>
+                </div>
+            </div>
+        </div>
         <div id="confirm-modal" class="modal-overlay hidden">
             <div class="modal-dialog">
                 <h2 class="modal-title" id="confirm-modal-title">Confirm</h2>

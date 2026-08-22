@@ -894,6 +894,11 @@ async def file_transcode(request: Request):
     from file_hunter.services.queue_manager import enqueue
 
     file_id = int(request.path_params["id"])
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    quality = body.get("quality", "medium")
+    if quality not in ("low", "medium", "high"):
+        quality = "medium"
+
     async with read_db() as db:
         row = await db.execute_fetchall(
             "SELECT filename, full_path, location_id, file_type_high FROM files WHERE id = ?",
@@ -914,5 +919,6 @@ async def file_transcode(request: Request):
         "path": f["full_path"],
         "location_id": f["location_id"],
         "location_name": f["filename"],
+        "quality": quality,
     })
     return json_ok({"started": True, "op_id": op_id})

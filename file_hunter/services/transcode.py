@@ -63,7 +63,8 @@ async def run_transcode(op_id: int, agent_id: int | None, params: dict):
     register_pending(path)
 
     try:
-        await dispatch("transcode", params["location_id"], path=path)
+        await dispatch("transcode", params["location_id"],
+                       path=path, quality=params.get("quality", "medium"))
     except (ConnectionError, OSError) as e:
         _pending.pop(path, None)
         await broadcast({

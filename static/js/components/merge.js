@@ -174,10 +174,12 @@ const Merge = {
             e.stopPropagation();
             if (isDisabled) return;
 
+            let expanded = false;
             if (hasChildren) {
                 if (this._expandedNodes.has(node.id)) {
                     this._expandedNodes.delete(node.id);
                 } else {
+                    expanded = true;
                     this._expandedNodes.add(node.id);
                     // Lazy-load children if not yet fetched
                     if (node.children === null) {
@@ -194,6 +196,19 @@ const Merge = {
             this._selectedDest = node.id;
             this._updateDestDisplay();
             this._renderTree();
+            if (expanded) {
+                const sel = this.treePicker.querySelector('.ct-selected');
+                if (sel) {
+                    const selDepth = sel.querySelectorAll('.ct-indent').length;
+                    let last = sel;
+                    let sib = sel.nextElementSibling;
+                    while (sib && sib.querySelectorAll('.ct-indent').length > selDepth) {
+                        last = sib;
+                        sib = sib.nextElementSibling;
+                    }
+                    if (last !== sel) last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+                }
+            }
         });
 
         container.appendChild(div);

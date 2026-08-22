@@ -359,10 +359,12 @@ const SlideshowTriage = {
             e.stopPropagation();
             if (node.online === false) return;
 
+            let expanded = false;
             if (hasChildren) {
                 if (this._expandedNodes.has(node.id)) {
                     this._expandedNodes.delete(node.id);
                 } else {
+                    expanded = true;
                     this._expandedNodes.add(node.id);
                     if (node.children === null) {
                         const numId = node.id.replace('fld-', '');
@@ -378,6 +380,19 @@ const SlideshowTriage = {
             this._selectedDest = node.id;
             destEl.textContent = node.label;
             this._renderTree();
+            if (expanded) {
+                const sel = this._movTree.querySelector('.ct-selected');
+                if (sel) {
+                    const selDepth = sel.querySelectorAll('.ct-indent').length;
+                    let last = sel;
+                    let sib = sel.nextElementSibling;
+                    while (sib && sib.querySelectorAll('.ct-indent').length > selDepth) {
+                        last = sib;
+                        sib = sib.nextElementSibling;
+                    }
+                    if (last !== sel) last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+                }
+            }
         });
 
         container.appendChild(div);

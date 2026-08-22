@@ -370,16 +370,12 @@ const Tree = {
 
         // Restore expanded state
         if (this._expandedIds.size > 0) {
-            // Filter to IDs that are still in the tree (nodes may have been deleted)
-            const validIds = [];
-            for (const eid of this._expandedIds) {
-                if (this._findNode(eid)) validIds.push(eid);
-            }
-            this._expandedIds = new Set(validIds);
-
-            // Locations already have children from /api/locations — just expand them
+            // Expand locations (they're in the fresh data from /api/locations)
+            // Collect ALL folder IDs for batch fetch — including deep ones
+            // not yet in the tree. _mergeChildrenTopDown cascades through
+            // multiple passes so children appear as their parents are merged.
             const folderIds = [];
-            for (const eid of validIds) {
+            for (const eid of this._expandedIds) {
                 if (eid.startsWith('loc-')) {
                     const node = this._findNode(eid);
                     if (node) node.expanded = true;
@@ -396,6 +392,14 @@ const Tree = {
                     this._mergeChildrenTopDown(childRes.data);
                 }
             }
+
+            // Now prune IDs for nodes that genuinely no longer exist
+            // (deleted by the operation that triggered this reload)
+            const validIds = new Set();
+            for (const eid of this._expandedIds) {
+                if (this._findNode(eid)) validIds.add(eid);
+            }
+            this._expandedIds = validIds;
         }
 
         // Re-expand nodes

@@ -232,20 +232,43 @@ function wireIgnoreFileBtn() {
     }
 }
 
+function _pickTranscodeQuality(filename) {
+    const overlay = document.getElementById('transcode-quality-modal');
+    const nameEl = document.getElementById('transcode-quality-filename');
+    const cancelBtn = document.getElementById('transcode-quality-cancel');
+    nameEl.textContent = filename;
+    overlay.classList.remove('hidden');
+    return new Promise((resolve) => {
+        function finish(val) {
+            overlay.classList.add('hidden');
+            overlay.removeEventListener('click', onOverlay);
+            cancelBtn.removeEventListener('click', onCancel);
+            document.removeEventListener('keydown', onKey);
+            for (const b of overlay.querySelectorAll('[data-quality]'))
+                b.removeEventListener('click', onQuality);
+            resolve(val);
+        }
+        function onQuality(e) { finish(e.currentTarget.dataset.quality); }
+        function onCancel() { finish(null); }
+        function onOverlay(e) { if (e.target === overlay) finish(null); }
+        function onKey(e) { if (e.key === 'Escape' && !overlay.classList.contains('hidden')) finish(null); }
+        for (const b of overlay.querySelectorAll('[data-quality]'))
+            b.addEventListener('click', onQuality);
+        cancelBtn.addEventListener('click', onCancel);
+        overlay.addEventListener('click', onOverlay);
+        document.addEventListener('keydown', onKey);
+    });
+}
+
 function wireTranscodeBtn() {
     const btn = document.getElementById('detail-transcode');
     if (btn && selectedFile) {
         btn.addEventListener('click', async () => {
-            const name = selectedFile.name || '';
-            const ok = await ConfirmModal.open({
-                title: 'Transcode Video',
-                message: `Transcode "${name}" to H.264 MP4? This will create a new file alongside the original.`,
-                confirmLabel: 'Transcode',
-            });
-            if (!ok) return;
+            const quality = await _pickTranscodeQuality(selectedFile.name || '');
+            if (!quality) return;
             btn.disabled = true;
             btn.textContent = 'Starting…';
-            const res = await API.post(`/api/files/${selectedFile.id}/transcode`);
+            const res = await API.post(`/api/files/${selectedFile.id}/transcode`, { quality });
             if (res.ok) {
                 btn.textContent = 'Transcoding…';
             } else {

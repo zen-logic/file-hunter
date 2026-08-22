@@ -333,8 +333,11 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         )
 
     elif operation == "transcode":
+        body = {"path": kwargs["path"]}
+        if kwargs.get("quality"):
+            body["quality"] = kwargs["quality"]
         await _post(
-            host, port, token, "/transcode", {"path": kwargs["path"]},
+            host, port, token, "/transcode", body,
             agent_id=agent_id,
         )
 
