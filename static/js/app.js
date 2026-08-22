@@ -99,6 +99,7 @@ async function refreshDetailPanel() {
             wireNewFolderBtn();
             wireDownloadZipBtn();
             wireMergeBtn();
+            wireTreemapBtn();
             wireRenameFolderBtn();
             wireMoveFolder();
             wireDeleteFolderBtn();
@@ -346,7 +347,10 @@ function wireResetStaleBtn(node) {
 function wireTreemapBtn() {
     const btn = document.getElementById('detail-treemap-btn');
     if (btn && selectedNode) {
-        btn.addEventListener('click', () => Treemap.open(selectedNode.id));
+        btn.addEventListener('click', () => {
+            const loc = Tree.getLocation(selectedNode.id);
+            Treemap.open(selectedNode.id, loc ? loc.id : selectedNode.id);
+        });
     }
 }
 

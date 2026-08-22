@@ -36,10 +36,17 @@ const Treemap = {
         });
     },
 
-    open(locationId) {
-        const numId = String(locationId).replace('loc-', '');
-        this._locationId = parseInt(numId, 10);
-        this._parentId = null;
+    open(nodeId, locationId) {
+        const idStr = String(nodeId);
+        if (idStr.startsWith('fld-')) {
+            // Folder — need the location ID and start at this folder
+            this._locationId = parseInt(String(locationId).replace('loc-', ''), 10);
+            this._parentId = parseInt(idStr.replace('fld-', ''), 10);
+        } else {
+            // Location root
+            this._locationId = parseInt(idStr.replace('loc-', ''), 10);
+            this._parentId = null;
+        }
         this._modal.classList.remove('hidden');
         this._load();
     },

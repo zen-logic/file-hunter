@@ -1804,6 +1804,7 @@ const Detail = {
                     <button class="btn btn-sm" id="detail-new-folder"${_disabledIf(off, sc, miss)}>New Folder</button>
                     <button class="btn btn-sm" id="detail-download-zip"${_disabledIf(off, false, miss)}>Download ZIP</button>
                     <button class="btn btn-sm" id="detail-merge-btn"${_disabledIf(off, false, miss)}>Merge</button>
+                    <button class="btn btn-sm" id="detail-treemap-btn"${_disabledIf(off, false, miss)}>Storage Map</button>
                     <button class="btn btn-sm" id="detail-rename-folder"${_disabledIf(off, sc, miss)}>Rename</button>
                     <button class="btn btn-sm" id="detail-move-folder"${_disabledIf(off, sc, miss)}>Move / Copy</button>
                     ${s.staleFiles > 0 ? `<button class="btn btn-sm" id="detail-reset-stale"${_disabledIf(false, sc)}>Reset Stale</button>` : ''}
