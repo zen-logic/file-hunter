@@ -323,7 +323,17 @@ async def run_quick_scan(
                             description,
                             created_date, modified_date, date_cataloged, date_last_seen,
                             scan_id, stale, hidden, dup_exclude, inode)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, NULL, 0, ?, ?, ?)""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, NULL, 0, ?, ?, ?)
+                           ON CONFLICT(location_id, rel_path) DO UPDATE SET
+                            filename=excluded.filename, full_path=excluded.full_path,
+                            folder_id=excluded.folder_id,
+                            file_type_high=excluded.file_type_high,
+                            file_type_low=excluded.file_type_low,
+                            file_size=excluded.file_size,
+                            date_last_seen=excluded.date_last_seen,
+                            hidden=excluded.hidden,
+                            inode=excluded.inode,
+                            stale=0""",
                         (
                             name,
                             full,

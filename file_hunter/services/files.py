@@ -788,6 +788,10 @@ async def move_file(
     # Reclassify if extension changed
     new_type_high, new_type_low = classify_file(final_name)
 
+    # Track hashes affected by copy for dup recount
+    affected_strong = None
+    affected_fast = None
+
     if copy:
         # Insert new file record — source stays untouched
         new_file_id = await insert_file_copy(
@@ -808,6 +812,13 @@ async def move_file(
             final_location_id,
             added=[(final_folder_id, file_size, new_type_high, f["hidden"])],
         )
+
+        # The copy shares the source's hash — the dup group has grown
+        src_hashes = await get_file_hashes([file_id])
+        if file_id in src_hashes:
+            h = src_hashes[file_id]
+            affected_strong = h.get("hash_strong")
+            affected_fast = h.get("hash_fast")
 
         result_id = new_file_id
     else:
@@ -949,7 +960,12 @@ async def move_file(
             if final_location_id != src_loc_id
             else {src_loc_id}
         )
-        await post_op_stats(location_ids=loc_ids)
+        await post_op_stats(
+            location_ids=loc_ids,
+            strong_hashes={affected_strong} if affected_strong else None,
+            fast_hashes={affected_fast} if affected_fast and not affected_strong else None,
+            source="file_copy" if copy else "file_move",
+        )
 
     return {
         "id": result_id,

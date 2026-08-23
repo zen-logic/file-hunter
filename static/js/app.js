@@ -348,8 +348,12 @@ function wireTreemapBtn() {
     const btn = document.getElementById('detail-treemap-btn');
     if (btn && selectedNode) {
         btn.addEventListener('click', () => {
-            const loc = Tree.getLocation(selectedNode.id);
-            Treemap.open(selectedNode.id, loc ? loc.id : selectedNode.id);
+            if (selectedNode.type === 'location') {
+                Treemap.open(selectedNode.id);
+            } else {
+                const locId = Detail._currentLocationId;
+                if (locId) Treemap.open(selectedNode.id, `loc-${locId}`);
+            }
         });
     }
 }
