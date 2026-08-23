@@ -2792,6 +2792,16 @@ select.modal-input {
     justify-content: flex-end;
 }
 
+.settings-token {
+    font-size: var(--font-size-xs);
+    font-family: monospace;
+    color: var(--color-text-secondary);
+    word-break: break-all;
+    -webkit-user-select: text;
+    user-select: text;
+    pointer-events: auto;
+}
+
 .settings-footer {
     display: flex;
     justify-content: flex-end;

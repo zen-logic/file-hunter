@@ -24,9 +24,10 @@ const Settings = {
         const content = document.getElementById('settings-content');
         content.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div>Loading…</div>';
 
-        const [settingsRes, usersRes, proRes, themes] = await Promise.all([
+        const [settingsRes, usersRes, appsRes, proRes, themes] = await Promise.all([
             API.get('/api/settings'),
             API.get('/api/auth/users'),
+            API.get('/api/auth/apps'),
             API.get('/api/pro/status'),
             loadThemes(),
         ]);
@@ -34,6 +35,7 @@ const Settings = {
 
         const settings = settingsRes.ok ? settingsRes.data : {};
         const users = usersRes.ok ? usersRes.data : [];
+        const apps = appsRes.ok ? appsRes.data : [];
         const proActive = proRes.ok && proRes.data.active;
         const savedTheme = localStorage.getItem('fh-theme') || 'default';
 
@@ -81,6 +83,17 @@ const Settings = {
                     <tbody id="settings-users-body"></tbody>
                 </table>
                 <button class="btn btn-sm" id="settings-add-user" style="margin-top:0.5rem">+ Add User</button>
+                <button class="btn btn-sm" id="settings-add-app" style="margin-top:0.5rem">+ Add Application</button>
+            </div>
+            <div class="settings-section">
+                <h3 class="settings-section-title">Applications</h3>
+                <span class="settings-hint">API tokens for programmatic access. Use as a Bearer token in the Authorization header.</span>
+                <table class="settings-users-table" id="settings-apps-table">
+                    <thead>
+                        <tr><th>Name</th><th>Token</th><th></th></tr>
+                    </thead>
+                    <tbody id="settings-apps-body"></tbody>
+                </table>
             </div>
             <div class="settings-section">
                 <h3 class="settings-section-title">Maintenance</h3>
@@ -180,6 +193,9 @@ const Settings = {
         // Users table
         this._renderUsers(users);
 
+        // Applications table
+        this._renderApps(apps);
+
         // Save server name
         document.getElementById('settings-save-name').addEventListener('click', async () => {
             const name = document.getElementById('settings-server-name').value.trim();
@@ -191,8 +207,9 @@ const Settings = {
             await API.patch('/api/settings', { showHiddenFiles: e.target.checked });
         });
 
-        // Add user
+        // Add user / application
         document.getElementById('settings-add-user').addEventListener('click', () => this._showAddUser());
+        document.getElementById('settings-add-app').addEventListener('click', () => this._showAddApp());
 
         // Repair catalog
         document.getElementById('settings-repair-catalog').addEventListener('click', () => {
@@ -392,6 +409,135 @@ const Settings = {
                 break;
             }
         }
+    },
+
+    _renderApps(apps) {
+        const tbody = document.getElementById('settings-apps-body');
+        if (!tbody) return;
+        const table = document.getElementById('settings-apps-table');
+        if (!apps.length) {
+            table.classList.add('hidden');
+            return;
+        }
+        table.classList.remove('hidden');
+        tbody.innerHTML = '';
+        for (const app of apps) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${this._esc(app.name)}</td>
+                <td><code class="settings-token">${this._esc(app.token)}</code></td>
+                <td class="settings-user-actions">
+                    <button class="btn btn-sm settings-copy-token" data-token="${this._esc(app.token)}">Copy</button>
+                    <button class="btn btn-sm settings-regen-app" data-id="${app.id}" data-name="${this._esc(app.name)}">Regenerate</button>
+                    <button class="btn btn-sm btn-danger settings-delete-app" data-id="${app.id}" data-name="${this._esc(app.name)}">Delete</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+
+        tbody.querySelectorAll('.settings-copy-token').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const text = btn.dataset.token;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        btn.textContent = 'Copied';
+                        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+                    }).catch(() => this._fallbackCopy(text, btn));
+                } else {
+                    this._fallbackCopy(text, btn);
+                }
+            });
+        });
+
+        tbody.querySelectorAll('.settings-regen-app').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = parseInt(btn.dataset.id, 10);
+                const name = btn.dataset.name;
+                const ok = await ConfirmModal.open({
+                    title: 'Regenerate Token',
+                    message: `Regenerate the API token for "${name}"? The current token will stop working immediately.`,
+                    confirmLabel: 'Regenerate',
+                });
+                if (!ok) return;
+                const res = await API.post(`/api/auth/apps/${id}/regenerate`);
+                if (res.ok) {
+                    this._render();
+                } else {
+                    Toast.error(res.error || 'Failed to regenerate token.');
+                }
+            });
+        });
+
+        tbody.querySelectorAll('.settings-delete-app').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = parseInt(btn.dataset.id, 10);
+                const name = btn.dataset.name;
+                const ok = await ConfirmModal.open({
+                    title: 'Delete Application',
+                    message: `Delete application "${name}"? Any integrations using this token will stop working.`,
+                    confirmLabel: 'Delete',
+                });
+                if (ok) {
+                    await API.delete(`/api/auth/apps/${id}`);
+                    this._render();
+                }
+            });
+        });
+    },
+
+    _showAddApp() {
+        const existing = document.getElementById('settings-app-form');
+        if (existing) existing.remove();
+
+        const form = document.createElement('div');
+        form.id = 'settings-app-form';
+        form.className = 'settings-user-form';
+        form.innerHTML = `
+            <div class="settings-user-form-fields">
+                <input type="text" class="modal-input" id="new-app-name" placeholder="Application name" autocomplete="off">
+            </div>
+            <div class="settings-user-form-actions">
+                <button class="btn btn-sm btn-primary" id="new-app-save">Create</button>
+                <button class="btn btn-sm" id="new-app-cancel">Cancel</button>
+            </div>
+            <p class="modal-error hidden" id="new-app-error"></p>
+        `;
+        const table = document.getElementById('settings-apps-table');
+        table.parentNode.insertBefore(form, table.nextSibling);
+
+        document.getElementById('new-app-name').focus();
+        document.getElementById('new-app-cancel').addEventListener('click', () => form.remove());
+        document.getElementById('new-app-save').addEventListener('click', async () => {
+            const name = document.getElementById('new-app-name').value.trim();
+            const errEl = document.getElementById('new-app-error');
+
+            if (!name) {
+                errEl.textContent = 'Application name is required.';
+                errEl.classList.remove('hidden');
+                return;
+            }
+
+            const res = await API.post('/api/auth/apps', { name });
+            if (res.ok) {
+                this._render();
+            } else {
+                errEl.textContent = res.error || 'Failed to create application.';
+                errEl.classList.remove('hidden');
+            }
+        });
+    },
+
+    _fallbackCopy(text, btn) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
     },
 
     _esc(s) {

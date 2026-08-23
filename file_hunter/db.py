@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     date_created TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    token TEXT NOT NULL UNIQUE,
+    date_created TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

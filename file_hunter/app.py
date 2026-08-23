@@ -96,6 +96,12 @@ from file_hunter.routes.auth import (
     update_user,
     delete_user,
 )
+from file_hunter.routes.applications import (
+    list_applications,
+    create_application,
+    regenerate_application_token,
+    delete_application,
+)
 from file_hunter.routes.settings import (
     get_settings,
     update_settings,
@@ -268,6 +274,10 @@ app = Starlette(
         Route("/api/auth/users", create_user, methods=["POST"]),
         Route("/api/auth/users/{id:int}", update_user, methods=["PATCH"]),
         Route("/api/auth/users/{id:int}", delete_user, methods=["DELETE"]),
+        Route("/api/auth/apps", list_applications, methods=["GET"]),
+        Route("/api/auth/apps", create_application, methods=["POST"]),
+        Route("/api/auth/apps/{id:int}/regenerate", regenerate_application_token, methods=["POST"]),
+        Route("/api/auth/apps/{id:int}", delete_application, methods=["DELETE"]),
         Route("/api/version", get_version, methods=["GET"]),
         Route("/api/settings", get_settings, methods=["GET"]),
         Route("/api/settings", update_settings, methods=["PATCH"]),

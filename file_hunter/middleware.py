@@ -2,6 +2,7 @@ from urllib.parse import parse_qs
 from starlette.responses import JSONResponse
 from file_hunter.db import read_db
 from file_hunter.services.auth import validate_session
+from file_hunter.services.applications import validate_app_token
 from file_hunter.extensions import get_public_paths, get_public_ws_paths
 
 # Paths that do not require authentication
@@ -53,6 +54,8 @@ class AuthMiddleware:
 
             async with read_db() as db:
                 user = await validate_session(db, token)
+                if not user:
+                    user = await validate_app_token(db, token)
             if not user:
                 response = JSONResponse(
                     {"ok": False, "error": "Invalid or expired session."},
