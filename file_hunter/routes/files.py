@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import logging
 
 from starlette.requests import Request
@@ -26,9 +27,14 @@ from file_hunter.hashes_db import (
     update_file_hash,
 )
 from file_hunter.services import fs
+from file_hunter.services.tags import list_all_tags
 from file_hunter.services.agent_ops import hash_partial_batch
 from file_hunter.services.zip_download import start_build, get_job, cleanup_job
-from file_hunter.services.content_proxy import fetch_agent_byte_range
+from file_hunter.services.content_proxy import (
+    fetch_agent_bytes,
+    fetch_agent_byte_range,
+    MIME_MAP,
+)
 from file_hunter.services.deferred_ops import cancel_pending_op, queue_deferred_op
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.dup_exclude import (
@@ -176,6 +182,86 @@ async def file_bytes(request: Request):
             "X-Offset": str(offset),
         },
     )
+
+
+async def file_base64(request: Request):
+    """Return file content as base64 with media type, ready for vision model APIs."""
+    file_id = int(request.path_params["id"])
+    async with read_db() as db:
+        row = await db.execute(
+            "SELECT full_path, filename, location_id FROM files WHERE id = ?",
+            (file_id,),
+        )
+        row = await row.fetchone()
+    if not row:
+        return json_error("File not found.", 404)
+
+    data = await fetch_agent_bytes(row["full_path"], row["location_id"])
+    if data is None:
+        return json_error("File not available (agent offline).", 404)
+
+    ext = row["filename"].rsplit(".", 1)[-1].lower() if "." in row["filename"] else ""
+    media_type = MIME_MAP.get(ext, "application/octet-stream")
+
+    return json_ok({
+        "media_type": media_type,
+        "data": base64.b64encode(data).decode("ascii"),
+    })
+
+
+async def tags_list(request: Request):
+    async with read_db() as db:
+        tags = await list_all_tags(db)
+    return json_ok(tags)
+
+
+async def tags_search(request: Request):
+    """GET /api/tags/{tags} — find files matching all specified tags."""
+    from file_hunter.services.tags import parse_tags
+
+    raw = request.path_params.get("tags", "")
+    names = parse_tags(raw)
+    if not names:
+        return json_error("No valid tags specified.", 400)
+
+    placeholders = ",".join("?" for _ in names)
+    match_sql = (
+        "f.id IN ("
+        "SELECT ft.file_id FROM file_tags ft "
+        "JOIN tags t ON t.id = ft.tag_id "
+        f"WHERE t.name IN ({placeholders}) "
+        "GROUP BY ft.file_id "
+        f"HAVING COUNT(DISTINCT t.name) = ?"
+        ")"
+    )
+    params = list(names) + [len(names)]
+
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            f"SELECT f.id, f.filename, f.rel_path, f.file_type_high, f.file_type_low, "
+            f"f.file_size, f.modified_date, f.location_id, l.name as location_name "
+            f"FROM files f "
+            f"JOIN locations l ON l.id = f.location_id "
+            f"WHERE f.stale = 0 AND {match_sql} "
+            f"ORDER BY f.filename COLLATE NOCASE",
+            params,
+        )
+
+    items = []
+    for r in rows:
+        items.append({
+            "id": r["id"],
+            "name": r["filename"],
+            "path": r["rel_path"],
+            "typeHigh": r["file_type_high"],
+            "typeLow": r["file_type_low"],
+            "size": r["file_size"],
+            "date": r["modified_date"],
+            "locationId": r["location_id"],
+            "location": r["location_name"],
+        })
+
+    return json_ok(items)
 
 
 async def file_update(request: Request):

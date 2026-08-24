@@ -995,6 +995,10 @@ const Detail = {
                     <span class="value">${formatSize(detail.size)}</span>
                 </div>
                 <div class="detail-field">
+                    <span class="label">File ID</span>
+                    <span class="value selectable" style="font-family: monospace; font-size: 0.8em;">${detail.id}</span>
+                </div>
+                <div class="detail-field">
                     <span class="label">Modified</span>
                     <span class="value">${formatDate(detail.date)}</span>
                 </div>

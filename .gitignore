@@ -12,4 +12,5 @@ REQUIREMENTS.md
 dist/
 release.sh
 package.sh
+deploy.sh
 

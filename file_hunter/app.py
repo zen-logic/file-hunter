@@ -30,6 +30,9 @@ from file_hunter.routes.files import (
     file_detail,
     file_content,
     file_bytes,
+    file_base64,
+    tags_list,
+    tags_search,
     file_update,
     file_delete,
     file_move,
@@ -79,6 +82,7 @@ from file_hunter.routes.stats import (
     stop_repair,
 )
 from file_hunter.routes.browse import browse
+from file_hunter.routes.catalog_browse import catalog_browse
 from file_hunter.routes.batch import (
     batch_delete_route,
     batch_move_route,
@@ -305,6 +309,9 @@ app = Starlette(
         Route("/api/files", files_list, methods=["GET"]),
         Route("/api/files/{id:int}/content", file_content, methods=["GET"]),
         Route("/api/files/{id:int}/bytes", file_bytes, methods=["GET"]),
+        Route("/api/files/{id:int}/base64", file_base64, methods=["GET"]),
+        Route("/api/tags", tags_list, methods=["GET"]),
+        Route("/api/tags/{tags}", tags_search, methods=["GET"]),
         Route("/api/files/{id:int}", file_detail, methods=["GET"]),
         Route("/api/files/{id:int}", file_update, methods=["PATCH"]),
         Route("/api/files/{id:int}/move", file_move, methods=["POST"]),
@@ -343,6 +350,7 @@ app = Starlette(
         Route("/api/merge/cancel", cancel_merge, methods=["POST"]),
         Route("/api/upload", upload_files, methods=["POST"]),
         Route("/api/browse", browse, methods=["GET"]),
+        Route("/api/browse/{path:path}", catalog_browse, methods=["GET"]),
         Route("/api/batch/delete", batch_delete_route, methods=["POST"]),
         Route("/api/batch/move", batch_move_route, methods=["POST"]),
         Route("/api/batch/tag", batch_tag_route, methods=["POST"]),
