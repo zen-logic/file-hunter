@@ -321,14 +321,32 @@ def _append_folder_results(search_path: str, folder_data: list):
     sdb.close()
 
 
-def _read_search_page(search_path, sort, sort_dir, page):
+def _read_search_page(search_path, sort, sort_dir, page, focus_file_id=None):
     """Read a page from the search results DB."""
     col = RESULT_SORT_COLUMNS.get(sort, "filename")
     direction = "DESC" if sort_dir == "desc" else "ASC"
-    offset = page * PAGE_SIZE
 
     sdb = sqlite3.connect(str(search_path))
     sdb.row_factory = sqlite3.Row
+
+    # If focusing a specific file, compute which page it's on
+    if focus_file_id:
+        focus_row = sdb.execute(
+            f"SELECT {col} as sort_val FROM results WHERE file_id = ?",
+            (focus_file_id,),
+        ).fetchone()
+        if focus_row:
+            sort_val = focus_row["sort_val"]
+            op = "<" if direction == "ASC" else ">"
+            pos_row = sdb.execute(
+                f"SELECT COUNT(*) as pos FROM results "
+                f"WHERE {col} {op} ? OR ({col} = ? AND file_id {op} ?)",
+                (sort_val, sort_val, focus_file_id),
+            ).fetchone()
+            position = pos_row["pos"] if pos_row else 0
+            page = position // PAGE_SIZE
+
+    offset = page * PAGE_SIZE
 
     total_row = sdb.execute("SELECT COUNT(*) as c FROM results").fetchone()
     total = total_row["c"]
@@ -381,7 +399,7 @@ def _read_search_page(search_path, sort, sort_dir, page):
                 }
             )
 
-    return items, total, folder_total
+    return items, total, folder_total, page
 
 
 def _escape_like(value: str) -> str:
@@ -595,6 +613,7 @@ async def search_files(
     sort_dir="asc",
     cached_total=None,
     search_id=None,
+    focus_file_id=None,
     ctx=None,
 ):
     """Search files with optional filters. Returns paged envelope."""
@@ -741,8 +760,8 @@ async def search_files(
         and ctx.search_db_path
         and os.path.exists(ctx.search_db_path)
     ):
-        items, total, folder_total = await asyncio.to_thread(
-            _read_search_page, ctx.search_db_path, sort, sort_dir, page
+        items, total, folder_total, page = await asyncio.to_thread(
+            _read_search_page, ctx.search_db_path, sort, sort_dir, page, focus_file_id
         )
     elif include_files or include_folders:
         ctx.cancel()
@@ -788,11 +807,11 @@ async def search_files(
         ctx.search_db_path = search_path
         search_id = new_id
 
-        items, total, folder_total = await asyncio.to_thread(
-            _read_search_page, search_path, sort, sort_dir, page
+        items, total, folder_total, page = await asyncio.to_thread(
+            _read_search_page, search_path, sort, sort_dir, page, focus_file_id
         )
 
-    return {
+    result = {
         "items": items,
         "folders": [],
         "total": total,
@@ -801,6 +820,9 @@ async def search_files(
         "pageSize": PAGE_SIZE,
         "searchId": search_id,
     }
+    if focus_file_id:
+        result["focusFileId"] = focus_file_id
+    return result
 
 
 # ── Advanced search helpers ──
@@ -1118,6 +1140,7 @@ async def search_files_advanced(
     sort_dir="asc",
     cached_total=None,
     search_id=None,
+    focus_file_id=None,
     ctx=None,
 ):
     """Search files with advanced include/exclude conditions."""
@@ -1161,8 +1184,8 @@ async def search_files_advanced(
         and ctx.search_db_path
         and os.path.exists(ctx.search_db_path)
     ):
-        items, total, folder_total = await asyncio.to_thread(
-            _read_search_page, ctx.search_db_path, sort, sort_dir, page
+        items, total, folder_total, page = await asyncio.to_thread(
+            _read_search_page, ctx.search_db_path, sort, sort_dir, page, focus_file_id
         )
     elif include_files or include_folders:
         ctx.cancel()
@@ -1201,11 +1224,11 @@ async def search_files_advanced(
         ctx.search_db_path = search_path
         search_id = new_id
 
-        items, total, folder_total = await asyncio.to_thread(
-            _read_search_page, search_path, sort, sort_dir, page
+        items, total, folder_total, page = await asyncio.to_thread(
+            _read_search_page, search_path, sort, sort_dir, page, focus_file_id
         )
 
-    return {
+    result = {
         "items": items,
         "folders": [],
         "total": total,
@@ -1214,3 +1237,6 @@ async def search_files_advanced(
         "pageSize": PAGE_SIZE,
         "searchId": search_id,
     }
+    if focus_file_id:
+        result["focusFileId"] = focus_file_id
+    return result

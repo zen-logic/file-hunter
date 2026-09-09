@@ -1104,6 +1104,7 @@ FileList.onPreview = (file) => Detail.openPreviewFor(file);
 // Arrow keys keep working while the preview is open — the list advances and
 // the enlarged view follows the selection.
 Detail.onPreviewNavigate = (delta) => FileList.moveSelection(delta);
+Detail.onSlideshowClose = (fileId) => FileList.focusFile(fileId);
 Detail.getSortParams = () => ({ sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
 
 Detail.init({

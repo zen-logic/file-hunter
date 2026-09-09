@@ -600,7 +600,7 @@ const FileList = {
         }
     },
 
-    async _fetchSearch() {
+    async _fetchSearch(focusFileId) {
         if (!this._searchParams) return;
         if (this._ac) this._ac.abort();
         this._ac = new AbortController();
@@ -612,6 +612,7 @@ const FileList = {
         if (this._searchId) {
             params.set('searchId', this._searchId);
         }
+        if (focusFileId) params.set('focusFile', focusFileId);
 
         let res;
         try {
@@ -632,6 +633,17 @@ const FileList = {
             this.totalFiles = 0;
         }
         this._renderContent();
+
+        if (focusFileId && res.ok && res.data.focusFileId) {
+            const foldersLen = this.currentFolders ? this.currentFolders.length : 0;
+            const idx = this.currentItems.findIndex(f => f.id === res.data.focusFileId);
+            if (idx >= 0) {
+                this._selectOnly(this.currentItems[idx], foldersLen + idx);
+                this.render();
+                this._fireSelectionChange();
+                this._scrollSelectedIntoView();
+            }
+        }
     },
 
     _refetch() {
@@ -693,6 +705,26 @@ const FileList = {
         this._favouritesMode = false;
 
         await this._fetchFolder(focusFileId);
+    },
+
+    async focusFile(fileId) {
+        // Try current page first — no round-trip needed
+        const items = this._getDisplayItems();
+        const idx = items.findIndex(f => f.id === fileId);
+        if (idx >= 0) {
+            this._selectOnly(items[idx], idx);
+            this.render();
+            this._fireSelectionChange();
+            this._scrollSelectedIntoView();
+            return;
+        }
+        // File is on a different page — refetch with focusFile
+        if (this._searchMode) {
+            await this._fetchSearch(fileId);
+        } else if (this.currentFolder) {
+            this.pendingFocusFile = fileId;
+            await this.refreshFolder();
+        }
     },
 
     async refreshFolder() {

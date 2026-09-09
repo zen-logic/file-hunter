@@ -16,6 +16,8 @@ async def search(request: Request):
     page = int(request.query_params.get("page", 0))
     sort = request.query_params.get("sort", "name")
     sort_dir = request.query_params.get("sortDir", "asc")
+    focus_file = request.query_params.get("focusFile")
+    focus_file_id = int(focus_file) if focus_file else None
 
     scope_type = request.query_params.get("scopeType")
     scope_id_raw = request.query_params.get("scopeId", "")
@@ -31,7 +33,7 @@ async def search(request: Request):
         _act_reg(act_name, "Search")
 
     try:
-        return await _do_search(request, page, sort, sort_dir, location_id, folder_id)
+        return await _do_search(request, page, sort, sort_dir, location_id, folder_id, focus_file_id)
     except Exception as e:
         if "interrupted" in str(e):
             return json_ok(
@@ -50,7 +52,7 @@ async def search(request: Request):
             _act_unreg(act_name)
 
 
-async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
+async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focus_file_id=None):
     # Fast path: hash-only search (dup badge click)
     hash_val = request.query_params.get("hash")
     if hash_val and not any(
@@ -87,6 +89,7 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
                 if "cachedTotal" in request.query_params
                 else None,
                 search_id=request.query_params.get("searchId"),
+                focus_file_id=focus_file_id,
             )
         else:
             results = await search_files(
@@ -117,6 +120,7 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id):
                 if "cachedTotal" in request.query_params
                 else None,
                 search_id=request.query_params.get("searchId"),
+                focus_file_id=focus_file_id,
             )
     return json_ok(results)
 

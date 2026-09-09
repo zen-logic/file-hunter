@@ -76,6 +76,7 @@ const Detail = {
     onNavigateToFolder: null,
     onShowDuplicates: null,
     onPreviewNavigate: null,    // arrow keys while the preview is open
+    onSlideshowClose: null,     // fileId of the last-shown item when slideshow/playlist closes
 
     init(opts) {
         this.el = document.getElementById('detail-content');
@@ -415,6 +416,10 @@ const Detail = {
         if (document.fullscreenElement) document.exitFullscreen();
         this._stopAutoplay();
 
+        // Capture current file before clearing state
+        const wasSlideshow = this._slideshowTotal > 0;
+        const lastFileId = wasSlideshow ? this._slideshowCurrentFileId() : null;
+
         // Capture triage sets before clearing state
         const cache = this._slideshowCache;
         const deleteItems = [...this._slideshowDeleteSet].map(id => ({
@@ -466,6 +471,11 @@ const Detail = {
         // Show triage dialogs if any images were marked
         if ((deleteItems.length > 0 || consolidateItems.length > 0 || tagItems.length > 0 || moveItems.length > 0) && this.slideshowTriage) {
             this.slideshowTriage.show(deleteItems, consolidateItems, tagItems, moveItems);
+        }
+
+        // Select the file that was showing when the slideshow closed
+        if (lastFileId && this.onSlideshowClose) {
+            this.onSlideshowClose(lastFileId);
         }
     },
 
