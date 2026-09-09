@@ -513,9 +513,15 @@ const Detail = {
         this._slideshowTotal = res.data.total;
 
         if (this._slideshowTotal === 0) return;
-        await this._slideshowShow(0);
+        let startIdx = 0;
+        if (params.startAt) {
+            const idx = this._slideshowWindow.indexOf(params.startAt);
+            if (idx !== -1) startIdx = idx;
+        }
+        this._slideshowOffset = startIdx;
+        await this._slideshowShow(startIdx);
         if (this._slideshowMode === 'slideshow') {
-            this._slideshowBuffer(0);
+            this._slideshowBuffer(startIdx);
             this._startAutoplay();
         }
     },
@@ -982,7 +988,7 @@ const Detail = {
         const transcodeLabel = detail.transcodeStatus === 'converting' ? 'Converting…' : detail.transcodeStatus === 'queued' ? 'Queued' : 'Transcode';
         const transcodeDisabled = detail.transcodeStatus ? ' disabled' : '';
         const transcodeBtn = detail.canTranscode && detail.online && !hasPendingOp ? `<button class="btn btn-sm" id="detail-transcode" style="margin-top:0.4rem"${transcodeDisabled}>${transcodeLabel}</button>` : '';
-        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}${ignoreFileBtn}${deleteFileBtn}</div>` : '';
+        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}<span id="detail-file-slideshow-slot"></span>${ignoreFileBtn}${deleteFileBtn}</div>` : '';
 
         let html = `
             <div class="detail-section">

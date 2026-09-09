@@ -78,6 +78,7 @@ async function refreshDetailPanel() {
             wireMoveFileBtn();
             wireIgnoreFileBtn();
             wireTranscodeBtn();
+            wireFileSlideshowBtn(selectedFile);
         }
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
     } else if (selectedNode) {
@@ -860,6 +861,39 @@ MoveFileModal.init(async (item, destinationFolderId, copy) => {
     return { ok: true };
 });
 
+function wireFileSlideshowBtn(file) {
+    const slot = document.getElementById('detail-file-slideshow-slot');
+    if (!slot) return;
+    if ((file.typeHigh || '').toLowerCase() !== 'image') return;
+    const folderId = FileList.currentFolder;
+    const searchId = FileList._searchId;
+    if (!folderId && !searchId) return;
+    slot.innerHTML = `<button class="btn btn-sm" id="detail-file-slideshow" style="margin-top:0.4rem">Slideshow</button>`;
+    document.getElementById('detail-file-slideshow').addEventListener('click', async () => {
+        const btn = document.getElementById('detail-file-slideshow');
+        btn.disabled = true;
+        btn.textContent = 'Loading…';
+        const params = {
+            mode: 'slideshow',
+            startAt: file.id,
+            sort: FileList.sortKey,
+            sortDir: FileList._sortDirStr(),
+        };
+        if (searchId) {
+            params.type = 'search';
+            params.searchId = searchId;
+        } else {
+            params.type = 'folder';
+            params.folderId = folderId;
+        }
+        await Detail.startSlideshow(params);
+        if (Detail._slideshowTotal === 0) {
+            btn.textContent = 'No images';
+            setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
+        }
+    });
+}
+
 function wireSlideshowBtn() {
     const slot = document.getElementById('detail-slideshow-slot');
     if (!slot) return;
@@ -990,6 +1024,7 @@ FileList.init(async (file) => {
         wireMoveFileBtn();
         wireIgnoreFileBtn();
         wireTranscodeBtn();
+        wireFileSlideshowBtn(file);
     }
     if (result) {
         updateLocationOnline(result.locationId, result.locationOnline);
