@@ -430,6 +430,10 @@ const Search = {
                         o.textContent = loc.label;
                         sel.appendChild(o);
                     }
+                    if (sel.dataset.pending) {
+                        sel.value = sel.dataset.pending;
+                        delete sel.dataset.pending;
+                    }
                 });
                 container.appendChild(sel);
                 bind();
@@ -687,6 +691,11 @@ const Search = {
                             const toEl = inputsDiv.querySelector('[data-role="to"]');
                             if (fromEl && c.from) fromEl.value = c.from;
                             if (toEl && c.to) toEl.value = c.to;
+                            break;
+                        }
+                        case 'location': {
+                            const locEl = inputsDiv.querySelector('[data-role="value"]');
+                            if (locEl && c.value) locEl.dataset.pending = c.value;
                             break;
                         }
                         default: {
