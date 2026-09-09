@@ -71,7 +71,9 @@ const Detail = {
     _slideshowConsolidateSet: new Set(),
     _slideshowTagSet: new Set(),
     _slideshowMoveSet: new Set(),
+    _slideshowZipSet: new Set(),
     slideshowTriage: null,
+    onSlideshowZip: null,
     onNavigateToFile: null,
     onNavigateToFolder: null,
     onShowDuplicates: null,
@@ -301,6 +303,7 @@ const Detail = {
                 else if (e.key === 'c') { this._slideshowToggleMark('consolidate'); }
                 else if (e.key === 't') { this._slideshowToggleMark('tag'); }
                 else if (e.key === 'm') { this._slideshowToggleMark('move'); }
+                else if (e.key === 'z') { this._slideshowToggleMark('zip'); }
             } else if (e.key === ' ') {
                 // Plain preview only — space closes, mirroring the space that
                 // opened it. Slideshow and playlist own space in the branch
@@ -326,6 +329,7 @@ const Detail = {
                         name: this._previewModal._fileName,
                         type: 'file',
                     }]);
+                    this._updatePreviewBadge();
                 }
             }
         });
@@ -375,6 +379,7 @@ const Detail = {
         m.downloadBtn.classList.remove('hidden');
         m.fullscreenBtn.classList.remove('hidden');
         m.overlay.classList.remove('hidden');
+        this._updatePreviewBadge();
     },
 
     /** Open the large preview for a file the panel is already showing.
@@ -438,6 +443,10 @@ const Detail = {
             id,
             name: (cache[id] && cache[id].name) || `File ${id}`,
         }));
+        const zipItems = [...this._slideshowZipSet].map(id => ({
+            id,
+            name: (cache[id] && cache[id].name) || `File ${id}`,
+        }));
 
         m.overlay.classList.add('hidden');
         m.downloadBtn.classList.add('hidden');
@@ -459,6 +468,7 @@ const Detail = {
         this._slideshowConsolidateSet = new Set();
         this._slideshowTagSet = new Set();
         this._slideshowMoveSet = new Set();
+        this._slideshowZipSet = new Set();
         // Reset slideshow/playlist buttons in detail panel
         const ssBtn = document.getElementById('detail-slideshow');
         if (ssBtn) { ssBtn.textContent = 'Slideshow'; ssBtn.disabled = false; }
@@ -467,6 +477,11 @@ const Detail = {
         // Stop any playing media
         m.content.querySelectorAll('video, audio').forEach(el => { el.pause(); el.src = ''; });
         m.content.innerHTML = '';
+
+        // Trigger zip download before triage dialogs
+        if (zipItems.length > 0 && this.onSlideshowZip) {
+            this.onSlideshowZip(zipItems);
+        }
 
         // Show triage dialogs if any images were marked
         if ((deleteItems.length > 0 || consolidateItems.length > 0 || tagItems.length > 0 || moveItems.length > 0) && this.slideshowTriage) {
@@ -493,6 +508,7 @@ const Detail = {
         this._slideshowConsolidateSet = new Set();
         this._slideshowTagSet = new Set();
         this._slideshowMoveSet = new Set();
+        this._slideshowZipSet = new Set();
 
         // Fetch all IDs in one call — no per-window queries during navigation
         const p = params;
@@ -776,6 +792,7 @@ const Detail = {
             consolidate: this._slideshowConsolidateSet,
             tag: this._slideshowTagSet,
             move: this._slideshowMoveSet,
+            zip: this._slideshowZipSet,
         };
         const s = setMap[kind];
         if (!s) return;
@@ -793,23 +810,21 @@ const Detail = {
         const badge = m.markBadge;
         const triageEl = m.triageCounter;
 
-        // Badge on current image — show all active marks
-        badge.classList.remove('mark-delete', 'mark-consolidate', 'mark-tag', 'mark-move');
+        // Badge on current image — show all active marks as individual pips
         const marks = [];
-        if (fileId && this._slideshowDeleteSet.has(fileId)) marks.push('D');
-        if (fileId && this._slideshowConsolidateSet.has(fileId)) marks.push('C');
-        if (fileId && this._slideshowTagSet.has(fileId)) marks.push('T');
-        if (fileId && this._slideshowMoveSet.has(fileId)) marks.push('M');
+        if (fileId && this._slideshowDeleteSet.has(fileId)) marks.push({ label: 'D', cls: 'mark-delete' });
+        if (fileId && this._slideshowConsolidateSet.has(fileId)) marks.push({ label: 'C', cls: 'mark-consolidate' });
+        if (fileId && this._slideshowTagSet.has(fileId)) marks.push({ label: 'T', cls: 'mark-tag' });
+        if (fileId && this._slideshowMoveSet.has(fileId)) marks.push({ label: 'M', cls: 'mark-move' });
+        if (fileId && this._slideshowZipSet.has(fileId)) marks.push({ label: 'Z', cls: 'mark-zip' });
 
         if (marks.length > 0) {
-            badge.textContent = marks.join(' ');
-            // Colour by highest priority mark
-            if (marks.includes('D')) badge.classList.add('mark-delete');
-            else if (marks.includes('M')) badge.classList.add('mark-move');
-            else if (marks.includes('C')) badge.classList.add('mark-consolidate');
-            else badge.classList.add('mark-tag');
+            badge.innerHTML = marks.map(m =>
+                `<span class="mark-pip ${m.cls}">${m.label}</span>`
+            ).join('');
             badge.classList.remove('hidden');
         } else {
+            badge.innerHTML = '';
             badge.classList.add('hidden');
         }
 
@@ -818,7 +833,8 @@ const Detail = {
         const cc = this._slideshowConsolidateSet.size;
         const tc = this._slideshowTagSet.size;
         const mc = this._slideshowMoveSet.size;
-        if (dc === 0 && cc === 0 && tc === 0 && mc === 0) {
+        const zc = this._slideshowZipSet.size;
+        if (dc === 0 && cc === 0 && tc === 0 && mc === 0 && zc === 0) {
             triageEl.classList.add('hidden');
         } else {
             const parts = [];
@@ -826,8 +842,26 @@ const Detail = {
             if (mc > 0) parts.push(`${mc} to move`);
             if (cc > 0) parts.push(`${cc} to consolidate`);
             if (tc > 0) parts.push(`${tc} to tag`);
+            if (zc > 0) parts.push(`${zc} to download`);
             triageEl.textContent = parts.join(', ');
             triageEl.classList.remove('hidden');
+        }
+    },
+
+    _updatePreviewBadge() {
+        const m = this._previewModal;
+        const fileId = m._fileId;
+        const badge = m.markBadge;
+        const ops = fileId ? Triage.getMarks(fileId) : [];
+        if (ops.length > 0) {
+            const labels = { delete: 'D', consolidate: 'C', tag: 'T', move: 'M', zip: 'Z' };
+            badge.innerHTML = ops.map(o =>
+                `<span class="mark-pip mark-${o}">${labels[o] || o[0].toUpperCase()}</span>`
+            ).join('');
+            badge.classList.remove('hidden');
+        } else {
+            badge.innerHTML = '';
+            badge.classList.add('hidden');
         }
     },
 

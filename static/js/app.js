@@ -602,6 +602,22 @@ SlideshowTriage._consolidateOpen = (files, onDone) => {
     Consolidate.open({ files, onDone });
 };
 Detail.slideshowTriage = SlideshowTriage;
+Detail.onSlideshowZip = async (items) => {
+    const resp = await API.post('/api/batch/download', {
+        file_ids: items.map(i => i.id),
+        folder_ids: [],
+    });
+    if (resp.ok) {
+        const n = items.length;
+        Activity.started('zip-' + resp.data.jobId, {
+            label: 'Building ZIP: slideshow selection',
+            detail: `0/${resp.data.total} files`,
+            log: `ZIP build started: <b>${n} file${n !== 1 ? 's' : ''}</b>`,
+        });
+    } else {
+        Toast.error(resp.data?.detail || 'Download failed.');
+    }
+};
 Triage.init(
     (del, con, tag, mov) => SlideshowTriage.show(del, con, tag, mov),
     () => FileList.render(),

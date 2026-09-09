@@ -2961,13 +2961,10 @@ select.modal-input {
 
 .preview-modal-mark {
     position: absolute;
-    top: 0.75rem;
-    right: 0.75rem;
-    padding: 0.3rem 0.7rem;
-    border-radius: 3px;
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-semibold);
-    color: #fff;
+    top: 3.5rem;
+    right: 1.5rem;
+    display: flex;
+    gap: 0.25rem;
     pointer-events: none;
     z-index: 10;
 }
@@ -2976,20 +2973,32 @@ select.modal-input {
     display: none;
 }
 
-.preview-modal-mark.mark-delete {
-    background: var(--color-status-error);
+.mark-pip {
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: #fff;
 }
 
-.preview-modal-mark.mark-consolidate {
-    background: var(--color-primary);
+.mark-pip.mark-delete {
+    background: var(--color-status-error, #ef4444);
 }
 
-.preview-modal-mark.mark-tag {
-    background: var(--color-status-warning);
+.mark-pip.mark-consolidate {
+    background: var(--color-primary, #6366f1);
 }
 
-.preview-modal-mark.mark-move {
+.mark-pip.mark-tag {
+    background: var(--color-status-warning, #f59e0b);
+}
+
+.mark-pip.mark-move {
     background: var(--color-status-info, #3b82f6);
+}
+
+.mark-pip.mark-zip {
+    background: var(--color-text-muted, #6b7280);
 }
 
 .preview-modal-triage {
