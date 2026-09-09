@@ -11,6 +11,8 @@ const FIELD_OPTIONS = [
     { value: 'size', label: 'Size' },
     { value: 'date', label: 'Date' },
     { value: 'folder', label: 'Folder name' },
+    { value: 'path', label: 'Path' },
+    { value: 'location', label: 'Location' },
     { value: 'duplicates', label: 'Duplicates' },
     { value: 'files', label: 'File count' },
 ];
@@ -401,6 +403,38 @@ const Search = {
                 inp.focus();
                 break;
             }
+            case 'path': {
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.className = 'search-input';
+                inp.placeholder = 'e.g. photos/holiday';
+                inp.dataset.role = 'value';
+                container.appendChild(inp);
+                bind();
+                inp.focus();
+                break;
+            }
+            case 'location': {
+                const sel = document.createElement('select');
+                sel.className = 'search-select';
+                sel.dataset.role = 'value';
+                const blank = document.createElement('option');
+                blank.value = '';
+                blank.textContent = 'Select location...';
+                sel.appendChild(blank);
+                API.get('/api/locations').then(res => {
+                    if (!res.ok) return;
+                    for (const loc of res.data) {
+                        const o = document.createElement('option');
+                        o.value = loc.id.replace('loc-', '');
+                        o.textContent = loc.label;
+                        sel.appendChild(o);
+                    }
+                });
+                container.appendChild(sel);
+                bind();
+                break;
+            }
             case 'size': {
                 const min = document.createElement('input');
                 min.type = 'text';
@@ -485,6 +519,7 @@ const Search = {
             switch (field) {
                 case 'name':
                 case 'folder':
+                case 'path':
                 case 'description':
                 case 'tags': {
                     const valEl = inputs.querySelector('[data-role="value"]');
@@ -499,7 +534,8 @@ const Search = {
                     entry.to = (inputs.querySelector('[data-role="to"]')?.value || '').trim();
                     break;
                 }
-                case 'type': {
+                case 'type':
+                case 'location': {
                     const valEl = inputs.querySelector('[data-role="value"]');
                     entry.value = valEl ? valEl.value : '';
                     break;

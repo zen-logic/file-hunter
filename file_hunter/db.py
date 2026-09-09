@@ -172,6 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_files_location_folder ON files(location_id, folde
 CREATE INDEX IF NOT EXISTS idx_files_file_size ON files(file_size);
 CREATE INDEX IF NOT EXISTS idx_folders_location_parent ON folders(location_id, parent_id);
 CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);
+CREATE INDEX IF NOT EXISTS idx_folders_rel_path ON folders(rel_path);
 CREATE INDEX IF NOT EXISTS idx_consolidation_jobs_pending ON consolidation_jobs(source_location_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_files_location_hash ON files(location_id, hash_strong);

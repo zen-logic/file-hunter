@@ -947,6 +947,29 @@ def build_condition_sql(cond):
             params,
         )
 
+    elif field == "path":
+        if not value:
+            return None, []
+        v = value.strip("/")
+        e = _escape_like(v)
+        return (
+            "EXISTS (SELECT 1 FROM folders fld WHERE fld.id = f.folder_id "
+            "AND (fld.rel_path = ? COLLATE NOCASE "
+            "OR fld.rel_path LIKE ? ESCAPE '\\' COLLATE NOCASE "
+            "OR fld.rel_path LIKE ? ESCAPE '\\' COLLATE NOCASE "
+            "OR fld.rel_path LIKE ? ESCAPE '\\' COLLATE NOCASE))",
+            [v, f"%/{e}", f"{e}/%", f"%/{e}/%"],
+        )
+
+    elif field == "location":
+        if not value:
+            return None, []
+        try:
+            loc_id = int(value)
+        except (ValueError, TypeError):
+            return None, []
+        return "f.location_id = ?", [loc_id]
+
     elif field == "duplicates":
         frags = []
         params = []
@@ -1000,7 +1023,22 @@ async def _build_adv_folder_insert_data(
         field = cond["field"]
         op = cond["op"]
 
-        if field == "name":
+        if field == "location":
+            value = cond.get("value", "")
+            if not value:
+                continue
+            try:
+                loc_id = int(value)
+            except (ValueError, TypeError):
+                continue
+            has_folder_cond = True
+            if op == "exclude":
+                folder_where_parts.append("fld.location_id != ?")
+            else:
+                folder_where_parts.append("fld.location_id = ?")
+            folder_params.append(loc_id)
+
+        elif field == "name":
             value = cond.get("value", "")
             if not value:
                 continue

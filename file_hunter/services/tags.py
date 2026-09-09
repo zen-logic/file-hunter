@@ -146,6 +146,10 @@ def tag_filter_sql(names: list[str], file_col: str = "f.id"):
     """
     if not names:
         return None, []
+    if "*" in names:
+        return f"{file_col} IN (SELECT ft.file_id FROM file_tags ft)", []
+    if "!" in names:
+        return f"{file_col} NOT IN (SELECT ft.file_id FROM file_tags ft)", []
     placeholders = ",".join("?" for _ in names)
     fragment = (
         f"{file_col} IN ("
