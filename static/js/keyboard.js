@@ -194,7 +194,18 @@ const Keyboard = {
             return;
         }
 
-        // 8. Route to active panel handler
+        // 8. Detail panel — forward file list keys (nav, triage, preview)
+        if (this._activePanel === 'detail' && this._handlers['filelist']) {
+            const k = e.key;
+            if (k === 'ArrowDown' || k === 'ArrowUp' || k === ' ' ||
+                k === 'Home' || k === 'End' || k === 'PageDown' || k === 'PageUp' ||
+                'dctmz'.includes(k)) {
+                this._handlers['filelist'](e);
+                return;
+            }
+        }
+
+        // 9. Route to active panel handler
         if (this._activePanel && this._handlers[this._activePanel]) {
             this._handlers[this._activePanel](e);
         }
