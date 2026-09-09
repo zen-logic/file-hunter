@@ -1155,7 +1155,7 @@ const Detail = {
 
         const hexBtn = `<button class="btn btn-sm" id="detail-preview-hex">Preview as Hex</button>`;
         if (type === 'image') {
-            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"><div class="detail-dimensions" id="detail-img-dims"></div></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'video') {
             return `<div class="detail-preview">${zoom}<video src="${url}" controls></video></div><div class="detail-preview-btns">${hexBtn}</div>`;
@@ -1473,6 +1473,15 @@ const Detail = {
         const btn = document.getElementById('preview-zoom-btn');
         if (btn && detail.id) {
             btn.addEventListener('click', () => this._openPreviewModal(detail));
+        }
+        const dims = document.getElementById('detail-img-dims');
+        if (dims) {
+            const img = dims.parentElement.querySelector('img');
+            if (img) {
+                const show = () => { dims.textContent = `${img.naturalWidth} × ${img.naturalHeight}`; };
+                if (img.complete && img.naturalWidth) show();
+                else img.addEventListener('load', show);
+            }
         }
     },
 
