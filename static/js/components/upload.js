@@ -39,6 +39,7 @@ const Upload = {
         if (filePanel) {
             filePanel.addEventListener('dragover', (e) => {
                 e.preventDefault();
+                if (e.dataTransfer.types.includes('application/x-filehunter-move')) return;
                 const target = this._getTarget();
                 if (target && target.online !== false) {
                     e.dataTransfer.dropEffect = 'copy';
@@ -58,6 +59,8 @@ const Upload = {
             filePanel.addEventListener('drop', (e) => {
                 e.preventDefault();
                 filePanel.classList.remove('drop-active');
+                // Ignore internal file-move drags
+                if (e.dataTransfer.types.includes('application/x-filehunter-move')) return;
                 const target = this._getTarget();
                 if (!target || target.online === false) {
                     Toast.error('Select an online location or folder first.');

@@ -2,6 +2,7 @@ import API from '../api.js';
 import ConfirmModal from './confirm.js';
 import icons from '../icons.js';
 import Keyboard from '../keyboard.js';
+import Toast from './toast.js';
 
 function formatSize(bytes) {
     if (!bytes) return '';
@@ -982,6 +983,42 @@ const Tree = {
                 this.render();
             });
         }
+
+        // Drop target for file moves
+        item.addEventListener('dragover', (e) => {
+            if (!e.dataTransfer.types.includes('application/x-filehunter-move')) return;
+            if (node.online === false) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            item.classList.add('drop-target');
+        });
+        item.addEventListener('dragleave', () => {
+            item.classList.remove('drop-target');
+        });
+        item.addEventListener('drop', async (e) => {
+            item.classList.remove('drop-target');
+            if (!e.dataTransfer.types.includes('application/x-filehunter-move')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (node.online === false) return;
+
+            let payload;
+            try {
+                payload = JSON.parse(e.dataTransfer.getData('application/x-filehunter-move'));
+            } catch { return; }
+
+            const fileIds = payload.file_ids || [];
+            const folderIds = payload.folder_ids || [];
+            const count = fileIds.length + folderIds.length;
+            if (count === 0) return;
+
+            API.post('/api/batch/move', {
+                file_ids: fileIds,
+                folder_ids: folderIds,
+                destination_folder_id: node.id,
+            });
+            Toast.info(`Moving ${count} item${count !== 1 ? 's' : ''} to ${node.label}`);
+        });
 
         parent.appendChild(item);
 

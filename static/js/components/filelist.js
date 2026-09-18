@@ -77,6 +77,8 @@ const FileList = {
     _searchId: null,
     _ac: null,
     pendingFocusFile: null,
+    _viewMode: 'list',  // 'list' or 'gallery'
+    _viewToggleEl: null,
 
     init(onSelect, onFolderOpen, onDeselect, onMultiSelect) {
         this.el = document.getElementById('file-content');
@@ -86,6 +88,15 @@ const FileList = {
         this.onFolderOpen = onFolderOpen;
         this.onDeselect = onDeselect;
         this.onMultiSelect = onMultiSelect;
+
+        this._viewToggleEl = document.getElementById('file-view-toggle');
+        this._viewToggleEl.innerHTML = icons.grid;
+        this._viewToggleEl.addEventListener('click', () => {
+            this._viewMode = this._viewMode === 'list' ? 'gallery' : 'list';
+            this._viewToggleEl.innerHTML = this._viewMode === 'list' ? icons.grid : icons.list;
+            this._viewToggleEl.title = this._viewMode === 'list' ? 'Gallery view' : 'List view';
+            this.render();
+        });
 
         this.filterEl.addEventListener('input', () => {
             if (this._searchMode) return;  // search has its own filters
@@ -444,7 +455,9 @@ const FileList = {
     },
 
     _scrollSelectedIntoView() {
-        const el = this.el.querySelector('tr.selected:last-child') || this.el.querySelector('tr.selected');
+        const el = this.el.querySelector('tr.selected:last-child')
+            || this.el.querySelector('tr.selected')
+            || this.el.querySelector('.gallery-item.selected');
         if (!el) return;
 
         // The column header is sticky, so it overlays the top of the scroll
@@ -684,6 +697,7 @@ const FileList = {
             this.el.innerHTML = `<div class="panel-body" style="padding: 1rem; color: var(--color-text-placeholder);">${msg}</div>`;
             return;
         }
+        this.el.scrollTop = 0;
         this.render();
     },
 
@@ -860,6 +874,10 @@ const FileList = {
     },
 
     render() {
+        if (this._viewMode === 'gallery') {
+            this._renderGallery();
+            return;
+        }
         const items = this._getDisplayItems();
 
         const table = document.createElement('table');
@@ -1047,6 +1065,7 @@ const FileList = {
                 });
             }
 
+            this._makeDraggable(tr, file, idx);
             tbody.appendChild(tr);
         });
 
@@ -1061,6 +1080,133 @@ const FileList = {
         if (pagingBar) this.el.parentElement.appendChild(pagingBar);
 
         this._scrollSelectedIntoView();
+    },
+
+    _renderGallery() {
+        const items = this._getDisplayItems();
+        const grid = document.createElement('div');
+        grid.className = 'file-gallery';
+
+        items.forEach((file, idx) => {
+            const cell = document.createElement('div');
+            cell.className = 'gallery-item';
+            if (this._isSelected(file)) cell.classList.add('selected');
+            if (file.stale) cell.classList.add('stale');
+            if (file.pendingOp) cell.classList.add('pending-op');
+
+            if (file.type === 'folder') {
+                cell.classList.add('gallery-folder');
+                cell.innerHTML = icons.folder;
+                const label = document.createElement('div');
+                label.className = 'gallery-name';
+                label.textContent = file.name;
+                cell.appendChild(label);
+
+                cell.addEventListener('dblclick', () => {
+                    if (this.onFolderOpen) this.onFolderOpen(file);
+                });
+            } else if (file.typeHigh === 'image') {
+                const img = document.createElement('img');
+                const token = localStorage.getItem('fh-token');
+                let src = `/api/files/${file.id}/content`;
+                if (token) src += `?token=${encodeURIComponent(token)}`;
+                img.src = src;
+                img.alt = file.name;
+                img.loading = 'lazy';
+                cell.appendChild(img);
+
+                const label = document.createElement('div');
+                label.className = 'gallery-name';
+                label.textContent = file.name;
+                cell.appendChild(label);
+            } else {
+                // Non-image file: show icon + name
+                cell.classList.add('gallery-folder');
+                cell.innerHTML = fileIcon(file);
+                const label = document.createElement('div');
+                label.className = 'gallery-name';
+                label.textContent = file.name;
+                cell.appendChild(label);
+            }
+
+            // Triage badges
+            const marks = Triage.getMarks(file.id);
+            if (marks.length > 0) {
+                const badges = document.createElement('div');
+                badges.className = 'gallery-badges';
+                marks.forEach(op => {
+                    const badge = document.createElement('span');
+                    badge.className = `triage-mark triage-mark-${op}`;
+                    badge.textContent = op[0].toUpperCase();
+                    badges.appendChild(badge);
+                });
+                cell.appendChild(badges);
+            }
+
+            cell.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (e.ctrlKey || e.metaKey) {
+                    this._toggleItem(file, idx);
+                    this._fireSelectionChange();
+                    this.render();
+                } else if (e.shiftKey && this._anchorIdx !== null) {
+                    this.selectedItems.clear();
+                    this._selectRange(this._anchorIdx, idx);
+                    this._fireSelectionChange();
+                    this.render();
+                } else {
+                    this._selectOnly(file, idx);
+                    this.render();
+                    this._fireSelectionChange();
+                }
+            });
+
+            this._makeDraggable(cell, file, idx);
+            grid.appendChild(cell);
+        });
+
+        this.el.innerHTML = '';
+        this.el.appendChild(grid);
+
+        const existing = this.el.parentElement.querySelector('.paging-bar');
+        if (existing) existing.remove();
+        const pagingBar = this._renderPagingBar();
+        if (pagingBar) this.el.parentElement.appendChild(pagingBar);
+
+        this._scrollSelectedIntoView();
+    },
+
+    _makeDraggable(el, file, idx) {
+        el.draggable = true;
+        el.addEventListener('dragstart', (e) => {
+            // If the dragged item isn't selected, select it first
+            if (!this._isSelected(file)) {
+                this._selectOnly(file, idx);
+                this._fireSelectionChange();
+            }
+            const ids = [];
+            const folderIds = [];
+            for (const item of this.selectedItems.values()) {
+                if (item.type === 'folder') {
+                    const numId = String(item.id).replace(/^fld-/, '');
+                    folderIds.push(parseInt(numId, 10));
+                } else {
+                    ids.push(item.id);
+                }
+            }
+            const payload = JSON.stringify({ file_ids: ids, folder_ids: folderIds });
+            e.dataTransfer.setData('application/x-filehunter-move', payload);
+            e.dataTransfer.effectAllowed = 'move';
+
+            const count = ids.length + folderIds.length;
+            const label = `${count} file${count !== 1 ? 's' : ''}`;
+            const ghost = document.createElement('div');
+            ghost.textContent = label;
+            ghost.style.cssText = 'position:absolute;top:-999px;padding:4px 8px;background:var(--color-surface);border:1px solid var(--color-primary);border-radius:4px;font-size:12px;color:var(--color-text);';
+            document.body.appendChild(ghost);
+            e.dataTransfer.setDragImage(ghost, 0, 0);
+            requestAnimationFrame(() => ghost.remove());
+        });
     },
 
     setFolderFavourite(nodeId, favourite) {

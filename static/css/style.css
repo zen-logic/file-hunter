@@ -304,6 +304,27 @@ body::after {
     margin-left: auto;
 }
 
+.panel-header .btn-icon {
+    width: auto;
+    height: auto;
+    padding: 0.2rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.panel-header .btn-icon:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-hover);
+}
+
+.panel-header .btn-icon svg {
+    width: 0.85rem;
+    height: 0.85rem;
+}
+
 .btn-icon svg {
     width: 1rem;
     height: 1rem;
@@ -452,6 +473,12 @@ body::after {
 
 .tree-item.selected {
     background: var(--color-selected);
+}
+
+.tree-item.drop-target {
+    background: var(--color-selected);
+    outline: 1px solid var(--color-primary);
+    outline-offset: -1px;
 }
 
 .tree-item.offline {
@@ -870,6 +897,95 @@ body::after {
     background: var(--color-pending-bg);
     color: var(--color-pending-text);
     margin-left: 0.35rem;
+}
+
+/* ── Gallery view ── */
+
+.file-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 0.5rem;
+    padding: 0.5rem;
+}
+
+.gallery-item {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    background: var(--color-surface);
+}
+
+.gallery-item:hover {
+    border-color: var(--color-primary);
+}
+
+.gallery-item.selected {
+    border-color: var(--color-primary);
+    box-shadow: var(--glow-primary);
+}
+
+.gallery-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.gallery-item .gallery-name {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 0.25rem 0.4rem;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    font-size: var(--font-size-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gallery-item .gallery-badges {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    display: flex;
+    gap: 0.15rem;
+}
+
+.gallery-item.stale {
+    opacity: var(--opacity-stale);
+}
+
+.gallery-item.pending-op {
+    opacity: var(--opacity-pending);
+}
+
+/* Folder items in gallery */
+.gallery-item.gallery-folder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: var(--color-surface);
+}
+
+.gallery-item.gallery-folder svg {
+    width: 3rem;
+    height: 3rem;
+    color: var(--color-text-secondary);
+}
+
+.gallery-item.gallery-folder .gallery-name {
+    position: static;
+    background: none;
+    color: var(--color-text);
+    text-align: center;
+    padding: 0 0.4rem;
 }
 
 /* ── Triage bar and badges ── */

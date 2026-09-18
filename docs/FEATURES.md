@@ -32,6 +32,10 @@ Interactive visualisation of disk usage for any location or folder. Drill into s
 
 Images, video, audio, PDFs, CSV tables, text files, and a hex viewer all render inline in the detail panel. Full-screen zoom on any preview. Image dimensions shown below the preview.
 
+## Gallery view
+
+Toggle between list and gallery views in the file panel. Gallery shows image thumbnails in a responsive grid. Folders and non-image files display as icons. Selection, triage marks, and keyboard navigation work in both views.
+
 ## Slideshow and playlist
 
 Full-screen slideshow for images with crossfade transitions, auto-advance, and configurable speed. Full-screen playlist for video with auto-advance on completion. Launch from any folder, location, search result, or a selected image. Click an image to close and navigate to it.
