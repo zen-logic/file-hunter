@@ -1129,11 +1129,22 @@ const FileList = {
                 cell.appendChild(label);
             }
 
-            // Triage badges
+            // Badges (dups + triage)
             const marks = Triage.getMarks(file.id);
-            if (marks.length > 0) {
+            const hasDups = file.type !== 'folder' && file.dups > 0 && file.size > 0;
+            if (hasDups || marks.length > 0) {
                 const badges = document.createElement('div');
                 badges.className = 'gallery-badges';
+                if (hasDups) {
+                    const dup = document.createElement('span');
+                    dup.className = 'dup-indicator';
+                    dup.textContent = `${file.dups} dup${file.dups > 1 ? 's' : ''}`;
+                    dup.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.showDuplicateGroup(file.hashStrong || file.hashFast, file.id);
+                    });
+                    badges.appendChild(dup);
+                }
                 marks.forEach(op => {
                     const badge = document.createElement('span');
                     badge.className = `triage-mark triage-mark-${op}`;
