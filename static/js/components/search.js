@@ -152,6 +152,7 @@ const Search = {
             files: document.getElementById('search-files').checked,
             folders: document.getElementById('search-folders').checked,
             dupes: document.getElementById('search-dupes').checked,
+            semantic: document.getElementById('search-semantic').value.trim(),
         };
         if (document.getElementById('search-scope-check').checked && this.scopeNode) {
             values.scopeType = this.scopeNode.type;
@@ -165,7 +166,8 @@ const Search = {
         const v = this._getValues();
         return v.name || v.type || v.description || v.tags ||
                v.sizeMin || v.sizeMax || v.minDups || v.maxDups ||
-               v.minFiles || v.maxFiles || v.dateFrom || v.dateTo || v.dupes || v.folders;
+               v.minFiles || v.maxFiles || v.dateFrom || v.dateTo || v.dupes || v.folders ||
+               v.semantic;
     },
 
     _updateSearchBtn() {
@@ -741,6 +743,7 @@ const Search = {
                 document.getElementById('search-files-row').classList.remove('hidden');
             }
             if (params.dupes) document.getElementById('search-dupes').checked = true;
+            if (params.semantic) document.getElementById('search-semantic').value = params.semantic;
         }
 
         // Restore scope — reveal the node in the tree without triggering onSelect

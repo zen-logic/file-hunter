@@ -47,18 +47,28 @@ def ensure_chromadb() -> bool:
     return True
 
 
-def get_collection():
-    """Get or create the similarity ChromaDB collection."""
+def _get_client():
     global _chroma_client
     if not ensure_chromadb():
         raise RuntimeError("chromadb is not available and could not be installed")
     import chromadb
-
     os.makedirs(SIMILARITY_DB_DIR, exist_ok=True)
     if _chroma_client is None:
         _chroma_client = chromadb.PersistentClient(path=SIMILARITY_DB_DIR)
-    return _chroma_client.get_or_create_collection(
+    return _chroma_client
+
+
+def get_collection():
+    """Get or create the image embeddings collection."""
+    return _get_client().get_or_create_collection(
         name="image_embeddings", metadata={"hnsw:space": "cosine"}
+    )
+
+
+def get_document_collection():
+    """Get or create the document chunk embeddings collection."""
+    return _get_client().get_or_create_collection(
+        name="document_embeddings", metadata={"hnsw:space": "cosine"}
     )
 
 
@@ -178,8 +188,30 @@ async def embed_text_query(embed_url: str, query: str) -> list[float] | None:
     return combined.tolist()
 
 
+async def fetch_document_embeddings(
+    embed_url: str, file_bytes: bytes, filename: str,
+) -> list[dict] | None:
+    """Send document bytes to the embedding service, return chunks with embeddings."""
+    url = f"{embed_url.rstrip('/')}/api/embed/document"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                url, content=file_bytes,
+                headers={"X-Filename": filename},
+            )
+        if resp.status_code != 200:
+            detail = resp.text[:200] if resp.text else ""
+            logger.warning("Document embedding returned %d: %s", resp.status_code, detail)
+            return None
+        data = resp.json()
+        return data.get("chunks")
+    except Exception as e:
+        logger.warning("Document embedding error: %s", e)
+        return None
+
+
 async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
-    """Walk catalogued images and index their embeddings."""
+    """Walk catalogued images and documents and index their embeddings."""
     from file_hunter.db import read_db
     from file_hunter.services.content_proxy import fetch_agent_bytes
     from file_hunter.ws.scan import broadcast
@@ -197,45 +229,51 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
         "location": f"Similarity: {location_name}",
     })
 
-    # Find all image files in the catalogue for this scope
+    _EMBEDDABLE_TYPES = ("image", "document", "text")
+
+    # Find all embeddable files in the catalogue for this scope
+    type_placeholders = ",".join("?" for _ in _EMBEDDABLE_TYPES)
+    type_params = list(_EMBEDDABLE_TYPES)
+
     async with read_db() as db:
         if recursive:
-            # All images under this location, optionally under a subfolder
             if scan_path == root_path:
                 rows = await db.execute_fetchall(
-                    "SELECT id, full_path, location_id FROM files "
-                    "WHERE location_id = ? AND file_type_high = 'image' AND stale = 0",
-                    (location_id,),
+                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0",
+                    [location_id] + type_params,
                 )
             else:
-                # Subfolder: match on full_path prefix
                 prefix = scan_path.rstrip("/") + "/"
                 rows = await db.execute_fetchall(
-                    "SELECT id, full_path, location_id FROM files "
-                    "WHERE location_id = ? AND file_type_high = 'image' AND stale = 0 "
-                    "AND (full_path = ? OR full_path LIKE ?)",
-                    (location_id, scan_path, prefix + "%"),
+                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0 "
+                    f"AND (full_path = ? OR full_path LIKE ?)",
+                    [location_id] + type_params + [scan_path, prefix + "%"],
                 )
         else:
-            # Non-recursive: only files directly in this folder
             folder_id = params.get("folder_id")
             if folder_id:
                 rows = await db.execute_fetchall(
-                    "SELECT id, full_path, location_id FROM files "
-                    "WHERE folder_id = ? AND file_type_high = 'image' AND stale = 0",
-                    (folder_id,),
+                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"WHERE folder_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0",
+                    [folder_id] + type_params,
                 )
             else:
-                # Location root, no subfolder
                 rows = await db.execute_fetchall(
-                    "SELECT id, full_path, location_id FROM files "
-                    "WHERE location_id = ? AND folder_id IS NULL "
-                    "AND file_type_high = 'image' AND stale = 0",
-                    (location_id,),
+                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"WHERE location_id = ? AND folder_id IS NULL "
+                    f"AND file_type_high IN ({type_placeholders}) AND stale = 0",
+                    [location_id] + type_params,
                 )
 
+    image_rows = [r for r in rows if r["file_type_high"] == "image"]
+    doc_rows = [r for r in rows if r["file_type_high"] in ("document", "text")]
     total = len(rows)
-    logger.info("Similarity scan: %d images in %s", total, location_name)
+    logger.info(
+        "Similarity scan: %d files (%d images, %d documents) in %s",
+        total, len(image_rows), len(doc_rows), location_name,
+    )
 
     if total == 0:
         await broadcast({
@@ -246,49 +284,63 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
         })
         return
 
-    collection = get_collection()
+    img_collection = get_collection()
+    doc_collection = get_document_collection()
 
     # Check which files are already indexed
-    file_ids = [str(r["id"]) for r in rows]
-    existing = set()
-    # ChromaDB get() in batches
-    for i in range(0, len(file_ids), 500):
-        batch = file_ids[i : i + 500]
+    def _get_existing(collection, file_ids):
+        existing = set()
+        for i in range(0, len(file_ids), 500):
+            batch = file_ids[i : i + 500]
+            try:
+                result = collection.get(ids=batch)
+                existing.update(result["ids"])
+            except Exception:
+                pass
+        return existing
+
+    img_ids = [str(r["id"]) for r in image_rows]
+    img_existing = _get_existing(img_collection, img_ids) if img_ids else set()
+    # For documents, chunk IDs are "fileId_chunkN" — check by file ID prefix
+    doc_ids = [str(r["id"]) for r in doc_rows]
+    doc_existing = set()
+    for fid in doc_ids:
         try:
-            result = collection.get(ids=batch)
-            existing.update(result["ids"])
+            result = doc_collection.get(where={"file_id": int(fid)}, limit=1)
+            if result["ids"]:
+                doc_existing.add(fid)
         except Exception:
             pass
 
-    to_process = [r for r in rows if str(r["id"]) not in existing]
-    skipped = total - len(to_process)
+    images_to_process = [r for r in image_rows if str(r["id"]) not in img_existing]
+    docs_to_process = [r for r in doc_rows if str(r["id"]) not in doc_existing]
+    to_process_count = len(images_to_process) + len(docs_to_process)
+    skipped = total - to_process_count
     if skipped:
-        logger.info("Similarity scan: %d already indexed, %d to process", skipped, len(to_process))
+        logger.info("Similarity scan: %d already indexed, %d to process", skipped, to_process_count)
 
     done = 0
     errors = 0
 
-    for row in to_process:
+    # Process images
+    for row in images_to_process:
         file_id = row["id"]
         full_path = row["full_path"]
 
-        # Fetch image bytes from agent
-        image_bytes = await fetch_agent_bytes(full_path, row["location_id"])
-        if image_bytes is None:
+        file_bytes = await fetch_agent_bytes(full_path, row["location_id"])
+        if file_bytes is None:
             errors += 1
             done += 1
             continue
 
-        # Get embedding
-        embedding = await fetch_embedding(embed_url, image_bytes)
+        embedding = await fetch_embedding(embed_url, file_bytes)
         if embedding is None:
             errors += 1
             done += 1
             continue
 
-        # Store in ChromaDB
         try:
-            collection.upsert(
+            img_collection.upsert(
                 ids=[str(file_id)],
                 embeddings=[embedding],
                 documents=[full_path],
@@ -299,7 +351,59 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             errors += 1
 
         done += 1
-        if done % 10 == 0 or done == len(to_process):
+        if done % 10 == 0 or done == to_process_count:
+            await broadcast({
+                "type": "scan_progress",
+                "locationId": location_id,
+                "location": f"Similarity: {location_name}",
+                "phase": "cataloging",
+                "catalogDone": done + skipped,
+                "catalogTotal": total,
+            })
+
+    # Process documents
+    for row in docs_to_process:
+        file_id = row["id"]
+        full_path = row["full_path"]
+        filename = row["filename"]
+
+        file_bytes = await fetch_agent_bytes(full_path, row["location_id"])
+        if file_bytes is None:
+            errors += 1
+            done += 1
+            continue
+
+        chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
+        if chunks is None or len(chunks) == 0:
+            errors += 1
+            done += 1
+            continue
+
+        try:
+            chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
+            embeddings = [c["embedding"] for c in chunks]
+            documents = [c["text"] for c in chunks]
+            metadatas = [
+                {
+                    "file_id": file_id,
+                    "location_id": location_id,
+                    "chunk_index": i,
+                    "meta": c.get("meta", ""),
+                }
+                for i, c in enumerate(chunks)
+            ]
+            doc_collection.upsert(
+                ids=chunk_ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas,
+            )
+        except Exception as e:
+            logger.warning("ChromaDB upsert failed for document %d: %s", file_id, e)
+            errors += 1
+
+        done += 1
+        if done % 10 == 0 or done == to_process_count:
             await broadcast({
                 "type": "scan_progress",
                 "locationId": location_id,

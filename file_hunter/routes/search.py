@@ -55,6 +55,50 @@ async def search(request: Request):
             _act_unreg(act_name)
 
 
+async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: float = 0.3) -> list[int] | None:
+    """Query document embeddings and return matching file IDs, or None if unavailable."""
+    import httpx
+    try:
+        from file_hunter.services.similarity import is_chromadb_available, get_document_collection
+        if not is_chromadb_available():
+            return None
+        doc_coll = get_document_collection()
+        doc_count = doc_coll.count()
+        if doc_count == 0:
+            return None
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{embed_url.rstrip('/')}/api/embed/search",
+                json={"query": semantic_query},
+            )
+        if resp.status_code != 200:
+            return None
+        query_emb = resp.json().get("embedding")
+        if not query_emb:
+            return None
+
+        results = doc_coll.query(
+            query_embeddings=[query_emb],
+            n_results=min(200, doc_count),
+            include=["distances", "metadatas"],
+        )
+        max_distance = 1.0 - threshold
+        seen = set()
+        file_ids = []
+        for i, chunk_id in enumerate(results["ids"][0]):
+            distance = results["distances"][0][i]
+            if distance <= max_distance:
+                fid = results["metadatas"][0][i].get("file_id")
+                if fid and fid not in seen:
+                    seen.add(fid)
+                    file_ids.append(fid)
+        return file_ids if file_ids else None
+    except Exception as e:
+        logger.warning("Semantic search failed: %s", e)
+        return None
+
+
 async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focus_file_id=None):
     # Fast path: hash-only search (dup badge click)
     hash_val = request.query_params.get("hash")
@@ -125,6 +169,41 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
                 search_id=request.query_params.get("searchId"),
                 focus_file_id=focus_file_id,
             )
+    # Semantic search — merge document matches into results
+    semantic = request.query_params.get("semantic", "").strip()
+    if semantic and page == 0:
+        from file_hunter.services import settings as settings_svc
+        async with read_db() as db:
+            enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
+            embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
+        if enabled == "1" and embed_url:
+            sem_ids = await _semantic_file_ids(semantic, embed_url)
+            if sem_ids:
+                existing_ids = {item["id"] for item in results.get("items", [])}
+                new_ids = [fid for fid in sem_ids if fid not in existing_ids]
+                if new_ids:
+                    placeholders = ",".join("?" for _ in new_ids)
+                    async with read_db() as db:
+                        sem_rows = await db.execute_fetchall(
+                            f"""SELECT id, filename AS name, file_type_high AS typeHigh,
+                                       file_type_low AS typeLow, file_size AS size,
+                                       modified_date AS date, dup_count AS dups,
+                                       stale, location_id AS locationId,
+                                       full_path, hidden
+                                FROM files WHERE id IN ({placeholders}) AND stale = 0""",
+                            new_ids,
+                        )
+                    sem_map = {r["id"]: dict(r) for r in sem_rows}
+                    for fid in new_ids:
+                        if fid in sem_map:
+                            item = sem_map[fid]
+                            item["type"] = "file"
+                            item["semanticMatch"] = True
+                            results["items"].append(item)
+                    results["total"] = results.get("total", 0) + len(
+                        [fid for fid in new_ids if fid in sem_map]
+                    )
+
     return json_ok(results)
 
 

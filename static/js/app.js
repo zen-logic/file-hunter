@@ -1261,6 +1261,7 @@ Search.init({
             if (values.folders) params.set('folders', 'true');
             if (values.dupes) params.set('dupes', '1');
         }
+        if (values.semantic) params.set('semantic', values.semantic);
         if (values.scopeType && values.scopeId) {
             params.set('scopeType', values.scopeType);
             params.set('scopeId', values.scopeId);
@@ -1308,6 +1309,7 @@ let _similarityUrl = '';
 function updateSimilarityButton(settings) {
     const available = settings.similaritySearchEnabled === '1' && !!settings.similaritySearchUrl;
     similarityBtn.classList.toggle('hidden', !available);
+    document.getElementById('search-semantic-row').classList.toggle('hidden', !available);
     _similarityUrl = settings.similaritySearchUrl || '';
     if (!available && similarityVisible) {
         similarityVisible = false;
@@ -1344,11 +1346,21 @@ similarityBtn.addEventListener('click', () => {
     similarityPanel.classList.toggle('hidden', !similarityVisible);
     similarityBtn.classList.toggle('btn-active', similarityVisible);
     if (similarityVisible) {
-        // Close regular search if open
         Search.close();
         document.getElementById('similarity-text').focus();
     }
 });
+
+// Close similarity panel when regular search opens
+const _origSearchToggle = Search.toggle.bind(Search);
+Search.toggle = function() {
+    if (!Search.visible) {
+        similarityVisible = false;
+        similarityPanel.classList.add('hidden');
+        similarityBtn.classList.remove('btn-active');
+    }
+    _origSearchToggle();
+};
 
 similaritySlider.addEventListener('input', () => {
     similarityThreshold.value = similaritySlider.value;
