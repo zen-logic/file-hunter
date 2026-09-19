@@ -50,6 +50,7 @@ from file_hunter.routes.files import (
     folder_dup_exclude,
     dup_exclude_progress,
     file_transcode,
+    file_embed,
 )
 from file_hunter.routes.search import (
     search,
@@ -324,6 +325,7 @@ app = Starlette(
             "/api/files/{id:int}/cancel-pending", file_cancel_pending, methods=["POST"]
         ),
         Route("/api/files/{id:int}/transcode", file_transcode, methods=["POST"]),
+        Route("/api/files/{id:int}/embed", file_embed, methods=["POST"]),
         Route("/api/files/{id:int}", file_delete, methods=["DELETE"]),
         Route("/api/folders", create_new_folder, methods=["POST"]),
         Route("/api/folders/{id:int}/download", folder_download, methods=["POST"]),

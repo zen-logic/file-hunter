@@ -919,7 +919,10 @@ const Detail = {
         const transcodeLabel = detail.transcodeStatus === 'converting' ? 'Converting…' : detail.transcodeStatus === 'queued' ? 'Queued' : 'Transcode';
         const transcodeDisabled = detail.transcodeStatus ? ' disabled' : '';
         const transcodeBtn = detail.canTranscode && detail.online && !hasPendingOp ? `<button class="btn btn-sm" id="detail-transcode" style="margin-top:0.4rem"${transcodeDisabled}>${transcodeLabel}</button>` : '';
-        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}<span id="detail-file-slideshow-slot"></span>${ignoreFileBtn}${deleteFileBtn}</div>` : '';
+        const embeddableTypes = ['document', 'text'];
+        const embedBtn = this.similarityEnabled && detail.id && detail.online && !detail.stale && !hasPendingOp && embeddableTypes.includes((detail.typeHigh || '').toLowerCase())
+            ? `<button class="btn btn-sm" id="detail-embed" style="margin-top:0.4rem">Embed</button>` : '';
+        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn || embedBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}${embedBtn}<span id="detail-file-slideshow-slot"></span>${ignoreFileBtn}${deleteFileBtn}</div>` : '';
 
         let html = `
             <div class="detail-section">

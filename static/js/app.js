@@ -78,6 +78,7 @@ async function refreshDetailPanel() {
             wireMoveFileBtn();
             wireIgnoreFileBtn();
             wireTranscodeBtn();
+            wireEmbedBtn();
             wireFileSlideshowBtn(selectedFile);
         }
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
@@ -275,6 +276,25 @@ function wireTranscodeBtn() {
                 btn.disabled = false;
                 btn.textContent = 'Transcode';
                 Toast.error(res.data?.detail || 'Transcode failed to start.');
+            }
+        });
+    }
+}
+
+function wireEmbedBtn() {
+    const btn = document.getElementById('detail-embed');
+    if (btn && selectedFile) {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            btn.textContent = 'Embedding…';
+            const res = await API.post(`/api/files/${selectedFile.id}/embed`);
+            if (res.ok) {
+                btn.textContent = 'Embedded';
+                Toast.info(`Embedded: ${res.data.chunks || 0} chunks`);
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Embed';
+                Toast.error(res.error || 'Embedding failed.');
             }
         });
     }
@@ -515,6 +535,7 @@ function startApp(user) {
             wireMoveFileBtn();
             wireIgnoreFileBtn();
             wireTranscodeBtn();
+            wireEmbedBtn();
             if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
         },
     });
@@ -959,6 +980,11 @@ Tree.init(async (node) => {
     Upload.updateState(node);
     Search.setScopeContext(node);
     Search.close();
+    if (similarityVisible) {
+        similarityVisible = false;
+        similarityPanel.classList.add('hidden');
+        similarityBtn.classList.remove('btn-active');
+    }
     const detailPromise = node.type === 'location'
         ? Detail.renderLocation(node)
         : Detail.renderFolder(node);
@@ -1041,6 +1067,7 @@ FileList.init(async (file) => {
         wireMoveFileBtn();
         wireIgnoreFileBtn();
         wireTranscodeBtn();
+        wireEmbedBtn();
         wireFileSlideshowBtn(file);
     }
     if (result) {
@@ -1201,6 +1228,7 @@ Detail.init({
         wireMoveFileBtn();
         wireIgnoreFileBtn();
         wireTranscodeBtn();
+        wireEmbedBtn();
         if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
     },
 });
@@ -1261,7 +1289,10 @@ Search.init({
             if (values.folders) params.set('folders', 'true');
             if (values.dupes) params.set('dupes', '1');
         }
-        if (values.semantic) params.set('semantic', values.semantic);
+        if (values.semantic) {
+            params.set('semantic', values.semantic);
+            params.set('semanticThreshold', values.semanticThreshold);
+        }
         if (values.scopeType && values.scopeId) {
             params.set('scopeType', values.scopeType);
             params.set('scopeId', values.scopeId);
@@ -1311,6 +1342,7 @@ function updateSimilarityButton(settings) {
     similarityBtn.classList.toggle('hidden', !available);
     document.getElementById('search-semantic-row').classList.toggle('hidden', !available);
     _similarityUrl = settings.similaritySearchUrl || '';
+    Detail.similarityEnabled = available;
     if (!available && similarityVisible) {
         similarityVisible = false;
         similarityPanel.classList.add('hidden');

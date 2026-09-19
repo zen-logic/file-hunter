@@ -77,6 +77,12 @@ const Search = {
             document.getElementById('search-files-row').classList.toggle('hidden', !e.target.checked);
         });
 
+        // Semantic threshold slider sync
+        const semSlider = document.getElementById('search-semantic-slider');
+        const semThreshold = document.getElementById('search-semantic-threshold');
+        semSlider.addEventListener('input', () => { semThreshold.value = semSlider.value; });
+        semThreshold.addEventListener('input', () => { semSlider.value = semThreshold.value; });
+
         this._updateSearchBtn();
         this._initAdvanced();
         this._initSavedSearches();
@@ -153,6 +159,7 @@ const Search = {
             folders: document.getElementById('search-folders').checked,
             dupes: document.getElementById('search-dupes').checked,
             semantic: document.getElementById('search-semantic').value.trim(),
+            semanticThreshold: document.getElementById('search-semantic-threshold').value,
         };
         if (document.getElementById('search-scope-check').checked && this.scopeNode) {
             values.scopeType = this.scopeNode.type;
@@ -744,6 +751,10 @@ const Search = {
             }
             if (params.dupes) document.getElementById('search-dupes').checked = true;
             if (params.semantic) document.getElementById('search-semantic').value = params.semantic;
+            if (params.semanticThreshold) {
+                document.getElementById('search-semantic-threshold').value = params.semanticThreshold;
+                document.getElementById('search-semantic-slider').value = params.semanticThreshold;
+            }
         }
 
         // Restore scope — reveal the node in the tree without triggering onSelect

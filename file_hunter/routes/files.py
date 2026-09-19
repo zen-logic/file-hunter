@@ -1008,3 +1008,66 @@ async def file_transcode(request: Request):
         "quality": quality,
     })
     return json_ok({"started": True, "op_id": op_id})
+
+
+async def file_embed(request: Request):
+    """POST /api/files/{id}/embed — embed a single document/text file."""
+    from file_hunter.services.similarity import (
+        is_chromadb_available,
+        get_document_collection,
+        fetch_document_embeddings,
+    )
+    from file_hunter.services.content_proxy import fetch_agent_bytes
+    from file_hunter.services import settings as settings_svc
+
+    if not is_chromadb_available():
+        return json_error("Similarity search is not available.", 400)
+
+    file_id = int(request.path_params["id"])
+
+    async with read_db() as db:
+        embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
+        if not embed_url:
+            return json_error("Embedding service URL not configured.", 400)
+
+        row = await db.execute_fetchall(
+            "SELECT filename, full_path, location_id, file_type_high FROM files WHERE id = ?",
+            (file_id,),
+        )
+    if not row:
+        return json_error("File not found.", 404)
+
+    f = row[0]
+    type_high = (f["file_type_high"] or "").lower()
+    if type_high not in ("document", "text"):
+        return json_error("File type not supported for embedding.", 400)
+
+    file_bytes = await fetch_agent_bytes(f["full_path"], f["location_id"])
+    if file_bytes is None:
+        return json_error("File not available (agent offline).", 404)
+
+    chunks = await fetch_document_embeddings(embed_url, file_bytes, f["filename"])
+    if chunks is None or len(chunks) == 0:
+        return json_error("No content could be extracted.", 400)
+
+    collection = get_document_collection()
+    chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
+    embeddings = [c["embedding"] for c in chunks]
+    documents = [c["text"] for c in chunks]
+    metadatas = [
+        {
+            "file_id": file_id,
+            "location_id": f["location_id"],
+            "chunk_index": i,
+            "meta": c.get("meta", ""),
+        }
+        for i, c in enumerate(chunks)
+    ]
+    collection.upsert(
+        ids=chunk_ids,
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=metadatas,
+    )
+
+    return json_ok({"chunks": len(chunks)})

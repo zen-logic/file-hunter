@@ -56,10 +56,15 @@ async def search(request: Request):
 
 
 async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: float = 0.3) -> list[int] | None:
-    """Query document embeddings and return matching file IDs, or None if unavailable."""
+    """Query document embeddings and return matching file IDs, or None if unavailable.
+    Supports composite syntax: (legal action) + invoices - complaints
+    """
     import httpx
+    import numpy as np
     try:
-        from file_hunter.services.similarity import is_chromadb_available, get_document_collection
+        from file_hunter.services.similarity import (
+            is_chromadb_available, get_document_collection, parse_composite_query,
+        )
         if not is_chromadb_available():
             return None
         doc_coll = get_document_collection()
@@ -67,14 +72,33 @@ async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: flo
         if doc_count == 0:
             return None
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{embed_url.rstrip('/')}/api/embed/search",
-                json={"query": semantic_query},
-            )
-        if resp.status_code != 200:
-            return None
-        query_emb = resp.json().get("embedding")
+        search_url = f"{embed_url.rstrip('/')}/api/embed/search"
+        composite = parse_composite_query(semantic_query)
+
+        if composite:
+            # Embed each term, combine with arithmetic
+            combined = None
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                for sign, weight, phrase in composite:
+                    resp = await client.post(search_url, json={"query": phrase})
+                    if resp.status_code != 200:
+                        continue
+                    emb = np.array(resp.json().get("embedding"), dtype=np.float32)
+                    weighted = emb * sign * weight
+                    combined = weighted if combined is None else combined + weighted
+            if combined is None:
+                return None
+            norm = np.linalg.norm(combined)
+            if norm > 0:
+                combined = combined / norm
+            query_emb = combined.tolist()
+        else:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(search_url, json={"query": semantic_query})
+            if resp.status_code != 200:
+                return None
+            query_emb = resp.json().get("embedding")
+
         if not query_emb:
             return None
 
@@ -177,7 +201,8 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
             enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
             embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
         if enabled == "1" and embed_url:
-            sem_ids = await _semantic_file_ids(semantic, embed_url)
+            sem_threshold = float(request.query_params.get("semanticThreshold", "0.3"))
+            sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold)
             if sem_ids:
                 existing_ids = {item["id"] for item in results.get("items", [])}
                 new_ids = [fid for fid in sem_ids if fid not in existing_ids]
