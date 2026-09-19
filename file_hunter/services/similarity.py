@@ -72,7 +72,7 @@ def get_document_collection():
     )
 
 
-async def fetch_embedding(embed_url: str, image_bytes: bytes) -> list[float] | None:
+async def fetch_embedding(embed_url: str, image_bytes: bytes, path: str = "") -> list[float] | None:
     """Send image bytes to the embedding service, return the vector."""
     url = f"{embed_url.rstrip('/')}/api/embed/image"
     try:
@@ -84,12 +84,12 @@ async def fetch_embedding(embed_url: str, image_bytes: bytes) -> list[float] | N
             )
         if resp.status_code != 200:
             detail = resp.text[:200] if resp.text else ""
-            logger.warning("Embedding service returned %d: %s", resp.status_code, detail)
+            logger.warning("Embedding service returned %d for %s: %s", resp.status_code, path, detail)
             return None
         data = resp.json()
         return data.get("embedding")
     except Exception as e:
-        logger.warning("Embedding service error: %s", e)
+        logger.warning("Embedding service error for %s: %s", path, e)
         return None
 
 
@@ -399,7 +399,7 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             done += 1
             continue
 
-        embedding = await fetch_embedding(embed_url, file_bytes)
+        embedding = await fetch_embedding(embed_url, file_bytes, full_path)
         if embedding is None:
             errors += 1
             done += 1
