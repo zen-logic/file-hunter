@@ -296,6 +296,7 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     })
 
     _EMBEDDABLE_TYPES = ("image", "document", "text")
+    _EMBEDDABLE_IMAGE_SUBTYPES = {"jpg", "png", "gif", "bmp", "webp", "tiff"}
 
     # Find all embeddable files in the catalogue for this scope
     type_placeholders = ",".join("?" for _ in _EMBEDDABLE_TYPES)
@@ -305,14 +306,14 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
         if recursive:
             if scan_path == root_path:
                 rows = await db.execute_fetchall(
-                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low FROM files "
                     f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0",
                     [location_id] + type_params,
                 )
             else:
                 prefix = scan_path.rstrip("/") + "/"
                 rows = await db.execute_fetchall(
-                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low FROM files "
                     f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0 "
                     f"AND (full_path = ? OR full_path LIKE ?)",
                     [location_id] + type_params + [scan_path, prefix + "%"],
@@ -321,19 +322,20 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             folder_id = params.get("folder_id")
             if folder_id:
                 rows = await db.execute_fetchall(
-                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low FROM files "
                     f"WHERE folder_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0",
                     [folder_id] + type_params,
                 )
             else:
                 rows = await db.execute_fetchall(
-                    f"SELECT id, full_path, filename, location_id, file_type_high FROM files "
+                    f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low FROM files "
                     f"WHERE location_id = ? AND folder_id IS NULL "
                     f"AND file_type_high IN ({type_placeholders}) AND stale = 0",
                     [location_id] + type_params,
                 )
 
-    image_rows = [r for r in rows if r["file_type_high"] == "image"]
+    image_rows = [r for r in rows if r["file_type_high"] == "image"
+                  and (r.get("file_type_low") or "") in _EMBEDDABLE_IMAGE_SUBTYPES]
     doc_rows = [r for r in rows if r["file_type_high"] in ("document", "text")]
     total = len(rows)
     logger.info(

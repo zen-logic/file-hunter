@@ -2634,6 +2634,15 @@ select.modal-input {
     border-radius: 3px;
     background: var(--color-surface-raised);
 }
+.status-cancel {
+    cursor: pointer;
+    margin-left: 0.5rem;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+.status-cancel:hover {
+    color: var(--color-danger);
+}
 
 /* ── Detail dup-exclude checkbox ── */
 

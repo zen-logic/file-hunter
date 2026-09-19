@@ -105,8 +105,17 @@ const StatusBar = {
                 <span class="status-activity-text scanning">
                     ${detail || '...'}
                     ${locationId ? this._renderQueueBadge() : ''}
+                    ${locationId ? '<span class="status-cancel" title="Cancel">✕</span>' : ''}
                 </span>
             `;
+            const cancelEl = this.activityEl.querySelector('.status-cancel');
+            if (cancelEl) {
+                cancelEl.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const { default: API } = await import('../api.js');
+                    await API.post('/api/scan/cancel', { location_id: locationId });
+                });
+            }
         } else {
             this._scanningLocationId = null;
             this.activityEl.innerHTML = `
