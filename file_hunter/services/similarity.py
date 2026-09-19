@@ -210,6 +210,72 @@ async def fetch_document_embeddings(
         return None
 
 
+async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
+    """Embed a single document/text file — runs as a queued operation."""
+    from file_hunter.services.content_proxy import fetch_agent_bytes
+    from file_hunter.ws.scan import broadcast
+
+    file_id = params["file_id"]
+    filename = params["filename"]
+    full_path = params["path"]
+    location_id = params["location_id"]
+    embed_url = params["embed_url"]
+
+    await broadcast({
+        "type": "embed_started",
+        "fileId": file_id,
+        "filename": filename,
+    })
+
+    file_bytes = await fetch_agent_bytes(full_path, location_id)
+    if file_bytes is None:
+        await broadcast({
+            "type": "embed_completed",
+            "fileId": file_id,
+            "filename": filename,
+            "error": "File not available (agent offline)",
+        })
+        return
+
+    chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
+    if chunks is None or len(chunks) == 0:
+        await broadcast({
+            "type": "embed_completed",
+            "fileId": file_id,
+            "filename": filename,
+            "error": "No content could be extracted",
+        })
+        return
+
+    collection = get_document_collection()
+    chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
+    embeddings = [c["embedding"] for c in chunks]
+    documents = [c["text"] for c in chunks]
+    metadatas = [
+        {
+            "file_id": file_id,
+            "location_id": location_id,
+            "chunk_index": i,
+            "meta": c.get("meta", ""),
+        }
+        for i, c in enumerate(chunks)
+    ]
+    collection.upsert(
+        ids=chunk_ids,
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=metadatas,
+    )
+
+    logger.info("Embedded %s: %d chunks", filename, len(chunks))
+    await broadcast({
+        "type": "embed_completed",
+        "fileId": file_id,
+        "filename": filename,
+        "chunks": len(chunks),
+    })
+
+
 async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     """Walk catalogued images and documents and index their embeddings."""
     from file_hunter.db import read_db

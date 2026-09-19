@@ -53,6 +53,29 @@
                 </label>
             </div>
             <div id="search-basic">
+                <div class="search-scope hidden" id="search-content-toggle">
+                    <label class="search-scope-label">
+                        <input type="checkbox" id="search-content-check">
+                        Content search
+                    </label>
+                </div>
+                <div id="search-content-fields" class="hidden">
+                    <div class="search-row">
+                        <label class="search-label">Content</label>
+                        <input type="text" class="search-input" id="search-semantic" placeholder="Search within document content, e.g. (legal action) + invoices">
+                    </div>
+                    <div class="search-row">
+                        <label class="search-label">Threshold</label>
+                        <input type="range" class="similarity-slider" id="search-semantic-slider" min="0" max="1" value="0.3" step="0.001">
+                        <input type="number" class="search-input search-input-sm" id="search-semantic-threshold" min="0" max="1" value="0.3" step="0.001">
+                        <div class="search-actions">
+                            <button class="btn btn-primary" id="search-content-go">Search</button>
+                            <button class="btn" id="search-content-clear">Clear</button>
+                            <button class="btn" id="search-content-save">Save</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="search-catalogue-fields">
                 <div class="search-row">
                     <label class="search-label">Name</label>
                     <input type="text" class="search-input" id="search-name" placeholder="Filename...">
@@ -81,13 +104,6 @@
                     <input type="text" class="search-input" id="search-desc" placeholder="Caption or description...">
                     <label class="search-label">Tags</label>
                     <input type="text" class="search-input" id="search-tags" placeholder="tag1, tag2...">
-                </div>
-                <div class="search-row hidden" id="search-semantic-row">
-                    <label class="search-label">Content</label>
-                    <input type="text" class="search-input" id="search-semantic" placeholder="Semantic search, e.g. (legal action) + invoices">
-                    <label class="search-label">Threshold</label>
-                    <input type="range" class="similarity-slider" id="search-semantic-slider" min="0" max="1" value="0.3" step="0.001">
-                    <input type="number" class="search-input search-input-sm" id="search-semantic-threshold" min="0" max="1" value="0.3" step="0.001">
                 </div>
                 <div class="search-row">
                     <label class="search-label">Size</label>
@@ -126,6 +142,7 @@
                         <button class="btn" id="search-clear">Clear</button>
                         <button class="btn" id="search-save">Save</button>
                     </div>
+                </div>
                 </div>
             </div>
             <div id="search-advanced" class="hidden">

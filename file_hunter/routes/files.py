@@ -1011,13 +1011,10 @@ async def file_transcode(request: Request):
 
 
 async def file_embed(request: Request):
-    """POST /api/files/{id}/embed — embed a single document/text file."""
-    from file_hunter.services.similarity import (
-        is_chromadb_available,
-        get_document_collection,
-        fetch_document_embeddings,
-    )
-    from file_hunter.services.content_proxy import fetch_agent_bytes
+    """POST /api/files/{id}/embed — queue embedding for a single document/text file."""
+    from file_hunter.services.similarity import is_chromadb_available
+    from file_hunter.services.agent_ops import _get_agent_id
+    from file_hunter.services.queue_manager import enqueue
     from file_hunter.services import settings as settings_svc
 
     if not is_chromadb_available():
@@ -1042,32 +1039,12 @@ async def file_embed(request: Request):
     if type_high not in ("document", "text"):
         return json_error("File type not supported for embedding.", 400)
 
-    file_bytes = await fetch_agent_bytes(f["full_path"], f["location_id"])
-    if file_bytes is None:
-        return json_error("File not available (agent offline).", 404)
-
-    chunks = await fetch_document_embeddings(embed_url, file_bytes, f["filename"])
-    if chunks is None or len(chunks) == 0:
-        return json_error("No content could be extracted.", 400)
-
-    collection = get_document_collection()
-    chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
-    embeddings = [c["embedding"] for c in chunks]
-    documents = [c["text"] for c in chunks]
-    metadatas = [
-        {
-            "file_id": file_id,
-            "location_id": f["location_id"],
-            "chunk_index": i,
-            "meta": c.get("meta", ""),
-        }
-        for i, c in enumerate(chunks)
-    ]
-    collection.upsert(
-        ids=chunk_ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas,
-    )
-
-    return json_ok({"chunks": len(chunks)})
+    agent_id = await _get_agent_id(f["location_id"])
+    op_id = await enqueue("embed_file", agent_id, {
+        "file_id": file_id,
+        "filename": f["filename"],
+        "path": f["full_path"],
+        "location_id": f["location_id"],
+        "embed_url": embed_url,
+    })
+    return json_ok({"started": True, "op_id": op_id})

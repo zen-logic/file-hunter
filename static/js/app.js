@@ -286,15 +286,14 @@ function wireEmbedBtn() {
     if (btn && selectedFile) {
         btn.addEventListener('click', async () => {
             btn.disabled = true;
-            btn.textContent = 'Embedding…';
+            btn.textContent = 'Starting…';
             const res = await API.post(`/api/files/${selectedFile.id}/embed`);
             if (res.ok) {
-                btn.textContent = 'Embedded';
-                Toast.info(`Embedded: ${res.data.chunks || 0} chunks`);
+                btn.textContent = 'Embedding…';
             } else {
                 btn.disabled = false;
                 btn.textContent = 'Embed';
-                Toast.error(res.error || 'Embedding failed.');
+                Toast.error(res.error || 'Embedding failed to start.');
             }
         });
     }
@@ -1247,7 +1246,10 @@ AddLocationModal.init(async ({ name, path }) => {
 Search.init({
     async onSearch(values) {
         const params = new URLSearchParams();
-        if (values.mode === 'advanced') {
+        if (values.mode === 'content') {
+            params.set('semantic', values.semantic);
+            params.set('semanticThreshold', values.semanticThreshold);
+        } else if (values.mode === 'advanced') {
             params.set('mode', 'advanced');
             values.conditions.forEach((c, i) => {
                 params.set(`c${i}_field`, c.field);
@@ -1288,10 +1290,6 @@ Search.init({
             if (!values.files) params.set('files', 'false');
             if (values.folders) params.set('folders', 'true');
             if (values.dupes) params.set('dupes', '1');
-        }
-        if (values.semantic) {
-            params.set('semantic', values.semantic);
-            params.set('semanticThreshold', values.semanticThreshold);
         }
         if (values.scopeType && values.scopeId) {
             params.set('scopeType', values.scopeType);
@@ -1340,7 +1338,7 @@ let _similarityUrl = '';
 function updateSimilarityButton(settings) {
     const available = settings.similaritySearchEnabled === '1' && !!settings.similaritySearchUrl;
     similarityBtn.classList.toggle('hidden', !available);
-    document.getElementById('search-semantic-row').classList.toggle('hidden', !available);
+    document.getElementById('search-content-toggle').classList.toggle('hidden', !available);
     _similarityUrl = settings.similaritySearchUrl || '';
     Detail.similarityEnabled = available;
     if (!available && similarityVisible) {
@@ -2126,6 +2124,30 @@ WS.on('transcode_error', (msg) => {
 WS.on('transcode_cancelled', (msg) => {
     Toast.success('Conversion cancelled.');
     refreshDetailPanel();
+});
+
+WS.on('embed_started', (msg) => {
+    ActivityLog.add(`Embedding: <b>${msg.filename}</b>`);
+    const btn = document.getElementById('detail-embed');
+    if (btn && selectedFile && msg.fileId === selectedFile.id) {
+        btn.disabled = true;
+        btn.textContent = 'Embedding…';
+    }
+});
+
+WS.on('embed_completed', (msg) => {
+    if (msg.error) {
+        ActivityLog.add(`Embedding failed: <b>${msg.filename}</b> — ${msg.error}`);
+        Toast.error(`Embedding failed: ${msg.filename}`);
+    } else {
+        ActivityLog.add(`Embedded: <b>${msg.filename}</b> (${msg.chunks} chunks)`);
+        Toast.success(`Embedded: ${msg.filename} (${msg.chunks} chunks)`);
+    }
+    const btn = document.getElementById('detail-embed');
+    if (btn && selectedFile && msg.fileId === selectedFile.id) {
+        btn.disabled = !msg.error;
+        btn.textContent = msg.error ? 'Embed' : 'Embedded';
+    }
 });
 
 WS.on('batch_move_progress', (msg) => {

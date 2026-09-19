@@ -124,6 +124,39 @@ async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: flo
 
 
 async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focus_file_id=None):
+    # Semantic search — completely separate path
+    semantic = request.query_params.get("semantic", "").strip()
+    if semantic:
+        from file_hunter.services import settings as settings_svc
+        async with read_db() as db:
+            enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
+            embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
+        if enabled != "1" or not embed_url:
+            return json_ok({"items": [], "total": 0, "folders": []})
+        sem_threshold = float(request.query_params.get("semanticThreshold", "0.3"))
+        sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold)
+        if not sem_ids:
+            return json_ok({"items": [], "total": 0, "folders": []})
+        placeholders = ",".join("?" for _ in sem_ids)
+        async with read_db() as db:
+            rows = await db.execute_fetchall(
+                f"""SELECT id, filename AS name, file_type_high AS typeHigh,
+                           file_type_low AS typeLow, file_size AS size,
+                           modified_date AS date, dup_count AS dups,
+                           stale, location_id AS locationId,
+                           full_path, hidden
+                    FROM files WHERE id IN ({placeholders}) AND stale = 0""",
+                sem_ids,
+            )
+        file_map = {r["id"]: dict(r) for r in rows}
+        items = []
+        for fid in sem_ids:
+            if fid in file_map:
+                item = file_map[fid]
+                item["type"] = "file"
+                items.append(item)
+        return json_ok({"items": items, "total": len(items), "folders": []})
+
     # Fast path: hash-only search (dup badge click)
     hash_val = request.query_params.get("hash")
     if hash_val and not any(
@@ -193,41 +226,6 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
                 search_id=request.query_params.get("searchId"),
                 focus_file_id=focus_file_id,
             )
-    # Semantic search — merge document matches into results
-    semantic = request.query_params.get("semantic", "").strip()
-    if semantic and page == 0:
-        from file_hunter.services import settings as settings_svc
-        async with read_db() as db:
-            enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
-            embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
-        if enabled == "1" and embed_url:
-            sem_threshold = float(request.query_params.get("semanticThreshold", "0.3"))
-            sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold)
-            if sem_ids:
-                existing_ids = {item["id"] for item in results.get("items", [])}
-                new_ids = [fid for fid in sem_ids if fid not in existing_ids]
-                if new_ids:
-                    placeholders = ",".join("?" for _ in new_ids)
-                    async with read_db() as db:
-                        sem_rows = await db.execute_fetchall(
-                            f"""SELECT id, filename AS name, file_type_high AS typeHigh,
-                                       file_type_low AS typeLow, file_size AS size,
-                                       modified_date AS date, dup_count AS dups,
-                                       stale, location_id AS locationId,
-                                       full_path, hidden
-                                FROM files WHERE id IN ({placeholders}) AND stale = 0""",
-                            new_ids,
-                        )
-                    sem_map = {r["id"]: dict(r) for r in sem_rows}
-                    for fid in new_ids:
-                        if fid in sem_map:
-                            item = sem_map[fid]
-                            item["type"] = "file"
-                            item["semanticMatch"] = True
-                            results["items"].append(item)
-                    results["total"] = results.get("total", 0) + len(
-                        [fid for fid in new_ids if fid in sem_map]
-                    )
 
     return json_ok(results)
 
