@@ -465,23 +465,29 @@ const Detail = {
         this._slideshowTotal = 0;
         this._slideshowNavGen = 0;
 
-        // Fetch all IDs in one call — no per-window queries during navigation
+        // Use direct IDs if provided, otherwise fetch from server
         const p = params;
-        const mediaType = this._slideshowMode === 'playlist' ? 'video' : 'image';
-        const sortParams = `&sort=${encodeURIComponent(p.sort || 'name')}&sortDir=${encodeURIComponent(p.sortDir || 'asc')}`;
-        let url;
-        if (p.type === 'folder') {
-            url = `/api/slideshow-ids?folder_id=${encodeURIComponent(p.folderId)}&mediaType=${mediaType}${sortParams}`;
-        } else if (p.searchId) {
-            url = `/api/slideshow-ids?searchId=${encodeURIComponent(p.searchId)}&mediaType=${mediaType}${sortParams}`;
+        if (p.ids) {
+            this._slideshowWindow = p.ids;
+            this._slideshowWindowStart = 0;
+            this._slideshowTotal = p.ids.length;
         } else {
-            url = `/api/slideshow-ids?${new URLSearchParams(p.searchParams).toString()}&mediaType=${mediaType}${sortParams}`;
+            const mediaType = this._slideshowMode === 'playlist' ? 'video' : 'image';
+            const sortParams = `&sort=${encodeURIComponent(p.sort || 'name')}&sortDir=${encodeURIComponent(p.sortDir || 'asc')}`;
+            let url;
+            if (p.type === 'folder') {
+                url = `/api/slideshow-ids?folder_id=${encodeURIComponent(p.folderId)}&mediaType=${mediaType}${sortParams}`;
+            } else if (p.searchId) {
+                url = `/api/slideshow-ids?searchId=${encodeURIComponent(p.searchId)}&mediaType=${mediaType}${sortParams}`;
+            } else {
+                url = `/api/slideshow-ids?${new URLSearchParams(p.searchParams).toString()}&mediaType=${mediaType}${sortParams}`;
+            }
+            const res = await API.get(url);
+            if (!res.ok) return;
+            this._slideshowWindow = res.data.ids;
+            this._slideshowWindowStart = 0;
+            this._slideshowTotal = res.data.total;
         }
-        const res = await API.get(url);
-        if (!res.ok) return;
-        this._slideshowWindow = res.data.ids;
-        this._slideshowWindowStart = 0;
-        this._slideshowTotal = res.data.total;
 
         if (this._slideshowTotal === 0) return;
         let startIdx = 0;
@@ -1915,7 +1921,13 @@ const Detail = {
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
                 const sp = this.getSortParams ? this.getSortParams() : { sort: 'name', sortDir: 'asc' };
-                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'slideshow', sort: sp.sort, sortDir: sp.sortDir });
+                const params = { type: 'search', mode: 'slideshow', sort: sp.sort, sortDir: sp.sortDir };
+                if (data.searchId) {
+                    params.searchId = data.searchId;
+                } else {
+                    params.ids = (data.items || []).filter(f => (f.typeHigh || '').toLowerCase() === 'image').map(f => f.id);
+                }
+                await this.startSlideshow(params);
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No images available';
                     setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
@@ -1928,7 +1940,13 @@ const Detail = {
                 btn.disabled = true;
                 btn.textContent = 'Loading\u2026';
                 const sp2 = this.getSortParams ? this.getSortParams() : { sort: 'name', sortDir: 'asc' };
-                await this.startSlideshow({ type: 'search', searchId: data.searchId, mode: 'playlist', sort: sp2.sort, sortDir: sp2.sortDir });
+                const params2 = { type: 'search', mode: 'playlist', sort: sp2.sort, sortDir: sp2.sortDir };
+                if (data.searchId) {
+                    params2.searchId = data.searchId;
+                } else {
+                    params2.ids = (data.items || []).filter(f => (f.typeHigh || '').toLowerCase() === 'video').map(f => f.id);
+                }
+                await this.startSlideshow(params2);
                 if (this._slideshowTotal === 0) {
                     btn.textContent = 'No videos available';
                     setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);

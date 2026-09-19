@@ -73,7 +73,8 @@ async def fetch_embedding(embed_url: str, image_bytes: bytes) -> list[float] | N
                 headers={"Content-Type": "image/jpeg"},
             )
         if resp.status_code != 200:
-            logger.warning("Embedding service returned %d", resp.status_code)
+            detail = resp.text[:200] if resp.text else ""
+            logger.warning("Embedding service returned %d: %s", resp.status_code, detail)
             return None
         data = resp.json()
         return data.get("embedding")

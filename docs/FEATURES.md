@@ -32,9 +32,23 @@ Interactive visualisation of disk usage for any location or folder. Drill into s
 
 Images, video, audio, PDFs, CSV tables, text files, and a hex viewer all render inline in the detail panel. Full-screen zoom on any preview. Image dimensions shown below the preview.
 
+## Similarity search
+
+Optional image similarity search powered by CLIP embeddings. Connect to an embedding service in Settings to enable.
+
+Scan any location or folder to index images. Search by text features (e.g. "red socks", "blue jacket"), by similarity to a selected file, or by uploading a reference image from your desktop. Text and image queries can be combined. Adjustable similarity threshold.
+
+Text queries support composite syntax for vector arithmetic: `(red socks) - shoes` embeds each phrase separately and combines the vectors before searching.
+
+Requires a separate embedding service. ChromaDB is installed automatically when the feature is first enabled. No impact on installations that do not use this feature.
+
 ## Gallery view
 
-Toggle between list and gallery views in the file panel. Gallery shows image thumbnails in a responsive grid. Folders and non-image files display as icons. Selection, triage marks, and keyboard navigation work in both views.
+Toggle between list and gallery views in the file panel. Gallery shows image thumbnails in a responsive grid. Folders and non-image files display as icons. Selection, triage marks, duplicate pills, and keyboard navigation work in both views.
+
+## Drag to move
+
+Drag files or folders from the file list or gallery to any folder or location in the tree to move them. Works with multi-selection.
 
 ## Slideshow and playlist
 
