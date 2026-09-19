@@ -336,8 +336,8 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
                 )
 
     image_rows = [r for r in rows if r["file_type_high"] == "image"
-                  and (r.get("file_type_low") or "") in _EMBEDDABLE_IMAGE_SUBTYPES
-                  and (r.get("file_size") or 0) >= _MIN_IMAGE_SIZE]
+                  and (r["file_type_low"] or "") in _EMBEDDABLE_IMAGE_SUBTYPES
+                  and (r["file_size"] or 0) >= _MIN_IMAGE_SIZE]
     doc_rows = [r for r in rows if r["file_type_high"] in ("document", "text")]
     total = len(rows)
     logger.info(
