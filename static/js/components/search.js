@@ -1,5 +1,6 @@
 import API from '../api.js';
 import PromptModal from './prompt.js';
+import Tree from './tree.js';
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
@@ -655,7 +656,7 @@ const Search = {
         });
     },
 
-    _applySavedSearch(params) {
+    async _applySavedSearch(params) {
         if (params.mode === 'advanced') {
             // Switch to advanced mode if not already
             if (this.mode !== 'advanced') this._toggleMode();
@@ -740,6 +741,15 @@ const Search = {
                 document.getElementById('search-files-row').classList.remove('hidden');
             }
             if (params.dupes) document.getElementById('search-dupes').checked = true;
+        }
+
+        // Restore scope — reveal the node in the tree without triggering onSelect
+        if (params.scopeId) {
+            const node = await Tree.revealNode(params.scopeId);
+            if (node) {
+                this.setScopeContext(node);
+                document.getElementById('search-scope-check').checked = true;
+            }
         }
 
         // Show search panel and run
