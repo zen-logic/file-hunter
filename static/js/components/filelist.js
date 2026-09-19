@@ -455,9 +455,13 @@ const FileList = {
     },
 
     _scrollSelectedIntoView() {
+        if (this._viewMode === 'gallery') {
+            const el = this.el.querySelector('.gallery-item.selected');
+            if (el) el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+            return;
+        }
         const el = this.el.querySelector('tr.selected:last-child')
-            || this.el.querySelector('tr.selected')
-            || this.el.querySelector('.gallery-item.selected');
+            || this.el.querySelector('tr.selected');
         if (!el) return;
 
         // The column header is sticky, so it overlays the top of the scroll

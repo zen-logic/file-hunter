@@ -186,9 +186,12 @@ async def similarity_search(request: Request):
     if not is_chromadb_available():
         return json_error("Similarity search is not available.", 400)
 
+    import base64
+
     body = await request.json()
     text = body.get("text", "").strip()
     file_id = body.get("file_id")
+    image_data = body.get("image_data")  # base64-encoded uploaded image
     threshold = body.get("threshold", 0.3)
 
     async with read_db() as db:
@@ -225,6 +228,14 @@ async def similarity_search(request: Request):
                 )
                 if image_bytes:
                     image_emb = await fetch_embedding(embed_url, image_bytes)
+
+    # Uploaded image — decode base64 and embed
+    if image_data and image_emb is None:
+        try:
+            image_bytes = base64.b64decode(image_data)
+            image_emb = await fetch_embedding(embed_url, image_bytes)
+        except Exception as e:
+            logger.warning("Uploaded image embedding failed: %s", e)
 
     if text_emb is None and image_emb is None:
         return json_error("Could not generate embedding for search.", 400)

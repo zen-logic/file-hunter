@@ -1316,6 +1316,29 @@ function updateSimilarityButton(settings) {
     }
 }
 
+let _similarityUploadData = null;
+
+const similarityUploadBtn = document.getElementById('similarity-upload-btn');
+const similarityUploadFile = document.getElementById('similarity-upload-file');
+const similarityUploadName = document.getElementById('similarity-upload-name');
+
+similarityUploadBtn.addEventListener('click', () => similarityUploadFile.click());
+similarityUploadFile.addEventListener('change', () => {
+    const file = similarityUploadFile.files[0];
+    if (!file) {
+        _similarityUploadData = null;
+        similarityUploadName.textContent = '';
+        return;
+    }
+    similarityUploadName.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+        // Strip the data:image/...;base64, prefix
+        _similarityUploadData = reader.result.split(',')[1];
+    };
+    reader.readAsDataURL(file);
+});
+
 similarityBtn.addEventListener('click', () => {
     similarityVisible = !similarityVisible;
     similarityPanel.classList.toggle('hidden', !similarityVisible);
@@ -1339,8 +1362,9 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     const text = document.getElementById('similarity-text').value.trim();
     const threshold = parseFloat(similarityThreshold.value);
 
-    if (!useImage && !text) {
-        Toast.error('Enter search features or select "similar to selected image".');
+    const hasUpload = !!_similarityUploadData;
+    if (!useImage && !text && !hasUpload) {
+        Toast.error('Enter search features, select an image, or upload one.');
         return;
     }
     if (useImage && !selectedFile) {
@@ -1351,6 +1375,7 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     const payload = { threshold };
     if (text) payload.text = text;
     if (useImage && selectedFile) payload.file_id = selectedFile.id;
+    if (hasUpload) payload.image_data = _similarityUploadData;
 
     FileList.showLoading();
     const res = await API.post('/api/search/similarity', payload);
@@ -1368,6 +1393,9 @@ document.getElementById('similarity-clear').addEventListener('click', () => {
     document.getElementById('similarity-text').value = '';
     similaritySlider.value = 0.3;
     similarityThreshold.value = 0.3;
+    _similarityUploadData = null;
+    similarityUploadFile.value = '';
+    similarityUploadName.textContent = '';
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {
