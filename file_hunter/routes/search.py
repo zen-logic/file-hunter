@@ -1,8 +1,11 @@
 import json
+import logging
 
 from starlette.requests import Request
 from file_hunter.db import read_db, execute_write
 from file_hunter.core import json_ok, json_error
+
+logger = logging.getLogger("file_hunter")
 from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
 from file_hunter.services.search import (
     search_files,
@@ -161,3 +164,148 @@ async def delete_saved_search(request: Request):
 
     await execute_write(_delete, search_id)
     return json_ok({})
+
+
+async def similarity_search(request: Request):
+    """POST /api/search/similarity — search by image similarity or text features.
+
+    Uses the LocalLens approach: separate queries per modality, merge candidates,
+    score each candidate against both embeddings independently, average the
+    cosine similarities for the combined score.
+    """
+    from file_hunter.services.similarity import (
+        is_chromadb_available,
+        get_collection,
+        fetch_embedding,
+        embed_text_query,
+    )
+    from file_hunter.services.content_proxy import fetch_agent_bytes
+    from file_hunter.services import settings as settings_svc
+    import numpy as np
+
+    if not is_chromadb_available():
+        return json_error("Similarity search is not available.", 400)
+
+    body = await request.json()
+    text = body.get("text", "").strip()
+    file_id = body.get("file_id")
+    threshold = body.get("threshold", 0.3)
+
+    async with read_db() as db:
+        embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
+    if not embed_url:
+        return json_error("Embedding service URL not configured.", 400)
+
+    text_emb = None
+    image_emb = None
+
+    # Text embedding (supports composite syntax: (red socks) - shoes)
+    if text:
+        text_emb = await embed_text_query(embed_url, text)
+
+    # Image embedding — use stored embedding from ChromaDB
+    if file_id:
+        collection = get_collection()
+        try:
+            result = collection.get(ids=[str(file_id)], include=["embeddings"])
+            if result["ids"] and len(result["embeddings"]) > 0:
+                image_emb = result["embeddings"][0]
+        except Exception as e:
+            logger.warning("Failed to retrieve image embedding: %s", e)
+        # Fall back: fetch and embed
+        if image_emb is None:
+            async with read_db() as db:
+                row = await db.execute_fetchall(
+                    "SELECT full_path, location_id FROM files WHERE id = ?",
+                    (file_id,),
+                )
+            if row:
+                image_bytes = await fetch_agent_bytes(
+                    row[0]["full_path"], row[0]["location_id"]
+                )
+                if image_bytes:
+                    image_emb = await fetch_embedding(embed_url, image_bytes)
+
+    if text_emb is None and image_emb is None:
+        return json_error("Could not generate embedding for search.", 400)
+
+    collection = get_collection()
+    n_results = min(100, collection.count() or 100)
+    if n_results == 0:
+        return json_ok({"items": [], "total": 0, "folders": []})
+
+    # Collect candidates from each modality
+    candidates = {}  # doc_id -> stored embedding
+
+    if text_emb is not None:
+        results = collection.query(
+            query_embeddings=[text_emb],
+            n_results=n_results,
+            include=["embeddings"],
+        )
+        for i, doc_id in enumerate(results["ids"][0]):
+            if doc_id not in candidates:
+                candidates[doc_id] = np.array(results["embeddings"][0][i], dtype=np.float32)
+
+    if image_emb is not None:
+        results = collection.query(
+            query_embeddings=[image_emb],
+            n_results=n_results,
+            include=["embeddings"],
+        )
+        for i, doc_id in enumerate(results["ids"][0]):
+            if doc_id not in candidates:
+                candidates[doc_id] = np.array(results["embeddings"][0][i], dtype=np.float32)
+
+    if not candidates:
+        return json_ok({"items": [], "total": 0, "folders": []})
+
+    # Score each candidate against both query embeddings
+    text_vec = np.array(text_emb, dtype=np.float32) if text_emb is not None else None
+    image_vec = np.array(image_emb, dtype=np.float32) if image_emb is not None else None
+    combined = text_vec is not None and image_vec is not None
+
+    scored = []
+    for doc_id, db_emb in candidates.items():
+        if combined:
+            text_sim = float(np.dot(text_vec, db_emb))
+            image_sim = float(np.dot(image_vec, db_emb))
+            score = (text_sim + image_sim) / 2.0
+        elif text_vec is not None:
+            score = float(np.dot(text_vec, db_emb))
+        else:
+            score = float(np.dot(image_vec, db_emb))
+
+        if score >= threshold:
+            scored.append((doc_id, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    if not scored:
+        return json_ok({"items": [], "total": 0, "folders": []})
+
+    matched_ids = [int(doc_id) for doc_id, _ in scored]
+
+    # Fetch file details from catalogue
+    placeholders = ",".join("?" for _ in matched_ids)
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            f"""SELECT id, filename AS name, file_type_high AS typeHigh,
+                       file_type_low AS typeLow, file_size AS size,
+                       modified_date AS date, dup_count AS dups,
+                       stale, location_id AS locationId,
+                       full_path, hidden
+                FROM files WHERE id IN ({placeholders})""",
+            matched_ids,
+        )
+
+    # Preserve score ranking order
+    file_map = {r["id"]: dict(r) for r in rows}
+    items = []
+    for fid in matched_ids:
+        if fid in file_map:
+            item = file_map[fid]
+            item["type"] = "file"
+            items.append(item)
+
+    return json_ok({"items": items, "total": len(items), "folders": []})

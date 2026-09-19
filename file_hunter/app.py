@@ -53,6 +53,7 @@ from file_hunter.routes.files import (
 )
 from file_hunter.routes.search import (
     search,
+    similarity_search,
     list_saved_searches,
     create_saved_search,
     delete_saved_search,
@@ -61,6 +62,7 @@ from file_hunter.routes.slideshow import slideshow_ids
 from file_hunter.routes.scan import (
     start_scan,
     start_quick_scan,
+    start_similarity_scan,
     scan_capabilities,
     cancel_scan,
     get_scan_queue,
@@ -334,12 +336,14 @@ app = Starlette(
         Route("/api/folders/{id:int}", folder_delete, methods=["DELETE"]),
         Route("/api/locations/{id:int}/reset-stale", location_reset_stale, methods=["POST"]),
         Route("/api/search", search, methods=["GET"]),
+        Route("/api/search/similarity", similarity_search, methods=["POST"]),
         Route("/api/searches", list_saved_searches, methods=["GET"]),
         Route("/api/searches", create_saved_search, methods=["POST"]),
         Route("/api/searches/{id:int}", delete_saved_search, methods=["DELETE"]),
         Route("/api/slideshow-ids", slideshow_ids, methods=["GET"]),
         Route("/api/scan", start_scan, methods=["POST"]),
         Route("/api/scan/quick", start_quick_scan, methods=["POST"]),
+        Route("/api/scan/similarity", start_similarity_scan, methods=["POST"]),
         Route("/api/scan/capabilities", scan_capabilities, methods=["GET"]),
         Route("/api/scan/cancel", cancel_scan, methods=["POST"]),
         Route("/api/scan/queue", get_scan_queue, methods=["GET"]),

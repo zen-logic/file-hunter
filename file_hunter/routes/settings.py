@@ -9,6 +9,7 @@ from file_hunter.core import json_ok, json_error
 from file_hunter.db import db_writer, read_db, execute_write
 from file_hunter.services import settings as settings_svc
 from file_hunter.services.queue_manager import _running_ops, cancel
+from file_hunter.services.similarity import ensure_chromadb
 from file_hunter.ws.scan import broadcast
 from file_hunter import __version__
 
@@ -151,8 +152,19 @@ async def update_settings(request: Request):
             await settings_svc.set_setting(
                 conn, "showHiddenFiles", "1" if b["showHiddenFiles"] else "0"
             )
+        if "similaritySearchEnabled" in b:
+            await settings_svc.set_setting(
+                conn, "similaritySearchEnabled", "1" if b["similaritySearchEnabled"] else "0"
+            )
+        if "similaritySearchUrl" in b:
+            await settings_svc.set_setting(
+                conn, "similaritySearchUrl", b["similaritySearchUrl"].strip()
+            )
 
     await execute_write(_update, body)
+
+    if body.get("similaritySearchEnabled"):
+        await asyncio.to_thread(ensure_chromadb)
 
     async with read_db() as db:
         all_settings = await settings_svc.get_all_settings(db)

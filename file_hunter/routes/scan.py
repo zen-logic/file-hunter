@@ -13,6 +13,7 @@ from file_hunter.services.queue_manager import (
     get_queue_status,
     get_queue_status_for_broadcast,
 )
+from file_hunter.services import settings as settings_svc
 from file_hunter.services.hash_backfill import cancel_backfill_by_location
 from file_hunter.services.quick_scan import run_quick_scan
 from file_hunter.ws.agent import get_agent_capabilities
@@ -193,6 +194,81 @@ async def cancel_scan(request: Request):
         )
         return json_ok({"message": "Scan cancellation requested."})
     return json_error("No scan running for this location.", 400)
+
+
+async def start_similarity_scan(request: Request):
+    """POST /api/scan/similarity — index images for similarity search."""
+    body = await request.json()
+    raw_id = body.get("location_id", "")
+    loc_id = int(str(raw_id).replace("loc-", ""))
+    recursive = body.get("recursive", True)
+
+    async with read_db() as db:
+        # Check similarity search is enabled
+        enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
+        if enabled != "1":
+            return json_error("Similarity search is not enabled.", 400)
+        embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
+        if not embed_url:
+            return json_error("Embedding service URL not configured.", 400)
+
+        rows = await db.execute_fetchall(
+            "SELECT id, name, root_path, agent_id FROM locations WHERE id = ?",
+            (loc_id,),
+        )
+        if not rows:
+            return json_error("Location not found.", 404)
+
+        location_name = rows[0]["name"]
+        root_path = rows[0]["root_path"]
+        agent_id = rows[0]["agent_id"]
+
+    # Resolve scan path
+    scan_path = root_path
+    folder_name = None
+    raw_folder_id = body.get("folder_id")
+    if raw_folder_id:
+        fld_id = int(str(raw_folder_id).replace("fld-", ""))
+        async with read_db() as db:
+            fld_rows = await db.execute_fetchall(
+                "SELECT id, name, rel_path, location_id FROM folders WHERE id = ?",
+                (fld_id,),
+            )
+        if not fld_rows:
+            return json_error("Folder not found.", 404)
+        folder = fld_rows[0]
+        if folder["location_id"] != loc_id:
+            return json_error("Folder does not belong to this location.", 400)
+        scan_path = os.path.join(root_path, folder["rel_path"])
+        folder_name = folder["name"]
+
+    label = f"{location_name} / {folder_name}" if folder_name else location_name
+
+    payload = {
+        "location_id": loc_id,
+        "location_name": label,
+        "path": scan_path,
+        "root_path": root_path,
+        "recursive": recursive,
+        "embed_url": embed_url,
+    }
+    if raw_folder_id:
+        payload["folder_id"] = int(str(raw_folder_id).replace("fld-", ""))
+
+    op_id = await enqueue("similarity_scan", agent_id, payload)
+    await broadcast(
+        {
+            "type": "scan_queued",
+            "entry": {
+                "queue_id": op_id,
+                "location_id": loc_id,
+                "name": f"Similarity: {label}",
+            },
+            "queue": (await get_queue_status_for_broadcast()),
+        }
+    )
+
+    return json_ok({"message": f"Similarity scan queued for '{label}'", "queue_id": op_id})
 
 
 async def get_scan_queue(request: Request):

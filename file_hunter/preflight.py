@@ -13,6 +13,7 @@ from pathlib import Path
 from file_hunter.config import load_config
 from file_hunter.db import close_db, get_db
 from file_hunter.services.agents import ensure_local_agent
+from file_hunter.services.settings import get_setting
 
 
 async def _run(base_dir: Path):
@@ -42,6 +43,11 @@ async def _run(base_dir: Path):
         }
         agent_config_path.write_text(json.dumps(agent_config, indent=2) + "\n")
         print(f"  Local agent configured (token prefix: {token[:8]})")
+
+    # Install chromadb if similarity search is enabled
+    if await get_setting(db, "similaritySearchEnabled") == "1":
+        from file_hunter.services.similarity import ensure_chromadb
+        ensure_chromadb()
 
     await close_db()
 

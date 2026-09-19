@@ -1763,6 +1763,52 @@ body::after {
     color: var(--color-text-bright);
 }
 
+.similarity-slider {
+    flex: 1;
+    min-width: 80px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-border);
+    outline: none;
+}
+
+.similarity-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    cursor: pointer;
+    border: none;
+}
+
+.similarity-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    cursor: pointer;
+    border: none;
+}
+
+.similarity-slider::-webkit-slider-thumb:hover {
+    box-shadow: var(--glow-primary);
+}
+
+.similarity-slider::-moz-range-thumb:hover {
+    box-shadow: var(--glow-primary);
+}
+
+.modal-separator {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: 0.4rem 0;
+}
+
 .modal-label {
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);

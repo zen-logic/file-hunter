@@ -32,6 +32,11 @@
                         <line x1="13" y1="13" x2="18" y2="18"/>
                     </svg>
                 </button>
+                <button class="btn btn-icon hidden" id="btn-similarity" title="Similarity Search">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zm0 12.5c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+                    </svg>
+                </button>
                 <button class="btn btn-icon" id="btn-settings" title="Settings">
                     <svg class="icon-settings" viewBox="0 0 24 24" fill="currentColor">
                         <path fill-rule="evenodd" d="M11.078 2.25c-.917 0-1.699.663-1.85 1.567L9.05 4.889c-.02.12-.115.26-.297.348a7.493 7.493 0 0 0-.986.57c-.166.115-.334.126-.45.083L6.3 5.508a1.875 1.875 0 0 0-2.282.819l-.922 1.597a1.875 1.875 0 0 0 .432 2.385l.84.692c.095.078.17.229.154.43a7.598 7.598 0 0 0 0 1.139c.015.2-.059.352-.153.43l-.841.692a1.875 1.875 0 0 0-.432 2.385l.922 1.597a1.875 1.875 0 0 0 2.282.818l1.019-.382c.115-.043.283-.031.45.082.312.214.641.405.985.57.182.088.277.228.297.35l.178 1.071c.151.904.933 1.567 1.85 1.567h1.844c.916 0 1.699-.663 1.85-1.567l.178-1.072c.02-.12.114-.26.297-.349.344-.165.673-.356.985-.57.167-.114.335-.125.45-.082l1.02.382a1.875 1.875 0 0 0 2.28-.819l.923-1.597a1.875 1.875 0 0 0-.432-2.385l-.84-.692c-.095-.078-.17-.229-.154-.43a7.614 7.614 0 0 0 0-1.139c-.016-.2.059-.352.153-.43l.84-.692c.708-.582.891-1.59.433-2.385l-.922-1.597a1.875 1.875 0 0 0-2.282-.818l-1.02.382c-.114.043-.282.031-.449-.083a7.49 7.49 0 0 0-.985-.57c-.183-.087-.277-.227-.297-.348l-.179-1.072a1.875 1.875 0 0 0-1.85-1.567h-1.843zM12 15.75a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5z" clip-rule="evenodd"/>
@@ -134,6 +139,24 @@
             </div>
             <div id="saved-searches" class="saved-searches"></div>
         </div>
+        <div id="similarity-panel" class="search-panel hidden">
+            <div class="search-row">
+                <label class="search-checkbox"><input type="checkbox" id="similarity-use-image"> Similar to selected image</label>
+            </div>
+            <div class="search-row">
+                <label class="search-label">Features</label>
+                <input type="text" class="search-input" id="similarity-text" placeholder="e.g. red socks, blue jacket">
+            </div>
+            <div class="search-row">
+                <label class="search-label">Threshold</label>
+                <input type="range" class="similarity-slider" id="similarity-threshold-slider" min="0" max="1" value="0.3" step="0.001">
+                <input type="number" class="search-input search-input-sm" id="similarity-threshold" min="0" max="1" value="0.3" step="0.001">
+                <div class="search-actions">
+                    <button class="btn btn-primary" id="similarity-go">Search</button>
+                    <button class="btn" id="similarity-clear">Clear</button>
+                </div>
+            </div>
+        </div>
         <main id="panels">
             <nav id="tree-panel">
                 <div class="panel-header">
@@ -178,6 +201,11 @@
                 <div id="scan-confirm-options" class="modal-field" style="display:none">
                     <label class="radio-option"><input type="radio" name="scan-type" value="full" checked> <strong>Full Scan</strong> — recursive, all subfolders</label>
                     <label class="radio-option"><input type="radio" name="scan-type" value="quick"> <strong>Quick Scan</strong> — this folder only, no recursion</label>
+                </div>
+                <div id="scan-confirm-similarity" class="modal-field" style="display:none">
+                    <hr class="modal-separator">
+                    <label class="radio-option"><input type="radio" name="scan-type" value="similarity-full"> <strong>Similarity Scan</strong> — recursive, all subfolders</label>
+                    <label class="radio-option"><input type="radio" name="scan-type" value="similarity-quick"> <strong>Similarity Scan</strong> — this folder only, no recursion</label>
                 </div>
                 <div class="modal-actions">
                     <button class="btn" id="scan-confirm-cancel">Cancel</button>

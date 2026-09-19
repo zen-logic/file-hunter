@@ -75,6 +75,25 @@ const Settings = {
                 </div>
             </div>
             <div class="settings-section">
+                <h3 class="settings-section-title">Similarity Search</h3>
+                <div class="settings-row">
+                    <label class="modal-label">
+                        <input type="checkbox" id="settings-similarity-enabled" ${settings.similaritySearchEnabled === '1' ? 'checked' : ''}>
+                        Enable similarity search
+                    </label>
+                    <span class="settings-hint">Connect to an embedding service for image similarity search</span>
+                </div>
+                <div class="settings-row" id="settings-similarity-url-row" ${settings.similaritySearchEnabled === '1' ? '' : 'style="display:none"'}>
+                    <label class="modal-label" for="settings-similarity-url">Embedding Service URL</label>
+                    <div class="settings-inline">
+                        <input type="text" class="modal-input" id="settings-similarity-url"
+                               value="${this._esc(settings.similaritySearchUrl || '')}"
+                               placeholder="e.g. http://hostname:8002">
+                        <button class="btn btn-sm" id="settings-save-similarity">Save</button>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
                 <h3 class="settings-section-title">Users</h3>
                 <table class="settings-users-table">
                     <thead>
@@ -205,6 +224,17 @@ const Settings = {
         // Show hidden files toggle
         document.getElementById('settings-show-hidden').addEventListener('change', async (e) => {
             await API.patch('/api/settings', { showHiddenFiles: e.target.checked });
+        });
+
+        // Similarity search
+        document.getElementById('settings-similarity-enabled').addEventListener('change', async (e) => {
+            const urlRow = document.getElementById('settings-similarity-url-row');
+            urlRow.style.display = e.target.checked ? '' : 'none';
+            await API.patch('/api/settings', { similaritySearchEnabled: e.target.checked });
+        });
+        document.getElementById('settings-save-similarity').addEventListener('click', async () => {
+            const url = document.getElementById('settings-similarity-url').value.trim();
+            await API.patch('/api/settings', { similaritySearchUrl: url });
         });
 
         // Add user / application

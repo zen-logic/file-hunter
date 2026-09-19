@@ -539,12 +539,13 @@ function startApp(user) {
         if (e.target.id === 'settings-modal') Settings.close();
     });
 
-    // Apply server name to title
+    // Apply server name to title + check similarity availability
     API.get('/api/settings').then(res => {
         if (res.ok && res.data.serverName) {
             document.title = `File Hunter \u2014 ${res.data.serverName}`;
             document.getElementById('app-title').textContent = `File Hunter \u2014 ${res.data.serverName}`;
         }
+        if (res.ok) updateSimilarityButton(res.data);
     });
 
 ConfirmModal.init();
@@ -552,7 +553,18 @@ ConfirmModal.init();
 ScanConfirm.init(async (loc, folder, scanType) => {
     const payload = { location_id: loc.id };
     if (folder) payload.folder_id = folder.id;
-    const endpoint = scanType === 'quick' ? '/api/scan/quick' : '/api/scan';
+    let endpoint;
+    if (scanType === 'quick') {
+        endpoint = '/api/scan/quick';
+    } else if (scanType === 'similarity-full') {
+        endpoint = '/api/scan/similarity';
+        payload.recursive = true;
+    } else if (scanType === 'similarity-quick') {
+        endpoint = '/api/scan/similarity';
+        payload.recursive = false;
+    } else {
+        endpoint = '/api/scan';
+    }
     const res = await API.post(endpoint, payload);
     if (!res.ok) Toast.error(res.error || 'Failed to start scan.');
 });
@@ -564,9 +576,14 @@ scanBtn.addEventListener('click', async () => {
     const isFolder = String(selectedNode.id).startsWith('fld-');
     const folderNode = isFolder ? selectedNode : null;
 
-    const res = await API.get(`/api/scan/capabilities?location_id=${loc.id}`);
-    const hasQuickScan = res.ok && res.data.quick_scan;
-    ScanConfirm.open(loc, folderNode, hasQuickScan);
+    const [capRes, settingsRes] = await Promise.all([
+        API.get(`/api/scan/capabilities?location_id=${loc.id}`),
+        API.get('/api/settings'),
+    ]);
+    const hasQuickScan = capRes.ok && capRes.data.quick_scan;
+    const settings = settingsRes.ok ? settingsRes.data : {};
+    const hasSimilarity = settings.similaritySearchEnabled === '1' && !!settings.similaritySearchUrl;
+    ScanConfirm.open(loc, folderNode, hasQuickScan, hasSimilarity);
 });
 
 Consolidate.init(async (params) => {
@@ -1277,6 +1294,89 @@ Search.init({
             FileList.renderEmpty();
         }
     },
+});
+
+// ── Similarity search ──
+
+const similarityBtn = document.getElementById('btn-similarity');
+const similarityPanel = document.getElementById('similarity-panel');
+const similaritySlider = document.getElementById('similarity-threshold-slider');
+const similarityThreshold = document.getElementById('similarity-threshold');
+let similarityVisible = false;
+let _similarityUrl = '';
+
+function updateSimilarityButton(settings) {
+    const available = settings.similaritySearchEnabled === '1' && !!settings.similaritySearchUrl;
+    similarityBtn.classList.toggle('hidden', !available);
+    _similarityUrl = settings.similaritySearchUrl || '';
+    if (!available && similarityVisible) {
+        similarityVisible = false;
+        similarityPanel.classList.add('hidden');
+        similarityBtn.classList.remove('btn-active');
+    }
+}
+
+similarityBtn.addEventListener('click', () => {
+    similarityVisible = !similarityVisible;
+    similarityPanel.classList.toggle('hidden', !similarityVisible);
+    similarityBtn.classList.toggle('btn-active', similarityVisible);
+    if (similarityVisible) {
+        // Close regular search if open
+        Search.close();
+        document.getElementById('similarity-text').focus();
+    }
+});
+
+similaritySlider.addEventListener('input', () => {
+    similarityThreshold.value = similaritySlider.value;
+});
+similarityThreshold.addEventListener('input', () => {
+    similaritySlider.value = similarityThreshold.value;
+});
+
+document.getElementById('similarity-go').addEventListener('click', async () => {
+    const useImage = document.getElementById('similarity-use-image').checked;
+    const text = document.getElementById('similarity-text').value.trim();
+    const threshold = parseFloat(similarityThreshold.value);
+
+    if (!useImage && !text) {
+        Toast.error('Enter search features or select "similar to selected image".');
+        return;
+    }
+    if (useImage && !selectedFile) {
+        Toast.error('Select an image first.');
+        return;
+    }
+
+    const payload = { threshold };
+    if (text) payload.text = text;
+    if (useImage && selectedFile) payload.file_id = selectedFile.id;
+
+    FileList.showLoading();
+    const res = await API.post('/api/search/similarity', payload);
+    if (res.ok) {
+        FileList.showSearchResults(res.data, {});
+        Detail.renderSearchResults(res.data, {});
+    } else {
+        FileList.renderEmpty();
+        Toast.error(res.error || 'Similarity search failed.');
+    }
+});
+
+document.getElementById('similarity-clear').addEventListener('click', () => {
+    document.getElementById('similarity-use-image').checked = false;
+    document.getElementById('similarity-text').value = '';
+    similaritySlider.value = 0.3;
+    similarityThreshold.value = 0.3;
+    if (selectedNode) {
+        FileList.showFolder(selectedNode.id);
+    } else {
+        FileList.renderEmpty();
+    }
+});
+
+document.getElementById('similarity-text').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('similarity-go').click();
 });
 
 // WebSocket event handlers
@@ -2282,6 +2382,7 @@ WS.on('settings_changed', async (msg) => {
         document.title = 'File Hunter';
         document.getElementById('app-title').textContent = 'File Hunter';
     }
+    if (msg.settings) updateSimilarityButton(msg.settings);
     // Reload tree and file list when showHiddenFiles changes
     await reloadTreeAndFileList();
     await refreshDetailPanel();

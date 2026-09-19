@@ -613,6 +613,12 @@ async def _handle_transcode(op_id: int, agent_id: int | None, params: dict):
     await run_transcode(op_id, agent_id, params)
 
 
+async def _handle_similarity_scan(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.similarity import run_similarity_scan
+
+    await run_similarity_scan(op_id, agent_id, params)
+
+
 _HANDLERS = {
     "scan_dir": _handle_scan_dir,
     "backfill_location": _handle_backfill_location,
@@ -625,6 +631,7 @@ _HANDLERS = {
     "batch_tag": _handle_batch_tag,
     "reset_stale": _handle_reset_stale,
     "transcode": _handle_transcode,
+    "similarity_scan": _handle_similarity_scan,
 }
 
 

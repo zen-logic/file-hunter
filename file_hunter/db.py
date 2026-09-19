@@ -278,7 +278,7 @@ async def init_db(db: aiosqlite.Connection):
     for sql in _MIGRATIONS:
         try:
             await db.execute(sql)
-            if not migrated:
+            if not migrated and sql.upper().startswith("ALTER"):
                 print("Updating database...")
                 migrated = True
         except sqlite3.OperationalError:

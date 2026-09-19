@@ -2,6 +2,7 @@ const ScanConfirm = {
     overlayEl: null,
     textEl: null,
     optionsEl: null,
+    similarityEl: null,
     onConfirm: null,
     locationNode: null,
     folderNode: null,
@@ -10,6 +11,7 @@ const ScanConfirm = {
         this.overlayEl = document.getElementById('scan-confirm-modal');
         this.textEl = document.getElementById('scan-confirm-text');
         this.optionsEl = document.getElementById('scan-confirm-options');
+        this.similarityEl = document.getElementById('scan-confirm-similarity');
         this.onConfirm = onConfirm;
 
         document.getElementById('scan-confirm-cancel').addEventListener('click', () => this.close());
@@ -26,7 +28,7 @@ const ScanConfirm = {
         });
     },
 
-    open(locationNode, folderNode, hasQuickScan) {
+    open(locationNode, folderNode, hasQuickScan, hasSimilarity) {
         this.locationNode = locationNode;
         this.folderNode = folderNode || null;
 
@@ -38,6 +40,7 @@ const ScanConfirm = {
         }
 
         this.optionsEl.style.display = hasQuickScan ? '' : 'none';
+        this.similarityEl.style.display = hasSimilarity ? '' : 'none';
 
         // Reset to full scan
         const fullRadio = this.overlayEl.querySelector('input[value="full"]');
