@@ -5,6 +5,40 @@ import Tree from './tree.js';
 import Triage from './triage.js';
 
 const PAGE_SIZE = 120;
+const GALLERY_MAX_CONCURRENT = 4;
+
+// ── Gallery image loader with concurrency cap ──
+const _galleryLoader = {
+    _queue: [],       // [{img, src}]
+    _active: 0,
+    _gen: 0,          // generation — incremented on reset to abandon old loads
+
+    reset() {
+        this._queue = [];
+        this._active = 0;
+        this._gen++;
+    },
+
+    enqueue(img, src) {
+        this._queue.push({ img, src, gen: this._gen });
+        this._pump();
+    },
+
+    _pump() {
+        while (this._active < GALLERY_MAX_CONCURRENT && this._queue.length > 0) {
+            const entry = this._queue.shift();
+            if (entry.gen !== this._gen) continue;  // stale
+            this._active++;
+            const done = () => {
+                this._active--;
+                this._pump();
+            };
+            entry.img.onload = done;
+            entry.img.onerror = done;
+            entry.img.src = entry.src;
+        }
+    },
+};
 
 function formatSize(bytes) {
     if (bytes === null || bytes === undefined) return '';
@@ -483,6 +517,8 @@ const FileList = {
     },
 
     renderEmpty() {
+        _galleryLoader.reset();
+        this._galleryDirty = true;
         this.currentItems = null;
         this.currentFolders = null;
         this.currentBreadcrumb = null;
@@ -536,6 +572,8 @@ const FileList = {
     },
 
     showLoading() {
+        _galleryLoader.reset();
+        this._galleryDirty = true;
         this.breadcrumbEl.innerHTML = '';
         this.el.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div><span>Searching\u2026</span></div>';
     },
@@ -702,6 +740,7 @@ const FileList = {
             return;
         }
         this.el.scrollTop = 0;
+        this._galleryDirty = true;
         this.render();
     },
 
@@ -879,6 +918,18 @@ const FileList = {
 
     render() {
         if (this._viewMode === 'gallery') {
+            // If the gallery grid already exists with the right items,
+            // just update selection classes instead of rebuilding the DOM
+            const grid = this.el.querySelector('.file-gallery');
+            if (grid && grid.childElementCount > 0 && !this._galleryDirty) {
+                grid.querySelectorAll('.gallery-item').forEach(cell => {
+                    const key = cell.dataset.key;
+                    cell.classList.toggle('selected', key != null && this.selectedItems.has(key));
+                });
+                this._scrollSelectedIntoView();
+                return;
+            }
+            this._galleryDirty = false;
             this._renderGallery();
             return;
         }
@@ -1087,6 +1138,7 @@ const FileList = {
     },
 
     _renderGallery() {
+        _galleryLoader.reset();
         const items = this._getDisplayItems();
         const grid = document.createElement('div');
         grid.className = 'file-gallery';
@@ -1094,6 +1146,7 @@ const FileList = {
         items.forEach((file, idx) => {
             const cell = document.createElement('div');
             cell.className = 'gallery-item';
+            cell.dataset.key = itemKey(file);
             if (this._isSelected(file)) cell.classList.add('selected');
             if (file.stale) cell.classList.add('stale');
             if (file.pendingOp) cell.classList.add('pending-op');
@@ -1114,9 +1167,8 @@ const FileList = {
                 const token = localStorage.getItem('fh-token');
                 let src = `/api/files/${file.id}/content`;
                 if (token) src += `?token=${encodeURIComponent(token)}`;
-                img.src = src;
                 img.alt = file.name;
-                img.loading = 'lazy';
+                _galleryLoader.enqueue(img, src);
                 cell.appendChild(img);
 
                 const label = document.createElement('div');

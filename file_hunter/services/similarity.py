@@ -350,16 +350,30 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     scan_path = params.get("path", root_path)
     recursive = params.get("recursive", True)
     embed_url = params["embed_url"]
+    embed_types = params.get("embed_types")  # "image", "document", or None (all)
+
+    if embed_types == "image":
+        scan_label = f"Image similarity: {location_name}"
+    elif embed_types == "document":
+        scan_label = f"Document content: {location_name}"
+    else:
+        scan_label = f"Similarity: {location_name}"
 
     await broadcast({
         "type": "scan_started",
         "locationId": location_id,
-        "location": f"Similarity: {location_name}",
+        "location": scan_label,
     })
 
-    _EMBEDDABLE_TYPES = ("image", "document", "text")
     _EMBEDDABLE_IMAGE_SUBTYPES = {"jpg", "png", "gif", "bmp", "webp", "tiff"}
     _MIN_IMAGE_SIZE = 10000  # skip images under 10KB (thumbnails, icons)
+
+    if embed_types == "image":
+        _EMBEDDABLE_TYPES = ("image",)
+    elif embed_types == "document":
+        _EMBEDDABLE_TYPES = ("document", "text")
+    else:
+        _EMBEDDABLE_TYPES = ("image", "document", "text")
 
     # Find all embeddable files in the catalogue for this scope
     type_placeholders = ",".join("?" for _ in _EMBEDDABLE_TYPES)
@@ -411,7 +425,7 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
         await broadcast({
             "type": "scan_completed",
             "locationId": location_id,
-            "location": f"Similarity: {location_name}",
+            "location": scan_label,
             "filesFound": 0,
         })
         return
@@ -453,8 +467,32 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
 
     done = 0
     errors = 0
+    _BATCH_SIZE = 100
 
-    # Process images
+    # Process images — accumulate and upsert in batches
+    batch_ids = []
+    batch_embeddings = []
+    batch_documents = []
+    batch_metadatas = []
+
+    def _flush_img_batch():
+        nonlocal batch_ids, batch_embeddings, batch_documents, batch_metadatas
+        if not batch_ids:
+            return
+        try:
+            img_collection.upsert(
+                ids=batch_ids,
+                embeddings=batch_embeddings,
+                documents=batch_documents,
+                metadatas=batch_metadatas,
+            )
+        except Exception as e:
+            logger.warning("ChromaDB batch upsert failed (%d images): %s", len(batch_ids), e)
+        batch_ids = []
+        batch_embeddings = []
+        batch_documents = []
+        batch_metadatas = []
+
     for row in images_to_process:
         file_id = row["id"]
         full_path = row["full_path"]
@@ -471,29 +509,28 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             done += 1
             continue
 
-        try:
-            img_collection.upsert(
-                ids=[str(file_id)],
-                embeddings=[embedding],
-                documents=[full_path],
-                metadatas=[{"file_id": file_id, "location_id": location_id}],
-            )
-        except Exception as e:
-            logger.warning("ChromaDB upsert failed for file %d: %s", file_id, e)
-            errors += 1
+        batch_ids.append(str(file_id))
+        batch_embeddings.append(embedding)
+        batch_documents.append(full_path)
+        batch_metadatas.append({"file_id": file_id, "location_id": location_id})
+
+        if len(batch_ids) >= _BATCH_SIZE:
+            _flush_img_batch()
 
         done += 1
         if done % 10 == 0 or done == to_process_count:
             await broadcast({
                 "type": "scan_progress",
                 "locationId": location_id,
-                "location": f"Similarity: {location_name}",
+                "location": scan_label,
                 "phase": "cataloging",
                 "catalogDone": done + skipped,
                 "catalogTotal": total,
             })
 
-    # Process documents
+    _flush_img_batch()
+
+    # Process documents — already batched per file (multiple chunks per upsert)
     for row in docs_to_process:
         file_id = row["id"]
         full_path = row["full_path"]
@@ -539,7 +576,7 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             await broadcast({
                 "type": "scan_progress",
                 "locationId": location_id,
-                "location": f"Similarity: {location_name}",
+                "location": scan_label,
                 "phase": "cataloging",
                 "catalogDone": done + skipped,
                 "catalogTotal": total,
@@ -552,6 +589,6 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     await broadcast({
         "type": "scan_completed",
         "locationId": location_id,
-        "location": f"Similarity: {location_name}",
+        "location": scan_label,
         "filesFound": done - errors + skipped,
     })

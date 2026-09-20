@@ -30,6 +30,8 @@ _pause_event.set()  # start in running state
 
 # Running operations: op_id -> (agent_id, asyncio.Task)
 _running_ops: dict[int, tuple[int | None, asyncio.Task]] = {}
+# Running operation types: op_id -> op_type string
+_running_op_types: dict[int, str] = {}
 
 
 async def enqueue(op_type: str, agent_id: int | None, params: dict) -> int:
@@ -246,6 +248,7 @@ async def stop():
     for op_id in list(_running_ops):
         unregister(f"op-{op_id}")
     _running_ops.clear()
+    _running_op_types.clear()
 
     logger.info("Queue manager stopped")
 
@@ -380,6 +383,7 @@ async def _run():
 
                 task = asyncio.create_task(_execute(op_type, op_id, agent_id, params))
                 _running_ops[op_id] = (agent_id, task)
+                _running_op_types[op_id] = op_type
 
             # Broadcast updated queue state (pending→running transitions)
             await _broadcast_queue_state()
@@ -403,6 +407,7 @@ async def _reap_finished():
 
         reaped = True
         del _running_ops[op_id]
+        _running_op_types.pop(op_id, None)
 
         unregister(f"op-{op_id}")
 
@@ -437,11 +442,22 @@ async def _reap_finished():
         await _broadcast_queue_state()
 
 
+# Op types that write to a shared resource (ChromaDB) and must not run
+# concurrently with each other, regardless of which agent they belong to.
+_SERIALISE_GROUP = {"similarity_scan", "embed_file"}
+
+
 async def _next_pending_ops(busy_agents: set) -> list[dict]:
     """Fetch pending operations for agents that are online and not busy."""
     from file_hunter.ws.agent import get_online_agent_ids
 
     online_agents = set(get_online_agent_ids())
+
+    # Check if a serialised op is already running
+    serialised_running = any(
+        op_type in _SERIALISE_GROUP
+        for op_type in _running_op_types.values()
+    )
 
     async with read_db() as db:
         rows = await db.execute_fetchall(
@@ -451,12 +467,18 @@ async def _next_pending_ops(busy_agents: set) -> list[dict]:
         )
     result = []
     seen_agents: set[int | None] = set()
+    serialised_seen = False
     for row in rows:
         aid = row["agent_id"]
         if aid is not None and aid not in online_agents:
             continue
         if aid in busy_agents or aid in seen_agents:
             continue
+        # Serialised ops: skip if one is already running or already picked
+        if row["type"] in _SERIALISE_GROUP:
+            if serialised_running or serialised_seen:
+                continue
+            serialised_seen = True
         seen_agents.add(aid)
         result.append(dict(row))
     return result

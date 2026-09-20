@@ -565,12 +565,11 @@ ScanConfirm.init(async (loc, folder, scanType) => {
     let endpoint;
     if (scanType === 'quick') {
         endpoint = '/api/scan/quick';
-    } else if (scanType === 'similarity-full') {
+    } else if (scanType.startsWith('similarity-')) {
         endpoint = '/api/scan/similarity';
-        payload.recursive = true;
-    } else if (scanType === 'similarity-quick') {
-        endpoint = '/api/scan/similarity';
-        payload.recursive = false;
+        payload.recursive = scanType.endsWith('-full');
+        if (scanType.startsWith('similarity-image-')) payload.embed_types = 'image';
+        else if (scanType.startsWith('similarity-doc-')) payload.embed_types = 'document';
     } else {
         endpoint = '/api/scan';
     }

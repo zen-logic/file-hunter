@@ -244,6 +244,8 @@ async def start_similarity_scan(request: Request):
 
     label = f"{location_name} / {folder_name}" if folder_name else location_name
 
+    embed_types = body.get("embed_types")  # "image", "document", or None (all)
+
     payload = {
         "location_id": loc_id,
         "location_name": label,
@@ -252,6 +254,8 @@ async def start_similarity_scan(request: Request):
         "recursive": recursive,
         "embed_url": embed_url,
     }
+    if embed_types:
+        payload["embed_types"] = embed_types
     if raw_folder_id:
         payload["folder_id"] = int(str(raw_folder_id).replace("fld-", ""))
 
@@ -262,7 +266,7 @@ async def start_similarity_scan(request: Request):
             "entry": {
                 "queue_id": op_id,
                 "location_id": loc_id,
-                "name": f"Similarity: {label}",
+                "name": f"{'Image similarity' if embed_types == 'image' else 'Document content' if embed_types == 'document' else 'Similarity'}: {label}",
             },
             "queue": (await get_queue_status_for_broadcast()),
         }
