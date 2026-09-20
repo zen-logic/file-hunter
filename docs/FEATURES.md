@@ -128,7 +128,7 @@ All connected browsers see scan progress, uploads, and changes as they happen.
 
 ## Settings
 
-Server name, show/hide hidden files, user management, application token management, theme selection and editing, catalogue repair, and queue reset.
+Server name. Theme selection with built-in themes and a full theme editor for creating custom themes. Show/hide hidden files. Enable similarity search and configure the embedding service URL. User management with multiple accounts. Application tokens for API access. Maintenance: repair catalogue (incomplete scans, missing hashes, duplicate counts, folder totals) and reset queues (cancel all operations, clear temp files and pending queues).
 
 ## Self-hosted
 
