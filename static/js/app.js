@@ -268,14 +268,8 @@ function wireTranscodeBtn() {
         btn.addEventListener('click', async () => {
             const quality = await _pickTranscodeQuality(selectedFile.name || '');
             if (!quality) return;
-            btn.disabled = true;
-            btn.textContent = 'Starting…';
             const res = await API.post(`/api/files/${selectedFile.id}/transcode`, { quality });
-            if (res.ok) {
-                btn.textContent = 'Transcoding…';
-            } else {
-                btn.disabled = false;
-                btn.textContent = 'Transcode';
+            if (!res.ok) {
                 Toast.error(res.data?.detail || 'Transcode failed to start.');
             }
         });
@@ -286,14 +280,8 @@ function wireEmbedBtn() {
     const btn = document.getElementById('detail-embed');
     if (btn && selectedFile) {
         btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            btn.textContent = 'Starting…';
             const res = await API.post(`/api/files/${selectedFile.id}/embed`);
-            if (res.ok) {
-                btn.textContent = 'Embedding…';
-            } else {
-                btn.disabled = false;
-                btn.textContent = 'Embed';
+            if (!res.ok) {
                 Toast.error(res.error || 'Embedding failed to start.');
             }
         });
@@ -2362,15 +2350,8 @@ WS.on('transcode_started', (msg) => {
     ActivityLog.add(`Queued for conversion: <b>${msg.filename}</b>`);
 });
 
-WS.on('transcode_progress', (msg) => {
-    const pct = msg.percent != null ? `${msg.percent}%` : '';
-    const enc = msg.encoder ? ` [${msg.encoder}]` : '';
-    // Update the button if viewing the file being converted
-    const btn = document.getElementById('detail-transcode');
-    if (btn && selectedFile && msg.fileId === selectedFile.id) {
-        btn.disabled = true;
-        btn.textContent = pct ? `Converting ${pct}${enc}` : `Converting…${enc}`;
-    }
+WS.on('transcode_progress', () => {
+    // Progress shown via server_activity — nothing to do here
 });
 
 WS.on('transcode_complete', async (msg) => {
@@ -2395,11 +2376,6 @@ WS.on('transcode_cancelled', (msg) => {
 
 WS.on('embed_started', (msg) => {
     ActivityLog.add(`Embedding: <b>${msg.filename}</b>`);
-    const btn = document.getElementById('detail-embed');
-    if (btn && selectedFile && msg.fileId === selectedFile.id) {
-        btn.disabled = true;
-        btn.textContent = 'Embedding…';
-    }
 });
 
 WS.on('embed_completed', (msg) => {
@@ -2410,10 +2386,18 @@ WS.on('embed_completed', (msg) => {
         ActivityLog.add(`Embedded: <b>${msg.filename}</b> (${msg.chunks} chunks)`);
         Toast.success(`Embedded: ${msg.filename} (${msg.chunks} chunks)`);
     }
-    const btn = document.getElementById('detail-embed');
-    if (btn && selectedFile && msg.fileId === selectedFile.id) {
-        btn.disabled = !msg.error;
-        btn.textContent = msg.error ? 'Embed' : 'Embedded';
+});
+
+WS.on('embed_delete_completed', (msg) => {
+    const type = msg.embedType === 'image' ? 'image' : 'document';
+    if (msg.error) {
+        Toast.error(`Failed to delete ${type} embeddings: ${msg.error}`);
+        ActivityLog.add(`Failed to delete ${type} embeddings: ${msg.scope}`);
+    } else if (msg.deleted) {
+        Toast.success(`Deleted ${msg.deleted} ${type} embedding${msg.deleted !== 1 ? 's' : ''}: ${msg.scope}`);
+        ActivityLog.add(`Deleted ${msg.deleted} ${type} embedding${msg.deleted !== 1 ? 's' : ''}: <b>${msg.scope}</b>`);
+    } else {
+        Toast.info(`No ${type} embeddings found: ${msg.scope}`);
     }
 });
 

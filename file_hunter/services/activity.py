@@ -23,6 +23,8 @@ _OP_LABELS = {
     "rehash_partial": "Re-hashing:",
     "hash_file": "Hashing file:",
     "transcode": "Converting:",
+    "similarity_scan": "Embedding:",
+    "embed_file": "Embedding:",
 }
 
 

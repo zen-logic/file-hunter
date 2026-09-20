@@ -14,6 +14,7 @@ from file_hunter.helpers import get_effective_hash, post_op_stats
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.deferred_ops import queue_deferred_op
+from file_hunter.services.similarity import remove_embeddings
 from file_hunter.stats_db import apply_dup_deltas, remove_folder_stats, update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
@@ -96,6 +97,7 @@ async def delete_file(db, file_id: int) -> dict:
     await db.commit()
 
     await remove_file_hashes([file_id])
+    remove_embeddings([file_id])
 
     await update_stats_for_files(
         location_id,
@@ -253,6 +255,7 @@ async def delete_file_and_duplicates(db, file_id: int) -> dict:
                     dup_deltas_by_loc[loc_id].append((rec["folder_id"], -1))
 
         await remove_file_hashes(deleted_ids)
+        remove_embeddings(deleted_ids)
 
     # Update stats per affected location
     if removed_by_loc:
@@ -433,6 +436,7 @@ async def delete_folder(db, folder_id: int) -> dict:
 
     if deleted_file_ids:
         await remove_file_hashes(deleted_file_ids)
+        remove_embeddings(deleted_file_ids)
 
     # Update stats: remove file deltas from ancestor folders, remove folder_stats entries
     if removed_deltas:
@@ -610,8 +614,9 @@ async def reset_stale(
                     f"DELETE FROM folders WHERE id IN ({bph})", batch_ids
                 )
 
-        # --- Cleanup hashes.db ---
+        # --- Cleanup hashes.db and embeddings ---
         await remove_file_hashes(stale_file_ids)
+        remove_embeddings(stale_file_ids)
 
         # --- Cleanup stats.db ---
         if removed_deltas:

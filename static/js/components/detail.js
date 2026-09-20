@@ -1720,6 +1720,7 @@ const Detail = {
 
         if (s.online) this._wireSchedule(locId);
         this._applyDupRecalcOverride();
+        this._renderEmbeddingSection({ locationId: parseInt(locId) });
 
         return { online: s.online };
     },
@@ -1801,6 +1802,7 @@ const Detail = {
         `;
         this._wireBreadcrumbs();
         this._applyDupRecalcOverride();
+        this._renderEmbeddingSection({ folderId: parseInt(folderId) });
 
         const dupExcludeCb = document.getElementById('detail-dup-exclude-cb');
         if (dupExcludeCb) {
@@ -1838,6 +1840,40 @@ const Detail = {
             locationId: s.locationId || null,
             locationOnline: s.locationOnline,
         };
+    },
+
+    _renderEmbeddingSection({ locationId, folderId }) {
+        if (!this.similarityEnabled) return;
+
+        const scope = locationId ? { locationId } : { folderId };
+        const section = document.createElement('div');
+        section.className = 'detail-section';
+        section.innerHTML = `<h3>Embeddings</h3>
+            <div class="detail-btn-group" style="margin-top:0.4rem">
+                <button class="btn btn-sm" id="detail-delete-img-embeddings">Delete image embeddings</button>
+                <button class="btn btn-sm" id="detail-delete-doc-embeddings">Delete document embeddings</button>
+            </div>`;
+        this.el.appendChild(section);
+
+        document.getElementById('detail-delete-img-embeddings').addEventListener('click', async () => {
+            const ok = await ConfirmModal.open({
+                title: 'Delete image embeddings',
+                message: 'Delete image embeddings? They will need to be re-scanned to search again.',
+                confirmLabel: 'Delete',
+            });
+            if (!ok) return;
+            API.post('/api/embeddings/delete', { ...scope, type: 'image' });
+        });
+
+        document.getElementById('detail-delete-doc-embeddings').addEventListener('click', async () => {
+            const ok = await ConfirmModal.open({
+                title: 'Delete document embeddings',
+                message: 'Delete document embeddings? They will need to be re-embedded to search again.',
+                confirmLabel: 'Delete',
+            });
+            if (!ok) return;
+            API.post('/api/embeddings/delete', { ...scope, type: 'document' });
+        });
     },
 
     _wireSchedule(locId) {

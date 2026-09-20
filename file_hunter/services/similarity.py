@@ -72,6 +72,68 @@ def get_document_collection():
     )
 
 
+def remove_embeddings(file_ids: list[int]):
+    """Remove embeddings for the given file IDs from both collections.
+
+    Safe to call when similarity search is not enabled — returns silently
+    if chromadb is not available.
+    """
+    if not is_chromadb_available():
+        return
+    if not file_ids:
+        return
+    try:
+        img_coll = get_collection()
+        img_ids = [str(fid) for fid in file_ids]
+        # ChromaDB silently ignores IDs that don't exist
+        for i in range(0, len(img_ids), 500):
+            img_coll.delete(ids=img_ids[i : i + 500])
+    except Exception as e:
+        logger.warning("Failed to remove image embeddings: %s", e)
+
+    try:
+        doc_coll = get_document_collection()
+        for fid in file_ids:
+            # Document chunks are stored as "fileId_chunkN"
+            try:
+                result = doc_coll.get(where={"file_id": fid})
+                if result["ids"]:
+                    doc_coll.delete(ids=result["ids"])
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning("Failed to remove document embeddings: %s", e)
+
+
+def update_embedding_location(file_id: int, new_location_id: int):
+    """Update the location_id metadata for a file's embeddings after a cross-location move.
+
+    Safe to call when similarity search is not enabled.
+    """
+    if not is_chromadb_available():
+        return
+    str_id = str(file_id)
+    try:
+        img_coll = get_collection()
+        result = img_coll.get(ids=[str_id])
+        if result["ids"]:
+            img_coll.update(ids=[str_id], metadatas=[{"file_id": file_id, "location_id": new_location_id}])
+    except Exception as e:
+        logger.warning("Failed to update image embedding location: %s", e)
+
+    try:
+        doc_coll = get_document_collection()
+        result = doc_coll.get(where={"file_id": file_id})
+        if result["ids"]:
+            metadatas = [
+                {**m, "location_id": new_location_id}
+                for m in result["metadatas"]
+            ]
+            doc_coll.update(ids=result["ids"], metadatas=metadatas)
+    except Exception as e:
+        logger.warning("Failed to update document embedding location: %s", e)
+
+
 async def fetch_embedding(embed_url: str, image_bytes: bytes, path: str = "") -> list[float] | None:
     """Send image bytes to the embedding service, return the vector."""
     url = f"{embed_url.rstrip('/')}/api/embed/image"

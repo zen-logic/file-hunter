@@ -14,6 +14,7 @@ from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.deferred_ops import queue_deferred_op
 from file_hunter.services.delete import delete_folder
+from file_hunter.services.similarity import remove_embeddings
 from file_hunter.services.files import move_file
 from file_hunter.services.locations import move_folder
 from file_hunter.services.op_result_log import create_log
@@ -190,6 +191,7 @@ async def batch_delete(
                     await db.execute(f"DELETE FROM files WHERE id IN ({bph})", batch)
 
             await remove_file_hashes(deleted_ids)
+            remove_embeddings(deleted_ids)
 
         # Update stats once per location
         if removed_by_loc:

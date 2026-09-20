@@ -841,13 +841,15 @@ async def move_file(
         )
         await db.commit()
 
-        # Sync hashes.db location_id for cross-location moves
+        # Sync hashes.db and embedding metadata for cross-location moves
         if final_location_id != src_loc_id:
             async with hashes_writer() as hdb:
                 await hdb.execute(
                     "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
                     (final_location_id, file_id),
                 )
+            from file_hunter.services.similarity import update_embedding_location
+            update_embedding_location(file_id, final_location_id)
 
         # Update folder/location stats if file changed folder
         if moved and final_folder_id != f["folder_id"]:

@@ -1048,3 +1048,151 @@ async def file_embed(request: Request):
         "embed_url": embed_url,
     })
     return json_ok({"started": True, "op_id": op_id})
+
+
+
+async def delete_embeddings(request: Request):
+    """POST /api/embeddings/delete — remove embeddings for a location or folder.
+
+    Body: { "locationId": N, "folderId": N, "type": "image"|"document" }
+    Runs as a background task with activity tracking.
+    """
+    from file_hunter.services.similarity import is_chromadb_available
+
+    if not is_chromadb_available():
+        return json_error("Similarity search is not available.", 400)
+
+    body = await request.json()
+    location_id = body.get("locationId")
+    folder_id = body.get("folderId")
+    embed_type = body.get("type")  # "image" or "document"
+
+    if not location_id and not folder_id:
+        return json_error("locationId or folderId required", 400)
+    if embed_type not in ("image", "document"):
+        return json_error("type must be 'image' or 'document'", 400)
+
+    import asyncio
+    asyncio.create_task(_run_delete_embeddings(location_id, folder_id, embed_type))
+    return json_ok({"started": True})
+
+
+async def _run_delete_embeddings(location_id, folder_id, embed_type):
+    """Background task: delete embeddings with activity tracking."""
+    import asyncio
+    from file_hunter.services.similarity import get_collection, get_document_collection
+    from file_hunter.services.activity import register, unregister
+    from file_hunter.ws.scan import broadcast
+
+    scope_label = ""
+    if location_id:
+        async with read_db() as db:
+            row = await db.execute_fetchall("SELECT name FROM locations WHERE id = ?", (int(location_id),))
+        scope_label = row[0]["name"] if row else f"Location {location_id}"
+    elif folder_id:
+        async with read_db() as db:
+            row = await db.execute_fetchall("SELECT name FROM folders WHERE id = ?", (int(folder_id),))
+        scope_label = row[0]["name"] if row else f"Folder {folder_id}"
+
+    type_label = "image" if embed_type == "image" else "document"
+    act_name = f"embed-delete-{location_id or folder_id}"
+    register(act_name, f"Deleting {type_label} embeddings: {scope_label}")
+
+    _file_ids = []
+    if folder_id:
+        _file_ids = await _embedding_scope_file_ids(None, folder_id)
+
+    def _delete():
+        deleted = 0
+        if embed_type == "image":
+            img_coll = get_collection()
+            if location_id:
+                try:
+                    result = img_coll.get(where={"location_id": int(location_id)}, include=[])
+                    if result["ids"]:
+                        for i in range(0, len(result["ids"]), 500):
+                            img_coll.delete(ids=result["ids"][i : i + 500])
+                        deleted = len(result["ids"])
+                except Exception:
+                    pass
+            else:
+                str_ids = [str(fid) for fid in _file_ids]
+                for i in range(0, len(str_ids), 500):
+                    batch = str_ids[i : i + 500]
+                    try:
+                        result = img_coll.get(ids=batch, include=[])
+                        if result["ids"]:
+                            img_coll.delete(ids=result["ids"])
+                            deleted += len(result["ids"])
+                    except Exception:
+                        pass
+        else:
+            doc_coll = get_document_collection()
+            if location_id:
+                try:
+                    result = doc_coll.get(where={"location_id": int(location_id)}, include=["metadatas"])
+                    if result["ids"]:
+                        doc_fids = {m["file_id"] for m in result["metadatas"]}
+                        for i in range(0, len(result["ids"]), 500):
+                            doc_coll.delete(ids=result["ids"][i : i + 500])
+                        deleted = len(doc_fids)
+                except Exception:
+                    pass
+            else:
+                doc_fids = set()
+                for i in range(0, len(_file_ids), 500):
+                    batch = _file_ids[i : i + 500]
+                    try:
+                        result = doc_coll.get(where={"file_id": {"$in": batch}}, include=[])
+                        if result["ids"]:
+                            for cid in result["ids"]:
+                                doc_fids.add(cid.split("_chunk")[0])
+                            doc_coll.delete(ids=result["ids"])
+                    except Exception:
+                        pass
+                deleted = len(doc_fids)
+        return deleted
+
+    try:
+        deleted = await asyncio.to_thread(_delete)
+        logger.info("Deleted %d %s embeddings for %s",
+                    deleted, embed_type, scope_label)
+        await broadcast({
+            "type": "embed_delete_completed",
+            "embedType": embed_type,
+            "deleted": deleted,
+            "scope": scope_label,
+        })
+    except Exception as e:
+        logger.exception("Failed to delete %s embeddings for %s", embed_type, scope_label)
+        await broadcast({
+            "type": "embed_delete_completed",
+            "embedType": embed_type,
+            "deleted": 0,
+            "scope": scope_label,
+            "error": str(e),
+        })
+    finally:
+        unregister(act_name)
+
+
+async def _embedding_scope_file_ids(location_id, folder_id) -> list[int]:
+    """Get file IDs within a location or folder scope."""
+    async with read_db() as db:
+        if folder_id:
+            folder_id = int(folder_id)
+            rows = await db.execute_fetchall(
+                """WITH RECURSIVE descendants(id) AS (
+                       SELECT ? UNION ALL
+                       SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id
+                   )
+                   SELECT id FROM files WHERE folder_id IN (SELECT id FROM descendants)""",
+                (folder_id,),
+            )
+        else:
+            location_id = int(location_id)
+            rows = await db.execute_fetchall(
+                "SELECT id FROM files WHERE location_id = ?",
+                (location_id,),
+            )
+    return [r["id"] for r in rows]
