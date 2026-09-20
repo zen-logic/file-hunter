@@ -238,6 +238,71 @@ body::after {
 .search-add-btns { display: flex; gap: 0.5rem; }
 .search-add-btns button { font-size: var(--font-size-sm); }
 
+/* Multi-select checkbox dropdown */
+.multiselect-dropdown {
+    position: relative;
+    min-width: 10rem;
+}
+.multiselect-dropdown-toggle {
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-size: var(--font-size-base);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    user-select: none;
+    white-space: nowrap;
+}
+.multiselect-dropdown-toggle:hover {
+    border-color: var(--color-primary);
+}
+.multiselect-dropdown-toggle::after {
+    content: '\25BE';
+    font-size: 0.7em;
+    opacity: 0.6;
+}
+.multiselect-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 100;
+    min-width: 100%;
+    max-height: 14rem;
+    overflow-y: auto;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    margin-top: 2px;
+    padding: 0.25rem 0;
+}
+.multiselect-dropdown.open .multiselect-dropdown-menu {
+    display: block;
+}
+.multiselect-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+    cursor: pointer;
+    user-select: none;
+}
+.multiselect-dropdown-item:hover {
+    background: var(--color-hover);
+}
+.multiselect-dropdown-item input {
+    accent-color: var(--color-primary);
+    cursor: pointer;
+}
+
 .toolbar-actions {
     display: flex;
     gap: 0.5rem;

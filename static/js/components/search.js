@@ -44,6 +44,7 @@ const Search = {
     visible: false,
     onSearch: null,
     onClear: null,
+    onContentSearch: null,
 
     // Advanced mode state
     mode: 'basic',
@@ -51,12 +52,13 @@ const Search = {
     nextCondId: 0,
     scopeNode: null,
 
-    init({ onSearch, onClear }) {
+    init({ onSearch, onClear, onContentSearch }) {
         this.panelEl = document.getElementById('search-panel');
         this.toggleBtn = document.getElementById('btn-search');
         this.searchBtn = document.getElementById('search-go');
         this.onSearch = onSearch;
         this.onClear = onClear;
+        this.onContentSearch = onContentSearch;
 
         this.toggleBtn.addEventListener('click', () => this.toggle());
 
@@ -76,14 +78,6 @@ const Search = {
         document.getElementById('search-folders').addEventListener('change', (e) => {
             document.getElementById('search-files-row').classList.toggle('hidden', !e.target.checked);
         });
-
-        // Semantic threshold slider sync
-        const semSlider = document.getElementById('search-semantic-slider');
-        const semThreshold = document.getElementById('search-semantic-threshold');
-        if (semSlider && semThreshold) {
-            semSlider.addEventListener('input', () => { semThreshold.value = semSlider.value; });
-            semThreshold.addEventListener('input', () => { semSlider.value = semThreshold.value; });
-        }
 
         this._updateSearchBtn();
         this._initAdvanced();
@@ -113,11 +107,6 @@ const Search = {
         document.getElementById('search-folders').checked = false;
         document.getElementById('search-files-row').classList.add('hidden');
         document.getElementById('search-dupes').checked = false;
-        // Clear content
-        this._clearContent();
-        document.getElementById('search-content-check').checked = false;
-        document.getElementById('search-content-fields').classList.add('hidden');
-        document.getElementById('search-catalogue-fields').classList.remove('hidden');
         // Clear advanced
         this._clearAdvanced();
         // Uncheck scope but keep bar visible
@@ -148,7 +137,6 @@ const Search = {
 
     _getValues() {
         if (this.mode === 'advanced') return this._getAdvancedValues();
-        if (this.mode === 'content') return this._getContentValues();
         const values = {
             name: document.getElementById('search-name').value.trim(),
             nameMatch: document.getElementById('search-name-match').value,
@@ -174,22 +162,8 @@ const Search = {
         return values;
     },
 
-    _getContentValues() {
-        const values = {
-            mode: 'content',
-            semantic: document.getElementById('search-semantic').value.trim(),
-            semanticThreshold: document.getElementById('search-semantic-threshold').value,
-        };
-        if (document.getElementById('search-scope-check').checked && this.scopeNode) {
-            values.scopeType = this.scopeNode.type;
-            values.scopeId = this.scopeNode.id;
-        }
-        return values;
-    },
-
     _hasFilters() {
         if (this.mode === 'advanced') return this._hasAdvancedFilters();
-        if (this.mode === 'content') return !!document.getElementById('search-semantic').value.trim();
         const v = this._getValues();
         return v.name || v.type || v.description || v.tags ||
                v.sizeMin || v.sizeMax || v.minDups || v.maxDups ||
@@ -199,17 +173,9 @@ const Search = {
     _updateSearchBtn() {
         if (this.mode === 'advanced') {
             document.getElementById('search-adv-go').disabled = !this._hasAdvancedFilters();
-        } else if (this.mode === 'content') {
-            document.getElementById('search-content-go').disabled = !this._hasFilters();
         } else {
             this.searchBtn.disabled = !this._hasFilters();
         }
-    },
-
-    _clearContent() {
-        document.getElementById('search-semantic').value = '';
-        document.getElementById('search-semantic-slider').value = 0.3;
-        document.getElementById('search-semantic-threshold').value = 0.3;
     },
 
     _doSearch() {
@@ -219,13 +185,6 @@ const Search = {
     },
 
     _doClear() {
-        if (this.mode === 'content') {
-            this._clearContent();
-            document.getElementById('search-scope-check').checked = false;
-            this._updateSearchBtn();
-            if (this.onClear) this.onClear();
-            return;
-        }
         if (this.mode === 'advanced') {
             this._clearAdvanced();
             document.getElementById('search-scope-check').checked = false;
@@ -255,25 +214,6 @@ const Search = {
         document.getElementById('search-adv-go').addEventListener('click', () => this._doSearch());
         document.getElementById('search-adv-clear').addEventListener('click', () => this._doClear());
 
-        // Content search checkbox
-        document.getElementById('search-content-check').addEventListener('change', (e) => {
-            const contentMode = e.target.checked;
-            document.getElementById('search-content-fields').classList.toggle('hidden', !contentMode);
-            document.getElementById('search-catalogue-fields').classList.toggle('hidden', contentMode);
-            this.mode = contentMode ? 'content' : 'basic';
-            this._updateSearchBtn();
-            if (contentMode) document.getElementById('search-semantic').focus();
-        });
-
-        // Content mode buttons
-        document.getElementById('search-content-go').addEventListener('click', () => this._doSearch());
-        document.getElementById('search-content-clear').addEventListener('click', () => this._doClear());
-        document.getElementById('search-content-save').addEventListener('click', () => this._saveSearch());
-        document.getElementById('search-semantic').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this._doSearch();
-        });
-        document.getElementById('search-semantic').addEventListener('input', () => this._updateSearchBtn());
-
         // Restore mode from localStorage
         const saved = localStorage.getItem('fh-search-mode');
         if (saved === 'advanced') {
@@ -287,7 +227,7 @@ const Search = {
 
     _toggleMode() {
         const modeLink = document.getElementById('search-mode-link');
-        if (this.mode === 'basic' || this.mode === 'content') {
+        if (this.mode === 'basic') {
             this.mode = 'advanced';
             document.getElementById('search-basic').classList.add('hidden');
             document.getElementById('search-advanced').classList.remove('hidden');
@@ -299,9 +239,6 @@ const Search = {
             this.mode = 'basic';
             document.getElementById('search-basic').classList.remove('hidden');
             document.getElementById('search-advanced').classList.add('hidden');
-            document.getElementById('search-content-check').checked = false;
-            document.getElementById('search-content-fields').classList.add('hidden');
-            document.getElementById('search-catalogue-fields').classList.remove('hidden');
             modeLink.textContent = 'Advanced';
             document.getElementById('search-name').focus();
         }
@@ -723,17 +660,10 @@ const Search = {
 
     async _applySavedSearch(params) {
         if (params.mode === 'content') {
-            if (this.mode === 'advanced') this._toggleMode();
-            this.mode = 'content';
-            document.getElementById('search-content-check').checked = true;
-            document.getElementById('search-content-fields').classList.remove('hidden');
-            document.getElementById('search-catalogue-fields').classList.add('hidden');
-            document.getElementById('search-semantic').value = params.semantic || '';
-            if (params.semanticThreshold) {
-                document.getElementById('search-semantic-threshold').value = params.semanticThreshold;
-                document.getElementById('search-semantic-slider').value = params.semanticThreshold;
-            }
-        } else if (params.mode === 'advanced') {
+            if (this.onContentSearch) this.onContentSearch(params);
+            return;
+        }
+        if (params.mode === 'advanced') {
             if (this.mode !== 'advanced') this._toggleMode();
             this._clearAdvanced();
             // Rebuild conditions from saved params

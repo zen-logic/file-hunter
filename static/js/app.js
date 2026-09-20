@@ -1,5 +1,6 @@
 import API from './api.js';
 import icons from './icons.js';
+import PromptModal from './components/prompt.js';
 import Tree from './components/tree.js';
 import FileList from './components/filelist.js';
 import Detail from './components/detail.js';
@@ -984,6 +985,11 @@ Tree.init(async (node) => {
         similarityPanel.classList.add('hidden');
         similarityBtn.classList.remove('btn-active');
     }
+    if (contentSearchVisible) {
+        contentSearchVisible = false;
+        contentSearchPanel.classList.add('hidden');
+        contentSearchBtn.classList.remove('btn-active');
+    }
     const detailPromise = node.type === 'location'
         ? Detail.renderLocation(node)
         : Detail.renderFolder(node);
@@ -1244,12 +1250,31 @@ AddLocationModal.init(async ({ name, path }) => {
 });
 
 Search.init({
+    async onContentSearch(params) {
+        // Open content search panel with saved params
+        contentSearchVisible = true;
+        contentSearchPanel.classList.remove('hidden');
+        contentSearchBtn.classList.add('btn-active');
+        similarityVisible = false;
+        similarityPanel.classList.add('hidden');
+        similarityBtn.classList.remove('btn-active');
+        document.getElementById('content-search-text').value = params.semantic || '';
+        if (params.semanticThreshold) {
+            contentSearchThreshold.value = params.semanticThreshold;
+            contentSearchSlider.value = params.semanticThreshold;
+        }
+        // Restore location filter
+        await _simLocLoad();
+        _csLocSelected.clear();
+        if (params.semanticLocations && Array.isArray(params.semanticLocations)) {
+            for (const id of params.semanticLocations) _csLocSelected.add(id);
+        }
+        _csLocRender();
+        document.getElementById('content-search-go').click();
+    },
     async onSearch(values) {
         const params = new URLSearchParams();
-        if (values.mode === 'content') {
-            params.set('semantic', values.semantic);
-            params.set('semanticThreshold', values.semanticThreshold);
-        } else if (values.mode === 'advanced') {
+        if (values.mode === 'advanced') {
             params.set('mode', 'advanced');
             values.conditions.forEach((c, i) => {
                 params.set(`c${i}_field`, c.field);
@@ -1335,16 +1360,95 @@ const similarityThreshold = document.getElementById('similarity-threshold');
 let similarityVisible = false;
 let _similarityUrl = '';
 
+// ── Similarity location filter ──
+const _simLocDropdown = document.getElementById('similarity-locations');
+const _simLocToggle = _simLocDropdown.querySelector('.multiselect-dropdown-toggle');
+const _simLocMenu = _simLocDropdown.querySelector('.multiselect-dropdown-menu');
+let _simLocations = [];  // [{id, label}]
+let _simLocSelected = new Set();  // selected location IDs (ints)
+let _simLocLoaded = false;
+
+_simLocToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    _simLocDropdown.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+    if (!_simLocDropdown.contains(e.target)) {
+        _simLocDropdown.classList.remove('open');
+    }
+});
+
+function _simLocUpdateLabel() {
+    if (_simLocSelected.size === 0 || _simLocSelected.size === _simLocations.length) {
+        _simLocToggle.textContent = 'All locations';
+    } else if (_simLocSelected.size === 1) {
+        const loc = _simLocations.find(l => _simLocSelected.has(l.id));
+        _simLocToggle.textContent = loc ? loc.label : '1 location';
+    } else {
+        _simLocToggle.textContent = `${_simLocSelected.size} locations`;
+    }
+}
+
+function _simLocRender() {
+    _simLocMenu.innerHTML = '';
+    for (const loc of _simLocations) {
+        const item = document.createElement('label');
+        item.className = 'multiselect-dropdown-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = _simLocSelected.has(loc.id);
+        cb.addEventListener('change', () => {
+            if (cb.checked) _simLocSelected.add(loc.id);
+            else _simLocSelected.delete(loc.id);
+            _simLocUpdateLabel();
+        });
+        const span = document.createElement('span');
+        span.textContent = loc.label;
+        item.appendChild(cb);
+        item.appendChild(span);
+        _simLocMenu.appendChild(item);
+    }
+    _simLocUpdateLabel();
+}
+
+async function _simLocLoad() {
+    if (_simLocLoaded) return;
+    const res = await API.get('/api/locations');
+    if (!res.ok) return;
+    _simLocations = res.data.map(l => ({
+        id: parseInt(l.id.replace('loc-', ''), 10),
+        label: l.label,
+    }));
+    _simLocLoaded = true;
+    _simLocRender();
+}
+
+function _simLocReset() {
+    _simLocSelected.clear();
+    _simLocRender();
+}
+
+function _simLocGetIds() {
+    // Empty or all selected = no filter
+    if (_simLocSelected.size === 0 || _simLocSelected.size === _simLocations.length) return null;
+    return [..._simLocSelected];
+}
+
 function updateSimilarityButton(settings) {
     const available = settings.similaritySearchEnabled === '1' && !!settings.similaritySearchUrl;
     similarityBtn.classList.toggle('hidden', !available);
-    document.getElementById('search-content-toggle').classList.toggle('hidden', !available);
+    contentSearchBtn.classList.toggle('hidden', !available);
     _similarityUrl = settings.similaritySearchUrl || '';
     Detail.similarityEnabled = available;
     if (!available && similarityVisible) {
         similarityVisible = false;
         similarityPanel.classList.add('hidden');
         similarityBtn.classList.remove('btn-active');
+    }
+    if (!available && contentSearchVisible) {
+        contentSearchVisible = false;
+        contentSearchPanel.classList.add('hidden');
+        contentSearchBtn.classList.remove('btn-active');
     }
 }
 
@@ -1377,17 +1481,24 @@ similarityBtn.addEventListener('click', () => {
     similarityBtn.classList.toggle('btn-active', similarityVisible);
     if (similarityVisible) {
         Search.close();
+        contentSearchVisible = false;
+        contentSearchPanel.classList.add('hidden');
+        contentSearchBtn.classList.remove('btn-active');
+        _simLocLoad();
         document.getElementById('similarity-text').focus();
     }
 });
 
-// Close similarity panel when regular search opens
+// Close similarity/content panels when regular search opens
 const _origSearchToggle = Search.toggle.bind(Search);
 Search.toggle = function() {
     if (!Search.visible) {
         similarityVisible = false;
         similarityPanel.classList.add('hidden');
         similarityBtn.classList.remove('btn-active');
+        contentSearchVisible = false;
+        contentSearchPanel.classList.add('hidden');
+        contentSearchBtn.classList.remove('btn-active');
     }
     _origSearchToggle();
 };
@@ -1418,6 +1529,8 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     if (text) payload.text = text;
     if (useImage && selectedFile) payload.file_id = selectedFile.id;
     if (hasUpload) payload.image_data = _similarityUploadData;
+    const locIds = _simLocGetIds();
+    if (locIds) payload.location_ids = locIds;
 
     FileList.showLoading();
     const res = await API.post('/api/search/similarity', payload);
@@ -1438,6 +1551,7 @@ document.getElementById('similarity-clear').addEventListener('click', () => {
     _similarityUploadData = null;
     similarityUploadFile.value = '';
     similarityUploadName.textContent = '';
+    _simLocReset();
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {
@@ -1447,6 +1561,159 @@ document.getElementById('similarity-clear').addEventListener('click', () => {
 
 document.getElementById('similarity-text').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') document.getElementById('similarity-go').click();
+});
+
+// ── Content search ──
+
+const contentSearchBtn = document.getElementById('btn-content-search');
+const contentSearchPanel = document.getElementById('content-search-panel');
+const contentSearchSlider = document.getElementById('content-search-slider');
+const contentSearchThreshold = document.getElementById('content-search-threshold');
+let contentSearchVisible = false;
+
+// Content search location filter — shares location data with similarity
+const _csLocDropdown = document.getElementById('content-search-locations');
+const _csLocToggle = _csLocDropdown.querySelector('.multiselect-dropdown-toggle');
+const _csLocMenu = _csLocDropdown.querySelector('.multiselect-dropdown-menu');
+let _csLocSelected = new Set();
+
+_csLocToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    _csLocDropdown.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+    if (!_csLocDropdown.contains(e.target)) {
+        _csLocDropdown.classList.remove('open');
+    }
+});
+
+function _csLocUpdateLabel() {
+    if (_csLocSelected.size === 0 || _csLocSelected.size === _simLocations.length) {
+        _csLocToggle.textContent = 'All locations';
+    } else if (_csLocSelected.size === 1) {
+        const loc = _simLocations.find(l => _csLocSelected.has(l.id));
+        _csLocToggle.textContent = loc ? loc.label : '1 location';
+    } else {
+        _csLocToggle.textContent = `${_csLocSelected.size} locations`;
+    }
+}
+
+function _csLocRender() {
+    _csLocMenu.innerHTML = '';
+    for (const loc of _simLocations) {
+        const item = document.createElement('label');
+        item.className = 'multiselect-dropdown-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = _csLocSelected.has(loc.id);
+        cb.addEventListener('change', () => {
+            if (cb.checked) _csLocSelected.add(loc.id);
+            else _csLocSelected.delete(loc.id);
+            _csLocUpdateLabel();
+        });
+        const span = document.createElement('span');
+        span.textContent = loc.label;
+        item.appendChild(cb);
+        item.appendChild(span);
+        _csLocMenu.appendChild(item);
+    }
+    _csLocUpdateLabel();
+}
+
+function _csLocReset() {
+    _csLocSelected.clear();
+    _csLocRender();
+}
+
+function _csLocGetIds() {
+    if (_csLocSelected.size === 0 || _csLocSelected.size === _simLocations.length) return null;
+    return [..._csLocSelected];
+}
+
+contentSearchBtn.addEventListener('click', () => {
+    contentSearchVisible = !contentSearchVisible;
+    contentSearchPanel.classList.toggle('hidden', !contentSearchVisible);
+    contentSearchBtn.classList.toggle('btn-active', contentSearchVisible);
+    if (contentSearchVisible) {
+        Search.close();
+        similarityVisible = false;
+        similarityPanel.classList.add('hidden');
+        similarityBtn.classList.remove('btn-active');
+        _simLocLoad().then(() => _csLocRender());
+        document.getElementById('content-search-text').focus();
+    }
+});
+
+contentSearchSlider.addEventListener('input', () => {
+    contentSearchThreshold.value = contentSearchSlider.value;
+});
+contentSearchThreshold.addEventListener('input', () => {
+    contentSearchSlider.value = contentSearchThreshold.value;
+});
+
+document.getElementById('content-search-go').addEventListener('click', async () => {
+    const text = document.getElementById('content-search-text').value.trim();
+    const threshold = parseFloat(contentSearchThreshold.value);
+    if (!text) {
+        Toast.error('Enter a content search query.');
+        return;
+    }
+    const params = new URLSearchParams();
+    params.set('semantic', text);
+    params.set('semanticThreshold', threshold);
+    const csLocIds = _csLocGetIds();
+    if (csLocIds) params.set('semanticLocations', csLocIds.join(','));
+    params.set('page', '0');
+    FileList.showLoading();
+    Detail.el.innerHTML = '';
+    const res = await API.get(`/api/search?${params.toString()}`);
+    if (res.ok) {
+        const searchParams = {};
+        for (const [k, v] of params.entries()) {
+            if (k !== 'page' && k !== 'sort' && k !== 'sortDir') searchParams[k] = v;
+        }
+        FileList.showSearchResults(res.data, searchParams);
+        Detail.renderSearchResults(res.data, searchParams);
+    } else {
+        FileList.renderEmpty();
+        Toast.error(res.error || 'Content search failed.');
+    }
+});
+
+document.getElementById('content-search-clear').addEventListener('click', () => {
+    document.getElementById('content-search-text').value = '';
+    contentSearchSlider.value = 0.3;
+    contentSearchThreshold.value = 0.3;
+    _csLocReset();
+    if (selectedNode) {
+        FileList.showFolder(selectedNode.id);
+    } else {
+        FileList.renderEmpty();
+    }
+});
+
+document.getElementById('content-search-save').addEventListener('click', async () => {
+    const text = document.getElementById('content-search-text').value.trim();
+    if (!text) return;
+    const values = {
+        mode: 'content',
+        semantic: text,
+        semanticThreshold: contentSearchThreshold.value,
+    };
+    const savedLocIds = _csLocGetIds();
+    if (savedLocIds) values.semanticLocations = savedLocIds;
+    const name = await PromptModal.open({
+        title: 'Save Search',
+        message: 'Save current search as:',
+        placeholder: 'Search name...',
+    });
+    if (!name) return;
+    const res = await API.post('/api/searches', { name, params: values });
+    if (res.ok) Search.loadSavedSearches();
+});
+
+document.getElementById('content-search-text').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('content-search-go').click();
 });
 
 // WebSocket event handlers

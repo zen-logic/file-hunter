@@ -37,6 +37,13 @@
                         <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zm0 12.5c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
                     </svg>
                 </button>
+                <button class="btn btn-icon hidden" id="btn-content-search" title="Content Search">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h7.17a6 6 0 0 1-.17-1.5 6 6 0 0 1 6-6c.52 0 1.02.07 1.5.17V8l-6-6H6zm2 9h8v1.5H8V11zm0 4h4v1.5H8V15z"/>
+                        <circle cx="17.5" cy="18.5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                        <line x1="19.5" y1="20.5" x2="22" y2="23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
                 <button class="btn btn-icon" id="btn-settings" title="Settings">
                     <svg class="icon-settings" viewBox="0 0 24 24" fill="currentColor">
                         <path fill-rule="evenodd" d="M11.078 2.25c-.917 0-1.699.663-1.85 1.567L9.05 4.889c-.02.12-.115.26-.297.348a7.493 7.493 0 0 0-.986.57c-.166.115-.334.126-.45.083L6.3 5.508a1.875 1.875 0 0 0-2.282.819l-.922 1.597a1.875 1.875 0 0 0 .432 2.385l.84.692c.095.078.17.229.154.43a7.598 7.598 0 0 0 0 1.139c.015.2-.059.352-.153.43l-.841.692a1.875 1.875 0 0 0-.432 2.385l.922 1.597a1.875 1.875 0 0 0 2.282.818l1.019-.382c.115-.043.283-.031.45.082.312.214.641.405.985.57.182.088.277.228.297.35l.178 1.071c.151.904.933 1.567 1.85 1.567h1.844c.916 0 1.699-.663 1.85-1.567l.178-1.072c.02-.12.114-.26.297-.349.344-.165.673-.356.985-.57.167-.114.335-.125.45-.082l1.02.382a1.875 1.875 0 0 0 2.28-.819l.923-1.597a1.875 1.875 0 0 0-.432-2.385l-.84-.692c-.095-.078-.17-.229-.154-.43a7.614 7.614 0 0 0 0-1.139c-.016-.2.059-.352.153-.43l.84-.692c.708-.582.891-1.59.433-2.385l-.922-1.597a1.875 1.875 0 0 0-2.282-.818l-1.02.382c-.114.043-.282.031-.449-.083a7.49 7.49 0 0 0-.985-.57c-.183-.087-.277-.227-.297-.348l-.179-1.072a1.875 1.875 0 0 0-1.85-1.567h-1.843zM12 15.75a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5z" clip-rule="evenodd"/>
@@ -53,26 +60,6 @@
                 </label>
             </div>
             <div id="search-basic">
-                <div class="search-row hidden" id="search-content-toggle">
-                    <label class="search-label"></label>
-                    <label class="search-checkbox"><input type="checkbox" id="search-content-check"> Content search</label>
-                </div>
-                <div id="search-content-fields" class="hidden">
-                    <div class="search-row">
-                        <label class="search-label">Content</label>
-                        <input type="text" class="search-input" id="search-semantic" placeholder="Search within document content, e.g. (legal action) + invoices">
-                    </div>
-                    <div class="search-row">
-                        <label class="search-label">Threshold</label>
-                        <input type="range" class="similarity-slider" id="search-semantic-slider" min="0" max="1" value="0.3" step="0.001">
-                        <input type="number" class="search-input search-input-sm" id="search-semantic-threshold" min="0" max="1" value="0.3" step="0.001">
-                        <div class="search-actions">
-                            <button class="btn btn-primary" id="search-content-go">Search</button>
-                            <button class="btn" id="search-content-clear">Clear</button>
-                            <button class="btn" id="search-content-save">Save</button>
-                        </div>
-                    </div>
-                </div>
                 <div id="search-catalogue-fields">
                 <div class="search-row">
                     <label class="search-label">Name</label>
@@ -173,12 +160,42 @@
                 <input type="text" class="search-input" id="similarity-text" placeholder="e.g. red socks, blue jacket">
             </div>
             <div class="search-row">
+                <label class="search-label">Locations</label>
+                <div class="multiselect-dropdown" id="similarity-locations">
+                    <div class="multiselect-dropdown-toggle">All locations</div>
+                    <div class="multiselect-dropdown-menu"></div>
+                </div>
+            </div>
+            <div class="search-row">
                 <label class="search-label">Threshold</label>
                 <input type="range" class="similarity-slider" id="similarity-threshold-slider" min="0" max="1" value="0.3" step="0.001">
                 <input type="number" class="search-input search-input-sm" id="similarity-threshold" min="0" max="1" value="0.3" step="0.001">
                 <div class="search-actions">
                     <button class="btn btn-primary" id="similarity-go">Search</button>
                     <button class="btn" id="similarity-clear">Clear</button>
+                </div>
+            </div>
+        </div>
+        <div id="content-search-panel" class="search-panel hidden">
+            <div class="search-row">
+                <label class="search-label">Content</label>
+                <input type="text" class="search-input" id="content-search-text" placeholder="Search within document content, e.g. (legal action) + invoices">
+            </div>
+            <div class="search-row">
+                <label class="search-label">Locations</label>
+                <div class="multiselect-dropdown" id="content-search-locations">
+                    <div class="multiselect-dropdown-toggle">All locations</div>
+                    <div class="multiselect-dropdown-menu"></div>
+                </div>
+            </div>
+            <div class="search-row">
+                <label class="search-label">Threshold</label>
+                <input type="range" class="similarity-slider" id="content-search-slider" min="0" max="1" value="0.3" step="0.001">
+                <input type="number" class="search-input search-input-sm" id="content-search-threshold" min="0" max="1" value="0.3" step="0.001">
+                <div class="search-actions">
+                    <button class="btn btn-primary" id="content-search-go">Search</button>
+                    <button class="btn" id="content-search-clear">Clear</button>
+                    <button class="btn" id="content-search-save">Save</button>
                 </div>
             </div>
         </div>

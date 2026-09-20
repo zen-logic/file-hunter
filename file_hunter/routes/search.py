@@ -55,7 +55,7 @@ async def search(request: Request):
             _act_unreg(act_name)
 
 
-async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: float = 0.3) -> list[int] | None:
+async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: float = 0.3, location_ids: list[int] | None = None) -> list[int] | None:
     """Query document embeddings and return matching file IDs, or None if unavailable.
     Supports composite syntax: (legal action) + invoices - complaints
     """
@@ -102,21 +102,66 @@ async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: flo
         if not query_emb:
             return None
 
+        query_kwargs = {}
+        if location_ids and len(location_ids) == 1:
+            query_kwargs["where"] = {"location_id": location_ids[0]}
+        elif location_ids and len(location_ids) > 1:
+            query_kwargs["where"] = {"location_id": {"$in": location_ids}}
+
         results = doc_coll.query(
             query_embeddings=[query_emb],
             n_results=min(200, doc_count),
-            include=["distances", "metadatas"],
+            include=["distances", "metadatas", "documents"],
+            **query_kwargs,
         )
         max_distance = 1.0 - threshold
-        seen = set()
-        file_ids = []
+        # Split query into terms for keyword boosting
+        query_terms = [t.lower() for t in semantic_query.split() if len(t) >= 2]
+        logger.info("Semantic search: query=%r, terms=%s, threshold=%.3f, %d chunks in collection",
+                     semantic_query[:80], query_terms, threshold, doc_count)
+        # Two passes: first collect best raw distance per file and all chunk
+        # text per file; then apply keyword boost across all of a file's chunks.
+        best_raw = {}
+        file_texts = {}
         for i, chunk_id in enumerate(results["ids"][0]):
             distance = results["distances"][0][i]
-            if distance <= max_distance:
-                fid = results["metadatas"][0][i].get("file_id")
-                if fid and fid not in seen:
-                    seen.add(fid)
-                    file_ids.append(fid)
+            fid = results["metadatas"][0][i].get("file_id")
+            if distance <= max_distance and fid:
+                if fid not in best_raw or distance < best_raw[fid]:
+                    best_raw[fid] = distance
+                chunk_text = (results["documents"][0][i] or "").lower()
+                if fid not in file_texts:
+                    file_texts[fid] = chunk_text
+                else:
+                    file_texts[fid] += " " + chunk_text
+        # Keyword boost: check all of a file's matched chunks for query terms.
+        # Each term found anywhere reduces distance by 15%.
+        best = {}
+        for fid, raw_dist in best_raw.items():
+            all_text = file_texts.get(fid, "")
+            matched = sum(1 for t in query_terms if t in all_text)
+            boost = matched / max(len(query_terms), 1)
+            boosted = raw_dist * (1.0 - 0.15 * boost)
+            best[fid] = boosted
+            logger.info("  file_id=%s raw=%.4f terms=%d/%d boost=%.0f%% adj=%.4f",
+                         fid, raw_dist, matched, len(query_terms), boost * 15, boosted)
+        file_ids = [fid for fid, _ in sorted(best.items(), key=lambda x: x[1])]
+        # Look up filenames for the log
+        if file_ids:
+            from file_hunter.db import read_db as _rdb
+            async with _rdb() as _db:
+                ph = ",".join("?" for _ in file_ids)
+                _rows = await _db.execute_fetchall(
+                    f"SELECT id, filename FROM files WHERE id IN ({ph})", file_ids
+                )
+            _names = {r["id"]: r["filename"] for r in _rows}
+        else:
+            _names = {}
+        logger.info("Semantic search: %d files matched (from %d chunks within threshold)",
+                     len(file_ids), sum(1 for d in results["distances"][0] if d <= max_distance))
+        for rank, fid in enumerate(file_ids[:5]):
+            logger.info("  result %d: file_id=%s distance=%.4f  %s",
+                         rank + 1, fid, best[fid], _names.get(fid, "???"))
         return file_ids if file_ids else None
     except Exception as e:
         logger.warning("Semantic search failed: %s", e)
@@ -134,7 +179,9 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
         if enabled != "1" or not embed_url:
             return json_ok({"items": [], "total": 0, "folders": []})
         sem_threshold = float(request.query_params.get("semanticThreshold", "0.3"))
-        sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold)
+        sem_loc_raw = request.query_params.get("semanticLocations", "").strip()
+        sem_location_ids = [int(x) for x in sem_loc_raw.split(",") if x.strip()] if sem_loc_raw else None
+        sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold, location_ids=sem_location_ids)
         if not sem_ids:
             return json_ok({"items": [], "total": 0, "folders": []})
         placeholders = ",".join("?" for _ in sem_ids)
@@ -295,6 +342,7 @@ async def similarity_search(request: Request):
     file_id = body.get("file_id")
     image_data = body.get("image_data")  # base64-encoded uploaded image
     threshold = body.get("threshold", 0.3)
+    location_ids = body.get("location_ids")  # list of ints, or None for all
 
     async with read_db() as db:
         embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
@@ -347,14 +395,25 @@ async def similarity_search(request: Request):
     if n_results == 0:
         return json_ok({"items": [], "total": 0, "folders": []})
 
+    # Build ChromaDB where filter for location scoping
+    where_filter = None
+    if location_ids and len(location_ids) == 1:
+        where_filter = {"location_id": location_ids[0]}
+    elif location_ids and len(location_ids) > 1:
+        where_filter = {"location_id": {"$in": location_ids}}
+
     # Collect candidates from each modality
     candidates = {}  # doc_id -> stored embedding
+    query_kwargs = {}
+    if where_filter:
+        query_kwargs["where"] = where_filter
 
     if text_emb is not None:
         results = collection.query(
             query_embeddings=[text_emb],
             n_results=n_results,
             include=["embeddings"],
+            **query_kwargs,
         )
         for i, doc_id in enumerate(results["ids"][0]):
             if doc_id not in candidates:
@@ -365,6 +424,7 @@ async def similarity_search(request: Request):
             query_embeddings=[image_emb],
             n_results=n_results,
             include=["embeddings"],
+            **query_kwargs,
         )
         for i, doc_id in enumerate(results["ids"][0]):
             if doc_id not in candidates:
