@@ -842,6 +842,14 @@ const Detail = {
                     <div class="stat-value" data-stat="globalTotalSize">${s.totalSizeFormatted}</div>
                     <div class="stat-label">Total Cataloged</div>
                 </div>
+                ${s.embeddingCounts ? `<div class="stat-card">
+                    <div class="stat-value">${s.embeddingCounts.imageEmbeddings.toLocaleString()}</div>
+                    <div class="stat-label">Image Embeddings</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${s.embeddingCounts.documentEmbeddings.toLocaleString()}</div>
+                    <div class="stat-label">Document Embeddings</div>
+                </div>` : ''}
             </div>
             ${typeHtml ? `<div class="detail-section" data-stat="globalTypeBreakdown"><h3>Files by Type</h3>${typeHtml}</div>` : ''}
             <div class="detail-section">

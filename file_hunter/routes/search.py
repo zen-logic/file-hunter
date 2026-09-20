@@ -343,6 +343,9 @@ async def similarity_search(request: Request):
     image_data = body.get("image_data")  # base64-encoded uploaded image
     threshold = body.get("threshold", 0.3)
     location_ids = body.get("location_ids")  # list of ints, or None for all
+    scope_type = body.get("scopeType")
+    scope_id_raw = body.get("scopeId", "")
+    scope_id = scope_id_raw.split("-", 1)[-1] if isinstance(scope_id_raw, str) and "-" in scope_id_raw else scope_id_raw
 
     async with read_db() as db:
         embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
@@ -459,17 +462,34 @@ async def similarity_search(request: Request):
 
     matched_ids = [int(doc_id) for doc_id, _ in scored]
 
-    # Fetch file details from catalogue
+    # Fetch file details from catalogue, with optional scope filter
     placeholders = ",".join("?" for _ in matched_ids)
+    scope_prefix = ""
+    scope_clause = ""
+    cte_params = []
+    clause_params = []
+    if scope_type == "location" and scope_id:
+        scope_clause = " AND location_id = ?"
+        clause_params = [int(scope_id)]
+    elif scope_type == "folder" and scope_id:
+        scope_prefix = (
+            "WITH RECURSIVE descendants(id) AS ("
+            "  SELECT ? UNION ALL"
+            "  SELECT fo.id FROM folders fo JOIN descendants d ON fo.parent_id = d.id"
+            ") "
+        )
+        scope_clause = " AND folder_id IN (SELECT id FROM descendants)"
+        cte_params = [int(scope_id)]
+
     async with read_db() as db:
         rows = await db.execute_fetchall(
-            f"""SELECT id, filename AS name, file_type_high AS typeHigh,
+            f"""{scope_prefix}SELECT id, filename AS name, file_type_high AS typeHigh,
                        file_type_low AS typeLow, file_size AS size,
                        modified_date AS date, dup_count AS dups,
                        stale, location_id AS locationId,
                        full_path, hidden
-                FROM files WHERE id IN ({placeholders})""",
-            matched_ids,
+                FROM files WHERE id IN ({placeholders}){scope_clause}""",
+            cte_params + matched_ids + clause_params,
         )
 
     # Preserve score ranking order

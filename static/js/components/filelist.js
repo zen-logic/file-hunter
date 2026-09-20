@@ -362,7 +362,12 @@ const FileList = {
         let newIdx = curIdx;
         const totalPages = this._totalPages();
 
-        switch (e.key) {
+        // In gallery mode, left/right arrows navigate like up/down
+        const key = this._viewMode === 'gallery'
+            ? (e.key === 'ArrowRight' ? 'ArrowDown' : e.key === 'ArrowLeft' ? 'ArrowUp' : e.key)
+            : e.key;
+
+        switch (key) {
             case 'ArrowDown':
                 e.preventDefault();
                 if (curIdx === items.length - 1 && this.currentPage < totalPages - 1) {

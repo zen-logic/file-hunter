@@ -149,30 +149,38 @@
             <div id="saved-searches" class="saved-searches"></div>
         </div>
         <div id="similarity-panel" class="search-panel hidden">
-            <div class="search-row">
-                <label class="search-checkbox"><input type="checkbox" id="similarity-use-image"> Similar to selected image</label>
-                <button class="btn btn-sm" id="similarity-upload-btn">Upload Image</button>
-                <span class="search-label" id="similarity-upload-name"></span>
-                <input type="file" id="similarity-upload-file" accept="image/*" style="display:none">
+            <div id="similarity-scope" class="search-scope hidden">
+                <label class="search-scope-label">
+                    <input type="checkbox" id="similarity-scope-check">
+                    Search within: <span id="similarity-scope-name"></span>
+                </label>
             </div>
-            <div class="search-row">
-                <label class="search-label">Features</label>
-                <input type="text" class="search-input" id="similarity-text" placeholder="e.g. red socks, blue jacket">
-            </div>
-            <div class="search-row">
-                <label class="search-label">Locations</label>
-                <div class="multiselect-dropdown" id="similarity-locations">
-                    <div class="multiselect-dropdown-toggle">All locations</div>
-                    <div class="multiselect-dropdown-menu"></div>
+            <div id="similarity-fields">
+                <div class="search-row">
+                    <label class="search-checkbox"><input type="checkbox" id="similarity-use-image"> Similar to selected image</label>
+                    <button class="btn btn-sm" id="similarity-upload-btn">Upload Image</button>
+                    <span class="search-label" id="similarity-upload-name"></span>
+                    <input type="file" id="similarity-upload-file" accept="image/*" style="display:none">
                 </div>
-            </div>
-            <div class="search-row">
-                <label class="search-label">Threshold</label>
-                <input type="range" class="similarity-slider" id="similarity-threshold-slider" min="0" max="1" value="0.3" step="0.001">
-                <input type="number" class="search-input search-input-sm" id="similarity-threshold" min="0" max="1" value="0.3" step="0.001">
-                <div class="search-actions">
-                    <button class="btn btn-primary" id="similarity-go">Search</button>
-                    <button class="btn" id="similarity-clear">Clear</button>
+                <div class="search-row">
+                    <label class="search-label">Features</label>
+                    <input type="text" class="search-input" id="similarity-text" placeholder="e.g. red socks, blue jacket">
+                </div>
+                <div class="search-row">
+                    <label class="search-label">Locations</label>
+                    <div class="multiselect-dropdown" id="similarity-locations">
+                        <div class="multiselect-dropdown-toggle">All locations</div>
+                        <div class="multiselect-dropdown-menu"></div>
+                    </div>
+                </div>
+                <div class="search-row">
+                    <label class="search-label">Threshold</label>
+                    <input type="range" class="similarity-slider" id="similarity-threshold-slider" min="0" max="1" value="0.3" step="0.001">
+                    <input type="number" class="search-input search-input-sm" id="similarity-threshold" min="0" max="1" value="0.3" step="0.001">
+                    <div class="search-actions">
+                        <button class="btn btn-primary" id="similarity-go">Search</button>
+                        <button class="btn" id="similarity-clear">Clear</button>
+                    </div>
                 </div>
             </div>
         </div>

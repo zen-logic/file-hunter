@@ -85,7 +85,8 @@ body::after {
 }
 
 #search-basic,
-#search-advanced {
+#search-advanced,
+#similarity-fields {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
@@ -222,7 +223,7 @@ body::after {
 
 .search-mode-toggle { text-align: right; }
 .search-mode-toggle a { font-size: var(--font-size-sm); color: var(--color-primary); cursor: pointer; }
-.search-scope { padding: 0.25rem 0.5rem; }
+.search-scope { padding: 0.25rem 0; }
 .search-scope-label { display: flex; align-items: center; gap: 0.4rem; font-size: var(--font-size-sm); color: var(--color-text-muted); cursor: pointer; }
 .search-scope-label input { accent-color: var(--color-primary); cursor: pointer; }
 

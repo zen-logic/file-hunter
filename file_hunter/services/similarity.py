@@ -28,6 +28,18 @@ def is_chromadb_available() -> bool:
     return _chromadb_available
 
 
+def get_embedding_counts() -> dict | None:
+    """Return image and document embedding counts, or None if unavailable."""
+    if not is_chromadb_available():
+        return None
+    try:
+        img_count = get_collection().count()
+        doc_count = get_document_collection().count()
+        return {"imageEmbeddings": img_count, "documentEmbeddings": doc_count}
+    except Exception:
+        return None
+
+
 def ensure_chromadb() -> bool:
     """Install chromadb if missing. Returns True if available after check."""
     if is_chromadb_available():

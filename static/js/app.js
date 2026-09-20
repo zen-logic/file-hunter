@@ -980,6 +980,7 @@ Tree.init(async (node) => {
     consolidateBtn.disabled = true;
     Upload.updateState(node);
     Search.setScopeContext(node);
+    _updateSimilarityScope(node);
     Search.close();
     if (similarityVisible) {
         similarityVisible = false;
@@ -1030,6 +1031,7 @@ Tree.init(async (node) => {
     consolidateBtn.disabled = true;
     Upload.updateState(null);
     Search.setScopeContext(null);
+    _updateSimilarityScope(null);
     FileList.renderFavourites();
     Detail.renderDashboard();
 });
@@ -1099,6 +1101,7 @@ FileList.init(async (file) => {
         scanBtn.disabled = false;
         Upload.updateState(node);
         Search.setScopeContext(node);
+        _updateSimilarityScope(node);
     }
     if (isLocation) {
         const [, result] = await Promise.all([
@@ -1513,6 +1516,22 @@ similarityThreshold.addEventListener('input', () => {
     similaritySlider.value = similarityThreshold.value;
 });
 
+let _similarityScopeNode = null;
+function _updateSimilarityScope(node) {
+    const scopeEl = document.getElementById('similarity-scope');
+    const nameEl = document.getElementById('similarity-scope-name');
+    const checkEl = document.getElementById('similarity-scope-check');
+    if (node && (node.type === 'location' || node.type === 'folder')) {
+        _similarityScopeNode = node;
+        nameEl.textContent = node.label || node.name;
+        scopeEl.classList.remove('hidden');
+    } else {
+        _similarityScopeNode = null;
+        scopeEl.classList.add('hidden');
+        checkEl.checked = false;
+    }
+}
+
 document.getElementById('similarity-go').addEventListener('click', async () => {
     const useImage = document.getElementById('similarity-use-image').checked;
     const text = document.getElementById('similarity-text').value.trim();
@@ -1532,6 +1551,10 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     if (text) payload.text = text;
     if (useImage && selectedFile) payload.file_id = selectedFile.id;
     if (hasUpload) payload.image_data = _similarityUploadData;
+    if (document.getElementById('similarity-scope-check').checked && _similarityScopeNode) {
+        payload.scopeType = _similarityScopeNode.type;
+        payload.scopeId = _similarityScopeNode.id;
+    }
     const locIds = _simLocGetIds();
     if (locIds) payload.location_ids = locIds;
 

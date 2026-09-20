@@ -169,6 +169,14 @@ async def _refresh_dashboard(db):
 
     pending_ops = await get_pending_ops_count(db)
 
+    # Embedding counts — only when similarity search is enabled
+    from file_hunter.services import settings as settings_svc
+    sim_enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
+    embedding_counts = None
+    if sim_enabled == "1":
+        from file_hunter.services.similarity import get_embedding_counts
+        embedding_counts = await asyncio.to_thread(get_embedding_counts)
+
     _cache["dashboard"] = {
         "totalFiles": total_files,
         "totalLocations": total_locations,
@@ -178,6 +186,7 @@ async def _refresh_dashboard(db):
         "typeBreakdown": type_breakdown,
         "recentScans": recent_scans,
         "pendingOps": pending_ops,
+        "embeddingCounts": embedding_counts,
     }
 
 
@@ -314,6 +323,13 @@ async def get_stats(db):
 
     pending_ops = await get_pending_ops_count(db)
 
+    from file_hunter.services import settings as settings_svc
+    sim_enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
+    embedding_counts = None
+    if sim_enabled == "1":
+        from file_hunter.services.similarity import get_embedding_counts
+        embedding_counts = await asyncio.to_thread(get_embedding_counts)
+
     total_files = loc_agg_rows[0]["fc"]
     total_size = loc_agg_rows[0]["s"]
     return {
@@ -325,6 +341,7 @@ async def get_stats(db):
         "typeBreakdown": type_breakdown,
         "recentScans": recent_scans,
         "pendingOps": pending_ops,
+        "embeddingCounts": embedding_counts,
     }
 
 
