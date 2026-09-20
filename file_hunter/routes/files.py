@@ -1010,6 +1010,43 @@ async def file_transcode(request: Request):
     return json_ok({"started": True, "op_id": op_id})
 
 
+_RAW_EXTENSIONS = {
+    "nef", "cr2", "cr3", "arw", "orf", "raf", "dng", "rw2",
+    "pef", "srw", "nrw", "raw", "mrw", "dcr", "kdc", "erf",
+    "3fr", "mef", "mos", "iiq",
+}
+
+
+async def file_raw_convert(request: Request):
+    """POST /api/files/{id:int}/rawconvert — queue a camera raw to JPEG conversion."""
+    from file_hunter.services.agent_ops import location_agent_has_capability, _get_agent_id
+    from file_hunter.services.queue_manager import enqueue
+
+    file_id = int(request.path_params["id"])
+
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT filename, full_path, location_id, file_type_low FROM files WHERE id = ?",
+            (file_id,),
+        )
+    if not row:
+        return json_error("File not found.", 404)
+    f = row[0]
+    if (f["file_type_low"] or "").lower() not in _RAW_EXTENSIONS:
+        return json_error("File is not a supported camera raw format.")
+    has_dcraw = await location_agent_has_capability(f["location_id"], "dcraw")
+    if not has_dcraw:
+        return json_error("Agent does not support raw conversion.")
+    agent_id = await _get_agent_id(f["location_id"])
+    op_id = await enqueue("raw_convert", agent_id, {
+        "file_id": file_id,
+        "filename": f["filename"],
+        "path": f["full_path"],
+        "location_id": f["location_id"],
+    })
+    return json_ok({"started": True, "op_id": op_id})
+
+
 async def file_embed(request: Request):
     """POST /api/files/{id}/embed — queue embedding for a single document/text file."""
     from file_hunter.services.similarity import is_chromadb_available

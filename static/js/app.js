@@ -79,6 +79,7 @@ async function refreshDetailPanel() {
             wireMoveFileBtn();
             wireIgnoreFileBtn();
             wireTranscodeBtn();
+            wireRawConvertBtn();
             wireEmbedBtn();
             wireFileSlideshowBtn(selectedFile);
         }
@@ -271,6 +272,18 @@ function wireTranscodeBtn() {
             const res = await API.post(`/api/files/${selectedFile.id}/transcode`, { quality });
             if (!res.ok) {
                 Toast.error(res.data?.detail || 'Transcode failed to start.');
+            }
+        });
+    }
+}
+
+function wireRawConvertBtn() {
+    const btn = document.getElementById('detail-rawconvert');
+    if (btn && selectedFile) {
+        btn.addEventListener('click', async () => {
+            const res = await API.post(`/api/files/${selectedFile.id}/rawconvert`);
+            if (!res.ok) {
+                Toast.error(res.data?.detail || 'Raw conversion failed to start.');
             }
         });
     }
@@ -523,6 +536,7 @@ function startApp(user) {
             wireMoveFileBtn();
             wireIgnoreFileBtn();
             wireTranscodeBtn();
+            wireRawConvertBtn();
             wireEmbedBtn();
             if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
         },
@@ -1059,6 +1073,7 @@ FileList.init(async (file) => {
         wireMoveFileBtn();
         wireIgnoreFileBtn();
         wireTranscodeBtn();
+        wireRawConvertBtn();
         wireEmbedBtn();
         wireFileSlideshowBtn(file);
     }
@@ -1220,6 +1235,7 @@ Detail.init({
         wireMoveFileBtn();
         wireIgnoreFileBtn();
         wireTranscodeBtn();
+        wireRawConvertBtn();
         wireEmbedBtn();
         if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
     },
@@ -2370,6 +2386,29 @@ WS.on('transcode_error', (msg) => {
 
 WS.on('transcode_cancelled', (msg) => {
     Toast.success('Conversion cancelled.');
+    refreshDetailPanel();
+});
+
+WS.on('rawconvert_started', (msg) => {
+    ActivityLog.add(`Queued for raw conversion: <b>${msg.filename}</b>`);
+});
+
+WS.on('rawconvert_progress', () => {
+    // Progress shown via server_activity — nothing to do here
+});
+
+WS.on('rawconvert_complete', async (msg) => {
+    ActivityLog.add(`Raw conversion complete: <b>${msg.filename}</b>`);
+    Toast.success(`Raw conversion complete: ${msg.filename}`);
+    if (selectedNode) {
+        await FileList.showFolder(selectedNode.id);
+    }
+    await StatusBar.loadStats();
+    await refreshDetailPanel();
+});
+
+WS.on('rawconvert_error', (msg) => {
+    Toast.error(`Raw conversion failed: ${msg.error}`);
     refreshDetailPanel();
 });
 

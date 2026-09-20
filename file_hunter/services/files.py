@@ -455,6 +455,29 @@ async def get_file_detail(db, file_id: int):
                 s = tq_row[0]["status"]
                 transcode_status = "converting" if s == "running" else "queued"
 
+    # Check agent capabilities and queue status for camera raw files
+    _RAW_EXTENSIONS = {
+        "nef", "cr2", "cr3", "arw", "orf", "raf", "dng", "rw2",
+        "pef", "srw", "nrw", "raw", "mrw", "dcr", "kdc", "erf",
+        "3fr", "mef", "mos", "iiq",
+    }
+    can_raw_convert = False
+    raw_convert_status = None
+    if (f["file_type_low"] or "").lower() in _RAW_EXTENSIONS and location_online:
+        can_raw_convert = await location_agent_has_capability(
+            f["location_id"], "dcraw"
+        )
+        if can_raw_convert:
+            rc_row = await db.execute_fetchall(
+                "SELECT status FROM operation_queue "
+                "WHERE type = 'raw_convert' AND status IN ('pending', 'running') "
+                "AND json_extract(params, '$.file_id') = ?",
+                (file_id,),
+            )
+            if rc_row:
+                s = rc_row[0]["status"]
+                raw_convert_status = "converting" if s == "running" else "queued"
+
     return {
         "id": f["id"],
         "name": f["filename"],
@@ -484,6 +507,8 @@ async def get_file_detail(db, file_id: int):
         "breadcrumb": breadcrumb,
         "canTranscode": can_transcode,
         "transcodeStatus": transcode_status,
+        "canRawConvert": can_raw_convert,
+        "rawConvertStatus": raw_convert_status,
     }
 
 

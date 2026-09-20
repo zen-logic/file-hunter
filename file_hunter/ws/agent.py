@@ -469,6 +469,132 @@ async def _handle_transcode_complete(agent_id: int, msg: dict):
     resolve_pending(msg.get("path", ""), {"type": "transcode_complete"})
 
 
+async def _lookup_rawconvert_info(path: str) -> tuple[int | None, int | None]:
+    """Look up the file_id and op_id for a running raw conversion by source path."""
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT id, params FROM operation_queue "
+            "WHERE type = 'raw_convert' AND status = 'running' "
+            "AND json_extract(params, '$.path') = ?",
+            (path,),
+        )
+    if row:
+        params = json.loads(row[0]["params"])
+        return params.get("file_id"), row[0]["id"]
+    return None, None
+
+
+async def _handle_rawconvert_complete(agent_id: int, msg: dict):
+    """Create a catalog entry for a newly converted raw file, then broadcast."""
+    from file_hunter.core import classify_file
+    from file_hunter.helpers import post_op_stats
+    from file_hunter.stats_db import update_stats_for_files
+    from file_hunter_core.paths import norm_inode
+
+    output_path = msg.get("output", "")
+    filename = msg.get("filename", "")
+    size = msg.get("size", 0)
+    mtime = msg.get("mtime")
+    ctime = msg.get("ctime")
+    inode = norm_inode(msg.get("inode") or 0)
+
+    # Find the source file's location and folder from the output path
+    async with read_db() as db:
+        source_path = msg.get("path", "")
+        source_row = await db.execute_fetchall(
+            "SELECT id, location_id, folder_id, hidden, dup_exclude "
+            "FROM files WHERE full_path = ?",
+            (source_path,),
+        )
+    if not source_row:
+        logger.warning("Raw convert complete but source file not in catalog: %s", source_path)
+        await broadcast({**msg, "agentId": agent_id})
+        return
+
+    src = source_row[0]
+    location_id = src["location_id"]
+    folder_id = src["folder_id"]
+
+    # Build rel_path from location root
+    async with read_db() as db:
+        loc_row = await db.execute_fetchall(
+            "SELECT root_path FROM locations WHERE id = ?", (location_id,)
+        )
+    if not loc_row:
+        await broadcast({**msg, "agentId": agent_id})
+        return
+
+    root_path = loc_row[0]["root_path"]
+    if output_path.startswith(root_path):
+        rel_path = output_path[len(root_path):].lstrip("/").lstrip("\\")
+    else:
+        rel_path = filename
+
+    file_type_high, file_type_low = classify_file(filename)
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    mtime_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(timespec="seconds") if mtime else now_iso
+    ctime_iso = datetime.fromtimestamp(ctime, tz=timezone.utc).isoformat(timespec="seconds") if ctime else now_iso
+
+    async def _insert(conn):
+        cursor = await conn.execute(
+            """INSERT INTO files
+               (filename, full_path, rel_path, location_id, folder_id,
+                file_type_high, file_type_low, file_size,
+                description,
+                created_date, modified_date, date_cataloged, date_last_seen,
+                stale, hidden, dup_exclude, inode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?)""",
+            (
+                filename, output_path, rel_path, location_id, folder_id,
+                file_type_high, file_type_low, size,
+                ctime_iso, mtime_iso, now_iso, now_iso,
+                src["hidden"], src["dup_exclude"], inode,
+            ),
+        )
+        await conn.commit()
+        return cursor.lastrowid
+
+    import sqlite3 as _sqlite3
+
+    try:
+        file_id = await execute_write(_insert)
+    except _sqlite3.IntegrityError:
+        async with read_db() as db:
+            existing = await db.execute_fetchall(
+                "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
+                (location_id, rel_path),
+            )
+        if existing:
+            file_id = existing[0]["id"]
+            logger.info("Raw convert output already cataloged: %s (file #%d)", filename, file_id)
+        else:
+            raise
+    else:
+        await update_stats_for_files(
+            location_id,
+            added=[(folder_id, size, file_type_high, src["hidden"])],
+        )
+
+    invalidate_stats_cache()
+    await post_op_stats(location_ids={location_id}, source="raw_convert")
+
+    from file_hunter.services.rawconvert import resolve_pending
+
+    await broadcast({
+        "type": "rawconvert_complete",
+        "agentId": agent_id,
+        "fileId": file_id,
+        "filename": filename,
+        "path": output_path,
+        "size": size,
+        "folderId": folder_id,
+        "locationId": location_id,
+    })
+    logger.info("Raw convert cataloged: %s (file #%d)", filename, file_id)
+
+    resolve_pending(msg.get("path", ""), {"type": "rawconvert_complete"})
+
+
 async def agent_ws_endpoint(websocket: WebSocket):
     """Handle an incoming agent WebSocket connection."""
     qs = websocket.scope.get("query_string", b"").decode()
@@ -723,6 +849,49 @@ async def agent_ws_endpoint(websocket: WebSocket):
                 if file_id:
                     msg["fileId"] = file_id
                 resolve_pending(path, msg)
+                msg["agentId"] = agent_id
+                await broadcast(msg)
+
+            elif msg_type == "rawconvert_complete":
+                try:
+                    await _handle_rawconvert_complete(agent_id, msg)
+                except Exception as e:
+                    logger.exception(
+                        "Agent #%d: rawconvert_complete handler failed: %s",
+                        agent_id, e,
+                    )
+                    from file_hunter.services.rawconvert import resolve_pending as rc_resolve
+                    path = msg.get("path", "")
+                    rc_resolve(path, {
+                        "type": "rawconvert_error",
+                        "error": f"Catalog entry failed: {e}",
+                    })
+                    await broadcast({
+                        "type": "rawconvert_error",
+                        "agentId": agent_id,
+                        "path": path,
+                        "error": f"Catalog entry failed: {e}",
+                    })
+
+            elif msg_type == "rawconvert_progress":
+                path = msg.get("path", "")
+                file_id, op_id = await _lookup_rawconvert_info(path)
+                if file_id:
+                    msg["fileId"] = file_id
+                if op_id:
+                    from file_hunter.services.activity import update
+                    progress = msg.get("status", "converting")
+                    update(f"op-{op_id}", progress=progress)
+                msg["agentId"] = agent_id
+                await broadcast(msg)
+
+            elif msg_type == "rawconvert_error":
+                from file_hunter.services.rawconvert import resolve_pending as rc_resolve
+                path = msg.get("path", "")
+                file_id, _ = await _lookup_rawconvert_info(path)
+                if file_id:
+                    msg["fileId"] = file_id
+                rc_resolve(path, msg)
                 msg["agentId"] = agent_id
                 await broadcast(msg)
 

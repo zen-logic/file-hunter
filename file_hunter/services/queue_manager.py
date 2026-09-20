@@ -446,6 +446,11 @@ async def _reap_finished():
 # concurrently with each other, regardless of which agent they belong to.
 _SERIALISE_GROUP = {"similarity_scan", "embed_file"}
 
+# Op types that run independently on the agent and can proceed even when
+# the agent is busy with another operation (e.g. a long-running scan).
+# The agent enforces its own concurrency limits for these.
+_CONCURRENT_OPS = {"transcode", "raw_convert"}
+
 
 async def _next_pending_ops(busy_agents: set) -> list[dict]:
     """Fetch pending operations for agents that are online and not busy."""
@@ -472,14 +477,17 @@ async def _next_pending_ops(busy_agents: set) -> list[dict]:
         aid = row["agent_id"]
         if aid is not None and aid not in online_agents:
             continue
-        if aid in busy_agents or aid in seen_agents:
-            continue
+        concurrent = row["type"] in _CONCURRENT_OPS
+        if not concurrent:
+            if aid in busy_agents or aid in seen_agents:
+                continue
         # Serialised ops: skip if one is already running or already picked
         if row["type"] in _SERIALISE_GROUP:
             if serialised_running or serialised_seen:
                 continue
             serialised_seen = True
-        seen_agents.add(aid)
+        if not concurrent:
+            seen_agents.add(aid)
         result.append(dict(row))
     return result
 
@@ -647,6 +655,12 @@ async def _handle_embed_file(op_id: int, agent_id: int | None, params: dict):
     await run_embed_file(op_id, agent_id, params)
 
 
+async def _handle_raw_convert(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.rawconvert import run_raw_convert
+
+    await run_raw_convert(op_id, agent_id, params)
+
+
 _HANDLERS = {
     "scan_dir": _handle_scan_dir,
     "backfill_location": _handle_backfill_location,
@@ -661,6 +675,7 @@ _HANDLERS = {
     "transcode": _handle_transcode,
     "similarity_scan": _handle_similarity_scan,
     "embed_file": _handle_embed_file,
+    "raw_convert": _handle_raw_convert,
 }
 
 
@@ -671,7 +686,7 @@ async def get_queue_status_for_broadcast() -> dict:
     # Split running ops by type so frontend can show correct badges.
     # Transcode is a file-level operation with its own progress UI —
     # it must not affect location tree badges.
-    _NO_TREE_BADGE = {"transcode"}
+    _NO_TREE_BADGE = {"transcode", "raw_convert"}
 
     scanning_ids = []
     backfilling_ids = []

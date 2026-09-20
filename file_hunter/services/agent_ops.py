@@ -347,6 +347,12 @@ async def dispatch(operation: str, location_id: int, **kwargs):
             agent_id=agent_id,
         )
 
+    elif operation == "raw_convert":
+        await _post(
+            host, port, token, "/rawconvert", {"path": kwargs["path"]},
+            agent_id=agent_id,
+        )
+
     else:
         raise ValueError(f"Unknown agent operation: {operation}")
 
