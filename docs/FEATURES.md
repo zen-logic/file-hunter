@@ -36,11 +36,31 @@ Images, video, audio, PDFs, CSV tables, text files, and a hex viewer all render 
 
 Optional image similarity search powered by CLIP embeddings. Connect to an embedding service in Settings to enable.
 
-Scan any location or folder to index images. Search by text features (e.g. "red socks", "blue jacket"), by similarity to a selected file, or by uploading a reference image from your desktop. Text and image queries can be combined. Adjustable similarity threshold.
+Scan any location or folder to index images. Image and document scans are separate options in the scan dialogue. Search by text features (e.g. "red socks", "blue jacket"), by similarity to a selected file, or by uploading a reference image from your desktop. Text and image queries can be combined. Adjustable similarity threshold.
 
 Text queries support composite syntax for vector arithmetic: `(red socks) - shoes` embeds each phrase separately and combines the vectors before searching.
 
 Requires a separate embedding service. ChromaDB is installed automatically when the feature is first enabled. No impact on installations that do not use this feature.
+
+## Document semantic search
+
+Search within document content using natural language queries. Supported formats: PDF, DOCX, PPTX, XLSX, ODT, HTML, and plain text (TXT, MD, CSV, JSON, etc.). Hybrid scoring combines vector similarity with keyword boosting for precision. Composite query syntax supported. Embed individual files from the detail panel. Dedicated content search panel with threshold control in the toolbar.
+
+## Location filtering
+
+Both image similarity and document content search panels include a multi-select location dropdown. Scope searches to specific locations or search across all.
+
+## Embedding management
+
+Delete image or document embeddings per location or folder from the detail panel. Deletion runs as a background task with progress in the status bar. Embeddings are automatically cleaned up on file delete, folder delete, batch delete, reset stale, and cross-location moves.
+
+## Video transcoding
+
+Convert video files to browser-playable MP4 (H.264/AAC) from the detail panel. Auto-detects hardware encoders (VideoToolbox, NVENC, VAAPI, Quick Sync) with software fallback. Three quality presets: low, medium, high. Progress shown in the status bar. Converted file appears alongside the original and is automatically catalogued. Requires ffmpeg on the host machine.
+
+## Camera raw conversion
+
+Convert camera raw files (NEF, CR2, CR3, ARW, DNG, ORF, RAF, RW2, PEF, SRW, NRW, and others) to full-resolution JPEG from the detail panel. Converted file appears alongside the original and is automatically catalogued. Requires dcraw on the host machine.
 
 ## Gallery view
 
