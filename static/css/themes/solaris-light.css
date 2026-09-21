@@ -27,7 +27,9 @@
     --color-text-placeholder: #9890b0;
 
     /* Selection — solar light landing on the surface */
-    --color-selected: #f4e4c8;
+    --color-selected: #dcc080;
+    --color-hover-border: #60a880;
+    --color-selected-border: #d08020;
 
     /* Primary — rich solar gold */
     --color-primary: #b07018;

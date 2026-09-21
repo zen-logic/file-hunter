@@ -27,7 +27,9 @@
     --color-text-bright: #f0e8ff;
     --color-text-placeholder: #443c58;
 
-    --color-selected: #2a2048;
+    --color-selected: #483418;
+    --color-hover-border: #50a880;
+    --color-selected-border: #e8a840;
 
     /* Primary — solar gold, the hero accent */
     --color-primary: #d4943c;

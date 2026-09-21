@@ -993,12 +993,11 @@ body::after {
 }
 
 .gallery-item:hover {
-    border-color: var(--color-primary);
+    border-color: var(--color-hover-border);
 }
 
 .gallery-item.selected {
-    border-color: var(--color-primary);
-    box-shadow: var(--glow-primary);
+    border-color: var(--color-selected-border);
 }
 
 .gallery-item img {

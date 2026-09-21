@@ -20,7 +20,9 @@
     --color-text-bright: #1a1a28;
     --color-text-placeholder: #9898a8;
 
-    --color-selected: #d8e4ff;
+    --color-selected: #b0c4f0;
+    --color-hover-border: #c08040;
+    --color-selected-border: #4a78d8;
 
     --color-primary: #4a78d8;
     --color-primary-hover: #3a68c8;
