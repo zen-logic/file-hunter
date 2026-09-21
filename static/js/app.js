@@ -2395,11 +2395,14 @@ WS.on('transcode_progress', () => {
 WS.on('transcode_complete', async (msg) => {
     ActivityLog.add(`Conversion complete: <b>${msg.filename}</b>`);
     Toast.success(`Conversion complete: ${msg.filename}`);
-    if (selectedNode) {
-        await FileList.showFolder(selectedNode.id);
+    const viewingFolder = FileList.currentFolder === `fld-${msg.folderId}`
+        || FileList.currentFolder === `loc-${msg.locationId}`;
+    if (viewingFolder) {
+        if (msg.fileId) FileList.pendingFocusFile = msg.fileId;
+        await FileList.refreshFolder();
+        await refreshDetailPanel();
     }
     await StatusBar.loadStats();
-    await refreshDetailPanel();
 });
 
 WS.on('transcode_error', (msg) => {
@@ -2423,11 +2426,14 @@ WS.on('rawconvert_progress', () => {
 WS.on('rawconvert_complete', async (msg) => {
     ActivityLog.add(`Raw conversion complete: <b>${msg.filename}</b>`);
     Toast.success(`Raw conversion complete: ${msg.filename}`);
-    if (selectedNode) {
-        await FileList.showFolder(selectedNode.id);
+    const viewingFolder = FileList.currentFolder === `fld-${msg.folderId}`
+        || FileList.currentFolder === `loc-${msg.locationId}`;
+    if (viewingFolder) {
+        if (msg.fileId) FileList.pendingFocusFile = msg.fileId;
+        await FileList.refreshFolder();
+        await refreshDetailPanel();
     }
     await StatusBar.loadStats();
-    await refreshDetailPanel();
 });
 
 WS.on('rawconvert_error', (msg) => {
