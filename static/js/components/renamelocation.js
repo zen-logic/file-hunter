@@ -12,7 +12,7 @@ const RenameLocationModal = {
         this.onConfirm = onConfirm;
 
         document.getElementById('rename-loc-cancel').addEventListener('click', () => this.close());
-        document.getElementById('rename-loc-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('rename-loc-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -25,7 +25,7 @@ const RenameLocationModal = {
         });
 
         this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this._doConfirm();
+            if (e.key === 'Enter') this.confirm();
         });
     },
 
@@ -46,7 +46,7 @@ const RenameLocationModal = {
         this.node = null;
     },
 
-    async _doConfirm() {
+    async confirm() {
         const newName = this.nameInput.value.trim();
         if (!newName) return;
         if (!this.node || !this.onConfirm) return;

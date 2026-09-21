@@ -12,7 +12,7 @@ const RenameFileModal = {
         this.onConfirm = onConfirm;
 
         document.getElementById('rename-file-cancel').addEventListener('click', () => this.close());
-        document.getElementById('rename-file-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('rename-file-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -25,7 +25,7 @@ const RenameFileModal = {
         });
 
         this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this._doConfirm();
+            if (e.key === 'Enter') this.confirm();
         });
     },
 
@@ -53,7 +53,7 @@ const RenameFileModal = {
         this.file = null;
     },
 
-    async _doConfirm() {
+    async confirm() {
         const newName = this.nameInput.value.trim();
         if (!newName) return;
         if (!this.file || !this.onConfirm) return;

@@ -13,7 +13,7 @@ import ActivityLog from './activitylog.js';
 import StatusBar from './statusbar.js';
 
 const Activity = {
-    _ops: new Map(), // name -> { label, detail, locationId }
+    ops: new Map(), // name -> { label, detail, locationId }
 
     /**
      * Register a new operation.
@@ -25,8 +25,8 @@ const Activity = {
      * @param {string|false} [opts.log] - activity log text, or false to suppress
      */
     started(name, { label, detail, locationId, log, background } = {}) {
-        this._ops.set(name, { label, detail: detail || '', locationId, background: !!background });
-        this._render();
+        this.ops.set(name, { label, detail: detail || '', locationId, background: !!background });
+        this.render();
         if (log !== false) ActivityLog.add(log || label);
     },
 
@@ -39,15 +39,15 @@ const Activity = {
      * @param {string} [opts.log] - activity log text (omit to skip)
      */
     progress(name, { detail, label, log } = {}) {
-        let op = this._ops.get(name);
+        let op = this.ops.get(name);
         if (!op) {
             // Auto-create if first message is a progress update
             op = { label: label || name, detail: detail || '', locationId: null };
-            this._ops.set(name, op);
+            this.ops.set(name, op);
         }
         if (detail !== undefined) op.detail = detail;
         if (label !== undefined) op.label = label;
-        this._render();
+        this.render();
         if (log) ActivityLog.add(log);
     },
 
@@ -58,8 +58,8 @@ const Activity = {
      * @param {string} [opts.log] - completion log text
      */
     completed(name, { log } = {}) {
-        this._ops.delete(name);
-        this._render();
+        this.ops.delete(name);
+        this.render();
         if (log) ActivityLog.add(log);
     },
 
@@ -70,14 +70,14 @@ const Activity = {
      * @param {string} [opts.log] - error log text
      */
     error(name, { log } = {}) {
-        this._ops.delete(name);
-        this._render();
+        this.ops.delete(name);
+        this.render();
         if (log) ActivityLog.add(log);
     },
 
     /**
      * Sync with server_activity polling (authoritative state).
-     * Reconciles local _ops with server state so all browsers
+     * Reconciles local ops with server state so all browsers
      * show consistent activity regardless of which real-time
      * messages they received.
      */
@@ -87,11 +87,11 @@ const Activity = {
 
         // Add/update ops the server knows about
         for (const a of serverOps) {
-            const existing = this._ops.get(a.name);
+            const existing = this.ops.get(a.name);
             const isBg = a.name.startsWith('hash-drainer-') || a.name.startsWith('dup-recalc');
             if (!existing) {
                 // Server has an op we don't — we missed the started message
-                this._ops.set(a.name, {
+                this.ops.set(a.name, {
                     label: a.label,
                     detail: a.progress || '',
                     locationId: null,
@@ -106,41 +106,41 @@ const Activity = {
 
         // Remove ops the server no longer has — they completed and we
         // missed the completed message
-        for (const name of this._ops.keys()) {
+        for (const name of this.ops.keys()) {
             if (!serverNames.has(name)) {
-                this._ops.delete(name);
+                this.ops.delete(name);
             }
         }
 
-        this._render();
+        this.render();
         StatusBar.updateServerActivity(msg);
     },
 
     /** True if any operation is active. */
     isActive() {
-        return this._ops.size > 0;
+        return this.ops.size > 0;
     },
 
     /** Get the scanning location ID, if a scan is the primary op. */
     scanningLocationId() {
-        for (const op of this._ops.values()) {
+        for (const op of this.ops.values()) {
             if (op.locationId) return op.locationId;
         }
         return null;
     },
 
-    _render() {
-        if (this._ops.size === 0) {
+    render() {
+        if (this.ops.size === 0) {
             StatusBar.renderActivity('idle');
             return;
         }
         // Primary = last foreground op, or last op if all are background
         let primary = null;
-        for (const op of this._ops.values()) {
+        for (const op of this.ops.values()) {
             if (!op.background) primary = op;
         }
         if (!primary) {
-            for (const op of this._ops.values()) primary = op;
+            for (const op of this.ops.values()) primary = op;
         }
         const text = primary.detail
             ? `${primary.label} — ${primary.detail}`

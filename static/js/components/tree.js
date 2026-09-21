@@ -29,14 +29,14 @@ const Tree = {
         const node = this.treeData.find(n => n.id === id);
         return node ? node.label : null;
     },
-    _expandedIds: new Set(),
-    _scanningLocations: new Set(),
-    _scanningPhases: new Map(),
-    _queuedLocations: new Map(),  // node id -> queue_id
-    _backfillingLocations: new Set(),
-    _deletingLocations: new Set(),
-    _mergingLocations: new Map(),  // node id -> badge label
-    _paused: false,
+    expandedIds: new Set(),
+    scanningLocations: new Set(),
+    scanningPhases: new Map(),
+    queuedLocations: new Map(),  // node id -> queue_id
+    backfillingLocations: new Set(),
+    deletingLocations: new Set(),
+    mergingLocations: new Map(),  // node id -> badge label
+    paused: false,
 
     init(onSelect, onDeselect) {
         this.el = document.getElementById('tree-content');
@@ -51,7 +51,7 @@ const Tree = {
 
         this.el.addEventListener('click', () => {
             if (this.selected) {
-                this._updateSelection(null);
+                this.updateSelection(null);
                 if (this.onDeselect) this.onDeselect();
             }
         });
@@ -62,22 +62,22 @@ const Tree = {
     },
 
     getLocation(nodeId) {
-        const path = this._findPath(this.treeData, nodeId);
+        const path = this.findPath(this.treeData, nodeId);
         return path ? path[0] : null;
     },
 
     async navigateTo(nodeId) {
-        let path = this._findPath(this.treeData, nodeId);
+        let path = this.findPath(this.treeData, nodeId);
         if (!path) {
             // Node not loaded yet — fetch and merge the expand path
-            const loaded = await this._expandToNode(nodeId);
+            const loaded = await this.expandToNode(nodeId);
             if (!loaded) return;
-            path = this._findPath(this.treeData, nodeId);
+            path = this.findPath(this.treeData, nodeId);
             if (!path) return;
         }
         for (let i = 0; i < path.length - 1; i++) {
             path[i].expanded = true;
-            this._expandedIds.add(path[i].id);
+            this.expandedIds.add(path[i].id);
         }
         const target = path[path.length - 1];
         this.selected = target.id;
@@ -86,16 +86,16 @@ const Tree = {
     },
 
     async revealNode(nodeId) {
-        let path = this._findPath(this.treeData, nodeId);
+        let path = this.findPath(this.treeData, nodeId);
         if (!path) {
-            const loaded = await this._expandToNode(nodeId);
+            const loaded = await this.expandToNode(nodeId);
             if (!loaded) return null;
-            path = this._findPath(this.treeData, nodeId);
+            path = this.findPath(this.treeData, nodeId);
             if (!path) return null;
         }
         for (let i = 0; i < path.length - 1; i++) {
             path[i].expanded = true;
-            this._expandedIds.add(path[i].id);
+            this.expandedIds.add(path[i].id);
         }
         const target = path[path.length - 1];
         this.selected = target.id;
@@ -103,7 +103,7 @@ const Tree = {
         return target;
     },
 
-    async _expandToNode(nodeId) {
+    async expandToNode(nodeId) {
         // Extract numeric ID from "fld-123"
         const numId = String(nodeId).replace('fld-', '');
         const res = await API.get(`/api/tree/expand?target=${numId}`);
@@ -121,37 +121,37 @@ const Tree = {
         }
         for (const pid of path) {
             if (childrenByParent[pid]) {
-                const node = this._findNode(pid);
+                const node = this.findNode(pid);
                 if (node) node.children = childrenByParent[pid];
             }
         }
 
         // Mark all path nodes as expanded
         for (const pid of path) {
-            this._expandedIds.add(pid);
+            this.expandedIds.add(pid);
         }
 
         return true;
     },
 
-    _mergeChildrenByParent(childrenByParent) {
+    mergeChildrenByParent(childrenByParent) {
         for (const [parentId, children] of Object.entries(childrenByParent)) {
             const parentNode = parentId.startsWith('loc-')
                 ? this.treeData.find(n => n.id === parentId)
-                : this._findNode(parentId);
+                : this.findNode(parentId);
             if (parentNode) {
                 parentNode.children = children;
             }
         }
     },
 
-    _findPath(nodes, nodeId, trail) {
+    findPath(nodes, nodeId, trail) {
         trail = trail || [];
         for (const node of nodes) {
             const current = trail.concat(node);
             if (node.id === nodeId) return current;
             if (node.children) {
-                const found = this._findPath(node.children, nodeId, current);
+                const found = this.findPath(node.children, nodeId, current);
                 if (found) return found;
             }
         }
@@ -167,7 +167,7 @@ const Tree = {
     },
 
     collapseAll() {
-        this._expandedIds.clear();
+        this.expandedIds.clear();
         this.selected = null;
         const collapse = (nodes) => {
             for (const n of nodes) {
@@ -181,36 +181,36 @@ const Tree = {
 
     setScanningLocation(locationId, phase) {
         const key = 'loc-' + locationId;
-        const isNew = !this._scanningLocations.has(key);
-        this._scanningLocations.add(key);
-        const oldPhase = this._scanningPhases.get(key);
-        if (phase) this._scanningPhases.set(key, phase);
-        if (isNew || oldPhase !== phase) this._updateLocationBadges(key);
+        const isNew = !this.scanningLocations.has(key);
+        this.scanningLocations.add(key);
+        const oldPhase = this.scanningPhases.get(key);
+        if (phase) this.scanningPhases.set(key, phase);
+        if (isNew || oldPhase !== phase) this.updateLocationBadges(key);
     },
 
     clearScanningLocation(locationId) {
         const key = 'loc-' + locationId;
-        if (!this._scanningLocations.has(key)) return;
-        this._scanningLocations.delete(key);
-        this._scanningPhases.delete(key);
-        this._updateLocationBadges(key);
+        if (!this.scanningLocations.has(key)) return;
+        this.scanningLocations.delete(key);
+        this.scanningPhases.delete(key);
+        this.updateLocationBadges(key);
     },
 
     setMergingLocation(locationId, label) {
         const key = 'loc-' + locationId;
-        this._mergingLocations.set(key, label);
-        this._updateLocationBadges(key);
+        this.mergingLocations.set(key, label);
+        this.updateLocationBadges(key);
     },
 
     clearMergingLocation(locationId) {
         const key = 'loc-' + locationId;
-        if (!this._mergingLocations.has(key)) return;
-        this._mergingLocations.delete(key);
-        this._updateLocationBadges(key);
+        if (!this.mergingLocations.has(key)) return;
+        this.mergingLocations.delete(key);
+        this.updateLocationBadges(key);
     },
 
     setLocationChildren(locationId, children) {
-        const node = this._findNode('loc-' + locationId);
+        const node = this.findNode('loc-' + locationId);
         if (node) {
             node.children = children;
             this.render();
@@ -219,14 +219,14 @@ const Tree = {
 
     updateOnlineStatus(locationIds, online, diskStats) {
         for (const id of locationIds) {
-            const node = this._findNode(id);
+            const node = this.findNode(id);
             if (!node) continue;
             const changed = node.online !== online;
             node.online = online;
             if (diskStats && diskStats[id]) node.diskStats = diskStats[id];
             if (!changed && !(diskStats && diskStats[id])) continue;
 
-            const el = this._findItemEl(id);
+            const el = this.findItemEl(id);
             if (!el) continue;
 
             // Toggle offline class
@@ -248,16 +248,16 @@ const Tree = {
 
             // Update capacity bar if disk stats changed
             if (diskStats && diskStats[id] && node.diskStats) {
-                this._updateCapacityBar(el, node);
+                this.updateCapacityBar(el, node);
             }
         }
     },
 
     setFavourite(nodeId, favourite) {
-        const node = this._findNode(nodeId);
+        const node = this.findNode(nodeId);
         if (node) node.favourite = favourite;
 
-        const el = this._findItemEl(nodeId);
+        const el = this.findItemEl(nodeId);
         if (!el) return;
 
         // Update or add/remove the favourite badge
@@ -274,7 +274,7 @@ const Tree = {
         }
     },
 
-    _updateCapacityBar(el, node) {
+    updateCapacityBar(el, node) {
         const meta = el.querySelector('.tree-location-meta');
         if (!meta) return;
 
@@ -307,16 +307,16 @@ const Tree = {
 
     updateLocationSize(locationId, totalSize) {
         const key = 'loc-' + locationId;
-        const node = this._findNode(key);
+        const node = this.findNode(key);
         if (!node) return;
         node.totalSize = totalSize;
 
-        const el = this._findItemEl(key);
+        const el = this.findItemEl(key);
         if (!el) return;
         const sizeSpan = el.querySelector('.tree-size');
         if (sizeSpan) {
-            // If scanning with no totalSize, phase text is shown instead — handled by _updateLocationBadges
-            if (this._scanningLocations.has(key) && !totalSize) return;
+            // If scanning with no totalSize, phase text is shown instead — handled by updateLocationBadges
+            if (this.scanningLocations.has(key) && !totalSize) return;
             sizeSpan.textContent = totalSize != null ? formatSize(totalSize) : '';
             sizeSpan.classList.remove('tree-size-scanning');
         }
@@ -324,44 +324,44 @@ const Tree = {
 
     setQueuedLocation(locationId, queueId) {
         const key = 'loc-' + locationId;
-        if (this._queuedLocations.has(key)) return;
-        this._queuedLocations.set(key, queueId);
-        this._updateLocationBadges(key);
+        if (this.queuedLocations.has(key)) return;
+        this.queuedLocations.set(key, queueId);
+        this.updateLocationBadges(key);
     },
 
     clearQueuedLocation(locationId) {
         const key = 'loc-' + locationId;
-        if (!this._queuedLocations.has(key)) return;
-        this._queuedLocations.delete(key);
-        this._updateLocationBadges(key);
+        if (!this.queuedLocations.has(key)) return;
+        this.queuedLocations.delete(key);
+        this.updateLocationBadges(key);
     },
 
     setBackfillingLocation(locationId) {
         const key = 'loc-' + locationId;
-        if (this._backfillingLocations.has(key)) return;
-        this._backfillingLocations.add(key);
-        this._updateLocationBadges(key);
+        if (this.backfillingLocations.has(key)) return;
+        this.backfillingLocations.add(key);
+        this.updateLocationBadges(key);
     },
 
     clearBackfillingLocation(locationId) {
         const key = 'loc-' + locationId;
-        if (!this._backfillingLocations.has(key)) return;
-        this._backfillingLocations.delete(key);
-        this._updateLocationBadges(key);
+        if (!this.backfillingLocations.has(key)) return;
+        this.backfillingLocations.delete(key);
+        this.updateLocationBadges(key);
     },
 
     setDeletingLocation(locationId) {
         const key = typeof locationId === 'string' && locationId.startsWith('loc-') ? locationId : 'loc-' + locationId;
-        if (this._deletingLocations.has(key)) return;
-        this._deletingLocations.add(key);
-        this._updateLocationBadges(key);
+        if (this.deletingLocations.has(key)) return;
+        this.deletingLocations.add(key);
+        this.updateLocationBadges(key);
     },
 
     clearDeletingLocation(locationId) {
         const key = typeof locationId === 'string' && locationId.startsWith('loc-') ? locationId : 'loc-' + locationId;
-        if (!this._deletingLocations.has(key)) return;
-        this._deletingLocations.delete(key);
-        this._updateLocationBadges(key);
+        if (!this.deletingLocations.has(key)) return;
+        this.deletingLocations.delete(key);
+        this.updateLocationBadges(key);
     },
 
     async reload() {
@@ -370,15 +370,15 @@ const Tree = {
         this.treeData = res.data;
 
         // Restore expanded state
-        if (this._expandedIds.size > 0) {
+        if (this.expandedIds.size > 0) {
             // Expand locations (they're in the fresh data from /api/locations)
             // Collect ALL folder IDs for batch fetch — including deep ones
-            // not yet in the tree. _mergeChildrenTopDown cascades through
+            // not yet in the tree. mergeChildrenTopDown cascades through
             // multiple passes so children appear as their parents are merged.
             const folderIds = [];
-            for (const eid of this._expandedIds) {
+            for (const eid of this.expandedIds) {
                 if (eid.startsWith('loc-')) {
-                    const node = this._findNode(eid);
+                    const node = this.findNode(eid);
                     if (node) node.expanded = true;
                 } else {
                     folderIds.push(eid);
@@ -390,29 +390,29 @@ const Tree = {
                 const numericIds = folderIds.map(id => id.replace('fld-', ''));
                 const childRes = await API.get(`/api/tree/children?ids=${numericIds.join(',')}`);
                 if (childRes.ok) {
-                    this._mergeChildrenTopDown(childRes.data);
+                    this.mergeChildrenTopDown(childRes.data);
                 }
             }
 
             // Now prune IDs for nodes that genuinely no longer exist
             // (deleted by the operation that triggered this reload)
             const validIds = new Set();
-            for (const eid of this._expandedIds) {
-                if (this._findNode(eid)) validIds.add(eid);
+            for (const eid of this.expandedIds) {
+                if (this.findNode(eid)) validIds.add(eid);
             }
-            this._expandedIds = validIds;
+            this.expandedIds = validIds;
         }
 
         // Re-expand nodes
-        for (const eid of this._expandedIds) {
-            const node = this._findNode(eid);
+        for (const eid of this.expandedIds) {
+            const node = this.findNode(eid);
             if (node) node.expanded = true;
         }
 
         this.render();
     },
 
-    _mergeChildrenTopDown(childrenMap) {
+    mergeChildrenTopDown(childrenMap) {
         // Sort keys so that shallower nodes (closer to root) are processed first.
         // This ensures parent children arrays exist before we try to find deeper nodes.
         // We do multiple passes: merge what we can, repeat until nothing new merges.
@@ -423,7 +423,7 @@ const Tree = {
             progress = false;
             for (const key of keys) {
                 if (merged.has(key)) continue;
-                const node = this._findNode(key);
+                const node = this.findNode(key);
                 if (node) {
                     node.children = childrenMap[key];
                     merged.add(key);
@@ -433,31 +433,31 @@ const Tree = {
         }
     },
 
-    async _loadChildren(nodeId) {
+    async loadChildren(nodeId) {
         const numId = nodeId.replace('fld-', '');
         const res = await API.get(`/api/tree/children?ids=${numId}`);
         if (res.ok && res.data[nodeId]) {
-            const node = this._findNode(nodeId);
+            const node = this.findNode(nodeId);
             if (node) {
                 node.children = res.data[nodeId];
             }
         }
     },
 
-    _nodeMatches(node) {
+    nodeMatches(node) {
         if (!this.filterText) return true;
         if (node.label.toLowerCase().includes(this.filterText)) return true;
         if (node.children) {
-            return node.children.some(child => this._nodeMatches(child));
+            return node.children.some(child => this.nodeMatches(child));
         }
         return false;
     },
 
-    _getVisibleNodes() {
+    getVisibleNodes() {
         const result = [];
         const walk = (nodes) => {
             for (const node of nodes) {
-                if (this.filterText && !this._nodeMatches(node)) continue;
+                if (this.filterText && !this.nodeMatches(node)) continue;
                 result.push(node);
                 if (node.children && (node.expanded || this.filterText)) {
                     walk(node.children);
@@ -468,28 +468,28 @@ const Tree = {
         return result;
     },
 
-    _findNode(nodeId, nodes) {
+    findNode(nodeId, nodes) {
         nodes = nodes || this.treeData;
         for (const node of nodes) {
             if (node.id === nodeId) return node;
             if (node.children) {
-                const found = this._findNode(nodeId, node.children);
+                const found = this.findNode(nodeId, node.children);
                 if (found) return found;
             }
         }
         return null;
     },
 
-    _findItemEl(nodeId) {
+    findItemEl(nodeId) {
         return this.el.querySelector(`[data-node-id="${nodeId}"]`);
     },
 
-    _updateSelection(newId) {
+    updateSelection(newId) {
         const oldEl = this.el.querySelector('.tree-item.selected');
         if (oldEl) oldEl.classList.remove('selected');
         this.selected = newId;
         if (newId) {
-            const newEl = this._findItemEl(newId);
+            const newEl = this.findItemEl(newId);
             if (newEl) {
                 newEl.classList.add('selected');
                 newEl.scrollIntoView({ block: 'nearest', behavior: 'instant' });
@@ -499,10 +499,10 @@ const Tree = {
 
     // Rebuild operational badges (scanning/queued/backfilling/deleting/paused)
     // and meta-row phase text on a single location's DOM element in-place.
-    _updateLocationBadges(nodeId) {
-        const el = this._findItemEl(nodeId);
+    updateLocationBadges(nodeId) {
+        const el = this.findItemEl(nodeId);
         if (!el) return;
-        const node = this._findNode(nodeId);
+        const node = this.findNode(nodeId);
         if (!node || node.type !== 'location') return;
 
         // Remove existing operational badges and cancel buttons
@@ -513,7 +513,7 @@ const Tree = {
         const meta = el.querySelector('.tree-location-meta');
         const insertBefore = meta || null;
 
-        if (this._scanningLocations.has(nodeId)) {
+        if (this.scanningLocations.has(nodeId)) {
             const sb = document.createElement('span');
             sb.className = 'tree-badge scanning';
             sb.textContent = 'scanning';
@@ -533,7 +533,7 @@ const Tree = {
                 await API.post('/api/scan/cancel', { location_id: nodeId });
             });
             el.insertBefore(cb, insertBefore);
-        } else if (this._queuedLocations.has(nodeId)) {
+        } else if (this.queuedLocations.has(nodeId)) {
             const qb = document.createElement('span');
             qb.className = 'tree-badge queued';
             qb.textContent = 'queued';
@@ -542,7 +542,7 @@ const Tree = {
             cb.className = 'tree-badge cancel tree-badge-clickable';
             cb.textContent = 'cancel';
             cb.title = 'Remove from queue';
-            const queueId = this._queuedLocations.get(nodeId);
+            const queueId = this.queuedLocations.get(nodeId);
             cb.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const ok = await ConfirmModal.open({
@@ -554,7 +554,7 @@ const Tree = {
                 await API.post('/api/scan/cancel', { queue_id: queueId });
             });
             el.insertBefore(cb, insertBefore);
-        } else if (this._backfillingLocations.has(nodeId)) {
+        } else if (this.backfillingLocations.has(nodeId)) {
             const bb = document.createElement('span');
             bb.className = 'tree-badge backfilling';
             bb.textContent = 'backfilling';
@@ -574,19 +574,19 @@ const Tree = {
                 await API.post('/api/scan/cancel', { location_id: nodeId, type: 'backfill' });
             });
             el.insertBefore(cb, insertBefore);
-        } else if (this._deletingLocations.has(nodeId)) {
+        } else if (this.deletingLocations.has(nodeId)) {
             const db = document.createElement('span');
             db.className = 'tree-badge deleting';
             db.textContent = 'deleting';
             el.insertBefore(db, insertBefore);
-        } else if (this._mergingLocations.has(nodeId)) {
+        } else if (this.mergingLocations.has(nodeId)) {
             const mb = document.createElement('span');
             mb.className = 'tree-badge merging';
-            mb.textContent = this._mergingLocations.get(nodeId);
+            mb.textContent = this.mergingLocations.get(nodeId);
             el.insertBefore(mb, insertBefore);
         }
 
-        if (this._paused && !this._scanningLocations.has(nodeId) && !this._deletingLocations.has(nodeId)) {
+        if (this.paused && !this.scanningLocations.has(nodeId) && !this.deletingLocations.has(nodeId)) {
             const pb = document.createElement('span');
             pb.className = 'tree-badge queued';
             pb.textContent = 'paused';
@@ -596,7 +596,7 @@ const Tree = {
         // Update meta-row size/phase text
         const sizeSpan = el.querySelector('.tree-size');
         if (sizeSpan) {
-            if (this._scanningLocations.has(nodeId) && !node.totalSize) {
+            if (this.scanningLocations.has(nodeId) && !node.totalSize) {
                 const phaseLabels = {
                     scanning: 'metadata...',
                     comparing: 'comparing...',
@@ -607,7 +607,7 @@ const Tree = {
                     recounting: 'finalizing...',
                     rebuilding: 'finalizing...',
                 };
-                const phase = this._scanningPhases.get(nodeId);
+                const phase = this.scanningPhases.get(nodeId);
                 sizeSpan.textContent = phaseLabels[phase] || 'scanning...';
                 sizeSpan.classList.add('tree-size-scanning');
             } else {
@@ -617,12 +617,12 @@ const Tree = {
         }
     },
 
-    _findParent(nodeId, nodes, parent) {
+    findParent(nodeId, nodes, parent) {
         nodes = nodes || this.treeData;
         for (const node of nodes) {
             if (node.id === nodeId) return parent || null;
             if (node.children) {
-                const found = this._findParent(nodeId, node.children, node);
+                const found = this.findParent(nodeId, node.children, node);
                 if (found) return found;
             }
         }
@@ -630,7 +630,7 @@ const Tree = {
     },
 
     handleKey(e) {
-        const visible = this._getVisibleNodes();
+        const visible = this.getVisibleNodes();
         if (visible.length === 0) return;
 
         const curIdx = this.selected
@@ -642,14 +642,14 @@ const Tree = {
                 e.preventDefault();
                 const newIdx = curIdx < visible.length - 1 ? curIdx + 1 : curIdx;
                 const newId = (curIdx === -1 && visible.length > 0) ? visible[0].id : visible[newIdx].id;
-                this._updateSelection(newId);
+                this.updateSelection(newId);
                 break;
             }
             case 'ArrowUp': {
                 e.preventDefault();
                 const newIdx = curIdx > 0 ? curIdx - 1 : 0;
                 const newId = (curIdx === -1 && visible.length > 0) ? visible[0].id : visible[newIdx].id;
-                this._updateSelection(newId);
+                this.updateSelection(newId);
                 break;
             }
             case 'ArrowRight': {
@@ -660,16 +660,16 @@ const Tree = {
                 if (!hasChildren) return;
                 if (!node.expanded) {
                     node.expanded = true;
-                    this._expandedIds.add(node.id);
+                    this.expandedIds.add(node.id);
                     if (node.children === null) {
-                        this._loadChildren(node.id).then(() => this.render());
+                        this.loadChildren(node.id).then(() => this.render());
                     } else {
                         this.render();
                     }
                 } else {
                     const firstChild = node.children && node.children[0];
                     if (firstChild) {
-                        this._updateSelection(firstChild.id);
+                        this.updateSelection(firstChild.id);
                     }
                 }
                 break;
@@ -681,23 +681,23 @@ const Tree = {
                 const hasChildren = node.children && node.children.length > 0;
                 if (hasChildren && node.expanded) {
                     node.expanded = false;
-                    this._expandedIds.delete(node.id);
+                    this.expandedIds.delete(node.id);
                     this.render();
                 } else {
-                    const parent = this._findParent(node.id);
+                    const parent = this.findParent(node.id);
                     if (parent) {
-                        this._updateSelection(parent.id);
+                        this.updateSelection(parent.id);
                     }
                 }
                 break;
             }
             case 'Home':
                 e.preventDefault();
-                this._updateSelection(visible[0].id);
+                this.updateSelection(visible[0].id);
                 break;
             case 'End':
                 e.preventDefault();
-                this._updateSelection(visible[visible.length - 1].id);
+                this.updateSelection(visible[visible.length - 1].id);
                 break;
             case 'Enter': {
                 e.preventDefault();
@@ -711,7 +711,7 @@ const Tree = {
         }
     },
 
-    _scrollSelectedIntoView() {
+    scrollSelectedIntoView() {
         const el = this.el.querySelector('.selected');
         if (el) el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     },
@@ -721,16 +721,16 @@ const Tree = {
         const container = document.createElement('div');
         container.className = 'panel-body';
         this.treeData.forEach(location => {
-            if (this._nodeMatches(location)) {
-                this._renderNode(container, location, 0);
+            if (this.nodeMatches(location)) {
+                this.renderNode(container, location, 0);
             }
         });
         this.el.appendChild(container);
-        this._scrollSelectedIntoView();
+        this.scrollSelectedIntoView();
     },
 
-    _renderNode(parent, node, depth) {
-        if (this.filterText && !this._nodeMatches(node)) return;
+    renderNode(parent, node, depth) {
+        if (this.filterText && !this.nodeMatches(node)) return;
 
         const item = document.createElement('div');
         item.dataset.nodeId = node.id;
@@ -776,7 +776,7 @@ const Tree = {
 
         // scanning/queued badge on the name line
         if (node.type === 'location') {
-            if (this._scanningLocations.has(node.id)) {
+            if (this.scanningLocations.has(node.id)) {
                 const sb = document.createElement('span');
                 sb.className = 'tree-badge scanning';
                 sb.textContent = 'scanning';
@@ -796,7 +796,7 @@ const Tree = {
                     await API.post('/api/scan/cancel', { location_id: node.id });
                 });
                 item.appendChild(cb);
-            } else if (this._queuedLocations.has(node.id)) {
+            } else if (this.queuedLocations.has(node.id)) {
                 const qb = document.createElement('span');
                 qb.className = 'tree-badge queued';
                 qb.textContent = 'queued';
@@ -805,7 +805,7 @@ const Tree = {
                 cb.className = 'tree-badge cancel tree-badge-clickable';
                 cb.textContent = 'cancel';
                 cb.title = 'Remove from queue';
-                const queueId = this._queuedLocations.get(node.id);
+                const queueId = this.queuedLocations.get(node.id);
                 cb.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     const ok = await ConfirmModal.open({
@@ -817,7 +817,7 @@ const Tree = {
                     await API.post('/api/scan/cancel', { queue_id: queueId });
                 });
                 item.appendChild(cb);
-            } else if (this._backfillingLocations.has(node.id)) {
+            } else if (this.backfillingLocations.has(node.id)) {
                 const bb = document.createElement('span');
                 bb.className = 'tree-badge backfilling';
                 bb.textContent = 'backfilling';
@@ -837,18 +837,18 @@ const Tree = {
                     await API.post('/api/scan/cancel', { location_id: node.id, type: 'backfill' });
                 });
                 item.appendChild(cb);
-            } else if (this._deletingLocations.has(node.id)) {
+            } else if (this.deletingLocations.has(node.id)) {
                 const db = document.createElement('span');
                 db.className = 'tree-badge deleting';
                 db.textContent = 'deleting';
                 item.appendChild(db);
-            } else if (this._mergingLocations.has(node.id)) {
+            } else if (this.mergingLocations.has(node.id)) {
                 const mb = document.createElement('span');
                 mb.className = 'tree-badge merging';
-                mb.textContent = this._mergingLocations.get(node.id);
+                mb.textContent = this.mergingLocations.get(node.id);
                 item.appendChild(mb);
             }
-            if (this._paused && !this._scanningLocations.has(node.id) && !this._deletingLocations.has(node.id)) {
+            if (this.paused && !this.scanningLocations.has(node.id) && !this.deletingLocations.has(node.id)) {
                 const pb = document.createElement('span');
                 pb.className = 'tree-badge queued';
                 pb.textContent = 'paused';
@@ -863,7 +863,7 @@ const Tree = {
             meta.className = 'tree-location-meta';
             const sizeSpan = document.createElement('span');
             sizeSpan.className = 'tree-size';
-            if (this._scanningLocations.has(node.id) && !node.totalSize) {
+            if (this.scanningLocations.has(node.id) && !node.totalSize) {
                 const phaseLabels = {
                     scanning: 'metadata...',
                     comparing: 'comparing...',
@@ -874,7 +874,7 @@ const Tree = {
                     recounting: 'finalizing...',
                     rebuilding: 'finalizing...',
                 };
-                const phase = this._scanningPhases.get(node.id);
+                const phase = this.scanningPhases.get(node.id);
                 sizeSpan.textContent = phaseLabels[phase] || 'scanning...';
                 sizeSpan.classList.add('tree-size-scanning');
             } else {
@@ -934,15 +934,15 @@ const Tree = {
         if (hasChildren) {
             toggle.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                if (node.type === 'location' && this._deletingLocations.has(node.id)) return;
+                if (node.type === 'location' && this.deletingLocations.has(node.id)) return;
                 if (node.expanded) {
                     node.expanded = false;
-                    this._expandedIds.delete(node.id);
+                    this.expandedIds.delete(node.id);
                 } else {
                     node.expanded = true;
-                    this._expandedIds.add(node.id);
+                    this.expandedIds.add(node.id);
                     if (node.children === null) {
-                        await this._loadChildren(node.id);
+                        await this.loadChildren(node.id);
                     }
                 }
                 this.selected = node.id;
@@ -954,13 +954,13 @@ const Tree = {
         // Row click: expand if closed, select only if already open
         item.addEventListener('click', async (e) => {
             e.stopPropagation();
-            if (node.type === 'location' && this._deletingLocations.has(node.id)) return;
+            if (node.type === 'location' && this.deletingLocations.has(node.id)) return;
             let structural = false;
             if (hasChildren && !node.expanded) {
                 node.expanded = true;
-                this._expandedIds.add(node.id);
+                this.expandedIds.add(node.id);
                 if (node.children === null) {
-                    await this._loadChildren(node.id);
+                    await this.loadChildren(node.id);
                 }
                 structural = true;
             }
@@ -968,7 +968,7 @@ const Tree = {
                 this.selected = node.id;
                 this.render();
             } else {
-                this._updateSelection(node.id);
+                this.updateSelection(node.id);
             }
             if (this.onSelect) this.onSelect(node);
         });
@@ -979,7 +979,7 @@ const Tree = {
                 e.stopPropagation();
                 if (!node.expanded) return;
                 node.expanded = false;
-                this._expandedIds.delete(node.id);
+                this.expandedIds.delete(node.id);
                 this.render();
             });
         }
@@ -1023,7 +1023,7 @@ const Tree = {
         parent.appendChild(item);
 
         if (node.children && node.children.length > 0 && (node.expanded || this.filterText)) {
-            node.children.forEach(child => this._renderNode(parent, child, depth + 1));
+            node.children.forEach(child => this.renderNode(parent, child, depth + 1));
         }
     },
 };

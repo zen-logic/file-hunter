@@ -16,19 +16,19 @@ const ThemeEditor = {
     bodyEl: null,
     actionsEl: null,
     onSave: null,
-    _initialized: false,
+    initialized: false,
 
     init(onSave) {
         this.onSave = onSave;
-        if (this._initialized) return;
-        this._initialized = true;
+        if (this.initialized) return;
+        this.initialized = true;
         this.overlayEl = document.getElementById('theme-editor-modal');
         this.titleEl = document.getElementById('theme-editor-title');
         this.bodyEl = document.getElementById('theme-editor-body');
         this.actionsEl = document.getElementById('theme-editor-actions');
 
         this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this._cancel();
+            if (e.target === this.overlayEl) this.cancel();
         });
 
         document.addEventListener('keydown', (e) => {
@@ -39,7 +39,7 @@ const ThemeEditor = {
             const confirm = document.getElementById('confirm-modal');
             if (!prompt.classList.contains('hidden')) return;
             if (!confirm.classList.contains('hidden')) return;
-            this._cancel();
+            this.cancel();
         });
     },
 
@@ -55,20 +55,20 @@ const ThemeEditor = {
 
         currentValues = {};
         if (themeName && themeName !== 'default') {
-            await this._loadThemeValues(themeName);
+            await this.loadThemeValues(themeName);
         } else {
-            this._loadComputedValues();
+            this.loadComputedValues();
         }
 
-        this._render(themeName || '');
+        this.render(themeName || '');
         this.overlayEl.classList.remove('hidden');
     },
 
-    async _loadThemeValues(themeName) {
+    async loadThemeValues(themeName) {
         const res = await fetch(`/css/themes/${themeName}.css`);
         if (!res.ok) {
             Toast.error('Could not load theme.');
-            this._loadComputedValues();
+            this.loadComputedValues();
             return;
         }
         const text = await res.text();
@@ -78,7 +78,7 @@ const ThemeEditor = {
         }
     },
 
-    _loadComputedValues() {
+    loadComputedValues() {
         const style = getComputedStyle(document.documentElement);
         for (const group of manifest.groups) {
             for (const v of group.vars) {
@@ -88,7 +88,7 @@ const ThemeEditor = {
         }
     },
 
-    _render(themeName) {
+    render(themeName) {
         this.bodyEl.innerHTML = '';
         const displayName = themeName
             ? themeName.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -117,7 +117,7 @@ const ThemeEditor = {
                 const val = currentValues[v.var] || '';
 
                 if (v.type === 'color') {
-                    const hex = this._toHex(val);
+                    const hex = this.toHex(val);
                     const picker = document.createElement('input');
                     picker.type = 'color';
                     picker.className = 'theme-editor-color';
@@ -132,12 +132,12 @@ const ThemeEditor = {
 
                     picker.addEventListener('input', () => {
                         text.value = picker.value;
-                        this._preview(v.var, picker.value);
+                        this.preview(v.var, picker.value);
                     });
                     text.addEventListener('change', () => {
-                        const h = this._toHex(text.value);
+                        const h = this.toHex(text.value);
                         if (h) picker.value = h;
-                        this._preview(v.var, text.value);
+                        this.preview(v.var, text.value);
                     });
 
                     inputs.appendChild(picker);
@@ -158,7 +158,7 @@ const ThemeEditor = {
 
                     slider.addEventListener('input', () => {
                         display.textContent = slider.value;
-                        this._preview(v.var, slider.value);
+                        this.preview(v.var, slider.value);
                     });
 
                     inputs.appendChild(slider);
@@ -175,7 +175,7 @@ const ThemeEditor = {
                         select.appendChild(o);
                     }
                     select.addEventListener('change', () => {
-                        this._preview(v.var, select.value);
+                        this.preview(v.var, select.value);
                     });
                     inputs.appendChild(select);
                 } else {
@@ -186,7 +186,7 @@ const ThemeEditor = {
                     text.value = val;
                     text.dataset.var = v.var;
                     text.addEventListener('change', () => {
-                        this._preview(v.var, text.value);
+                        this.preview(v.var, text.value);
                     });
                     inputs.appendChild(text);
                 }
@@ -205,19 +205,19 @@ const ThemeEditor = {
             <button class="btn btn-primary" id="theme-editor-save-as">Save As</button>
         `;
 
-        document.getElementById('theme-editor-cancel').addEventListener('click', () => this._cancel());
+        document.getElementById('theme-editor-cancel').addEventListener('click', () => this.cancel());
         document.getElementById('theme-editor-save').addEventListener('click', () => {
-            if (canSave) this._saveExisting();
-            else this._saveAs();
+            if (canSave) this.saveExisting();
+            else this.saveAs();
         });
-        document.getElementById('theme-editor-save-as').addEventListener('click', () => this._saveAs());
+        document.getElementById('theme-editor-save-as').addEventListener('click', () => this.saveAs());
     },
 
-    _preview(varName, value) {
+    preview(varName, value) {
         document.documentElement.style.setProperty(varName, value);
     },
 
-    _toHex(val) {
+    toHex(val) {
         if (!val) return null;
         val = val.trim();
         if (/^#[0-9a-fA-F]{6}$/.test(val)) return val;
@@ -231,7 +231,7 @@ const ThemeEditor = {
         return null;
     },
 
-    _collectValues() {
+    collectValues() {
         const values = {};
         for (const el of this.bodyEl.querySelectorAll('[data-var]')) {
             if (el.type === 'color') continue;
@@ -240,8 +240,8 @@ const ThemeEditor = {
         return values;
     },
 
-    _buildCss() {
-        const values = this._collectValues();
+    buildCss() {
+        const values = this.collectValues();
         let css = ':root {\n';
         for (const group of manifest.groups) {
             css += `    /* ${group.label} */\n`;
@@ -257,20 +257,20 @@ const ThemeEditor = {
         return css;
     },
 
-    async _saveExisting() {
+    async saveExisting() {
         if (!canSave || !editingName) return;
-        const css = this._buildCss();
+        const css = this.buildCss();
         const res = await API.post('/api/themes', { name: editingName, css, overwrite: true });
         if (!res.ok) {
             Toast.error(res.error || 'Failed to save theme.');
             return;
         }
-        this._close();
+        this.closeEditor();
         if (this.onSave) await this.onSave(editingName);
         applyTheme(editingName, true);
     },
 
-    async _saveAs() {
+    async saveAs() {
         const input = await PromptModal.open({
             title: 'Save Theme As',
             message: 'Enter a name for the new theme.',
@@ -279,10 +279,10 @@ const ThemeEditor = {
         if (!input) return;
         const name = input.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         if (!name) return;
-        const css = this._buildCss();
+        const css = this.buildCss();
         const res = await API.post('/api/themes', { name, css });
         if (res.ok) {
-            this._close();
+            this.closeEditor();
             if (this.onSave) await this.onSave(name);
             applyTheme(name, true);
         } else if (res.error && res.error.includes('already exists')) {
@@ -294,7 +294,7 @@ const ThemeEditor = {
             if (overwrite) {
                 const res2 = await API.post('/api/themes', { name, css, overwrite: true });
                 if (res2.ok) {
-                    this._close();
+                    this.closeEditor();
                     if (this.onSave) await this.onSave(name);
                     applyTheme(name, true);
                 } else {
@@ -306,13 +306,13 @@ const ThemeEditor = {
         }
     },
 
-    _cancel() {
-        this._clearInlineOverrides();
+    cancel() {
+        this.clearInlineOverrides();
         applyTheme(originalTheme);
-        this._close();
+        this.closeEditor();
     },
 
-    _clearInlineOverrides() {
+    clearInlineOverrides() {
         if (!manifest) return;
         for (const group of manifest.groups) {
             for (const v of group.vars) {
@@ -321,8 +321,8 @@ const ThemeEditor = {
         }
     },
 
-    _close() {
-        this._clearInlineOverrides();
+    closeEditor() {
+        this.clearInlineOverrides();
         this.overlayEl.classList.add('hidden');
     },
 };

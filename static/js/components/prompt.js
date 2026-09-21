@@ -4,7 +4,7 @@ const PromptModal = {
     textEl: null,
     inputEl: null,
     submitEl: null,
-    _resolve: null,
+    pendingResolve: null,
 
     init() {
         this.overlayEl = document.getElementById('prompt-modal');
@@ -13,20 +13,20 @@ const PromptModal = {
         this.inputEl = document.getElementById('prompt-modal-input');
         this.submitEl = document.getElementById('prompt-modal-submit');
 
-        document.getElementById('prompt-modal-cancel').addEventListener('click', () => this._finish(null));
-        this.submitEl.addEventListener('click', () => this._finish(this.inputEl.value.trim()));
+        document.getElementById('prompt-modal-cancel').addEventListener('click', () => this.complete(null));
+        this.submitEl.addEventListener('click', () => this.complete(this.inputEl.value.trim()));
 
         this.inputEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this._finish(this.inputEl.value.trim());
+            if (e.key === 'Enter') this.complete(this.inputEl.value.trim());
         });
 
         this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this._finish(null);
+            if (e.target === this.overlayEl) this.complete(null);
         });
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this._finish(null);
+                this.complete(null);
             }
         });
     },
@@ -38,14 +38,14 @@ const PromptModal = {
         this.inputEl.placeholder = placeholder;
         this.overlayEl.classList.remove('hidden');
         this.inputEl.focus();
-        return new Promise((resolve) => { this._resolve = resolve; });
+        return new Promise((resolve) => { this.pendingResolve = resolve; });
     },
 
-    _finish(result) {
+    complete(result) {
         this.overlayEl.classList.add('hidden');
-        if (this._resolve) {
-            this._resolve(result);
-            this._resolve = null;
+        if (this.pendingResolve) {
+            this.pendingResolve(result);
+            this.pendingResolve = null;
         }
     },
 };

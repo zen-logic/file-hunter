@@ -62,15 +62,15 @@ const Search = {
 
         this.toggleBtn.addEventListener('click', () => this.toggle());
 
-        this.searchBtn.addEventListener('click', () => this._doSearch());
-        document.getElementById('search-clear').addEventListener('click', () => this._doClear());
+        this.searchBtn.addEventListener('click', () => this.doSearch());
+        document.getElementById('search-clear').addEventListener('click', () => this.doClear());
 
         // Update button state on any input change (basic mode)
         document.getElementById('search-basic').querySelectorAll('input, select').forEach(el => {
-            el.addEventListener('input', () => this._updateSearchBtn());
-            el.addEventListener('change', () => this._updateSearchBtn());
+            el.addEventListener('input', () => this.updateSearchBtn());
+            el.addEventListener('change', () => this.updateSearchBtn());
             el.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') this._doSearch();
+                if (e.key === 'Enter') this.doSearch();
             });
         });
 
@@ -79,9 +79,9 @@ const Search = {
             document.getElementById('search-files-row').classList.toggle('hidden', !e.target.checked);
         });
 
-        this._updateSearchBtn();
-        this._initAdvanced();
-        this._initSavedSearches();
+        this.updateSearchBtn();
+        this.initAdvanced();
+        this.initSavedSearches();
     },
 
     toggle() {
@@ -99,7 +99,7 @@ const Search = {
     },
 
     close() {
-        if (!this.visible && !this._hasFilters()) return;
+        if (!this.visible && !this.hasFilters()) return;
         // Clear basic
         document.getElementById('search-basic').querySelectorAll('input[type="text"], input[type="date"], input[type="number"]').forEach(el => el.value = '');
         document.getElementById('search-basic').querySelectorAll('select').forEach(el => el.selectedIndex = 0);
@@ -108,10 +108,10 @@ const Search = {
         document.getElementById('search-files-row').classList.add('hidden');
         document.getElementById('search-dupes').checked = false;
         // Clear advanced
-        this._clearAdvanced();
+        this.clearAdvanced();
         // Uncheck scope but keep bar visible
         document.getElementById('search-scope-check').checked = false;
-        this._updateSearchBtn();
+        this.updateSearchBtn();
         if (this.visible) {
             this.visible = false;
             this.panelEl.classList.add('hidden');
@@ -135,8 +135,8 @@ const Search = {
         }
     },
 
-    _getValues() {
-        if (this.mode === 'advanced') return this._getAdvancedValues();
+    getValues() {
+        if (this.mode === 'advanced') return this.getAdvancedValues();
         const values = {
             name: document.getElementById('search-name').value.trim(),
             nameMatch: document.getElementById('search-name-match').value,
@@ -162,33 +162,33 @@ const Search = {
         return values;
     },
 
-    _hasFilters() {
-        if (this.mode === 'advanced') return this._hasAdvancedFilters();
-        const v = this._getValues();
+    hasFilters() {
+        if (this.mode === 'advanced') return this.hasAdvancedFilters();
+        const v = this.getValues();
         return v.name || v.type || v.description || v.tags ||
                v.sizeMin || v.sizeMax || v.minDups || v.maxDups ||
                v.minFiles || v.maxFiles || v.dateFrom || v.dateTo || v.dupes || v.folders;
     },
 
-    _updateSearchBtn() {
+    updateSearchBtn() {
         if (this.mode === 'advanced') {
-            document.getElementById('search-adv-go').disabled = !this._hasAdvancedFilters();
+            document.getElementById('search-adv-go').disabled = !this.hasAdvancedFilters();
         } else {
-            this.searchBtn.disabled = !this._hasFilters();
+            this.searchBtn.disabled = !this.hasFilters();
         }
     },
 
-    _doSearch() {
-        if (!this._hasFilters()) return;
-        const values = this._getValues();
+    doSearch() {
+        if (!this.hasFilters()) return;
+        const values = this.getValues();
         if (this.onSearch) this.onSearch(values);
     },
 
-    _doClear() {
+    doClear() {
         if (this.mode === 'advanced') {
-            this._clearAdvanced();
+            this.clearAdvanced();
             document.getElementById('search-scope-check').checked = false;
-            this._updateSearchBtn();
+            this.updateSearchBtn();
             if (this.onClear) this.onClear();
             return;
         }
@@ -199,20 +199,20 @@ const Search = {
         document.getElementById('search-files-row').classList.add('hidden');
         document.getElementById('search-dupes').checked = false;
         document.getElementById('search-scope-check').checked = false;
-        this._updateSearchBtn();
+        this.updateSearchBtn();
         if (this.onClear) this.onClear();
     },
 
     // ── Advanced mode ──
 
-    _initAdvanced() {
+    initAdvanced() {
         const modeLink = document.getElementById('search-mode-link');
-        modeLink.addEventListener('click', () => this._toggleMode());
+        modeLink.addEventListener('click', () => this.toggleMode());
 
-        document.getElementById('search-add-include').addEventListener('click', () => this._addCondition('include'));
-        document.getElementById('search-add-exclude').addEventListener('click', () => this._addCondition('exclude'));
-        document.getElementById('search-adv-go').addEventListener('click', () => this._doSearch());
-        document.getElementById('search-adv-clear').addEventListener('click', () => this._doClear());
+        document.getElementById('search-add-include').addEventListener('click', () => this.addCondition('include'));
+        document.getElementById('search-add-exclude').addEventListener('click', () => this.addCondition('exclude'));
+        document.getElementById('search-adv-go').addEventListener('click', () => this.doSearch());
+        document.getElementById('search-adv-clear').addEventListener('click', () => this.doClear());
 
         // Restore mode from localStorage
         const saved = localStorage.getItem('fh-search-mode');
@@ -221,18 +221,18 @@ const Search = {
             document.getElementById('search-basic').classList.add('hidden');
             document.getElementById('search-advanced').classList.remove('hidden');
             modeLink.textContent = 'Basic';
-            this._addCondition('include');
+            this.addCondition('include');
         }
     },
 
-    _toggleMode() {
+    toggleMode() {
         const modeLink = document.getElementById('search-mode-link');
         if (this.mode === 'basic') {
             this.mode = 'advanced';
             document.getElementById('search-basic').classList.add('hidden');
             document.getElementById('search-advanced').classList.remove('hidden');
             modeLink.textContent = 'Basic';
-            if (this.conditions.length === 0) this._addCondition('include');
+            if (this.conditions.length === 0) this.addCondition('include');
             const firstInput = document.querySelector('#search-conditions input');
             if (firstInput) firstInput.focus();
         } else {
@@ -243,10 +243,10 @@ const Search = {
             document.getElementById('search-name').focus();
         }
         localStorage.setItem('fh-search-mode', this.mode);
-        this._updateSearchBtn();
+        this.updateSearchBtn();
     },
 
-    _addCondition(op) {
+    addCondition(op) {
         const id = this.nextCondId++;
         const container = document.getElementById('search-conditions');
         const row = document.createElement('div');
@@ -280,7 +280,7 @@ const Search = {
         removeBtn.className = 'search-condition-remove';
         removeBtn.textContent = '\u00d7';
         removeBtn.title = 'Remove';
-        removeBtn.addEventListener('click', () => this._removeCondition(id));
+        removeBtn.addEventListener('click', () => this.removeCondition(id));
         row.appendChild(removeBtn);
 
         container.appendChild(row);
@@ -289,32 +289,32 @@ const Search = {
         this.conditions.push(cond);
 
         // Render initial inputs (name)
-        this._renderConditionInputs(inputsDiv, 'name');
+        this.renderConditionInputs(inputsDiv, 'name');
 
         // Field change handler
         fieldSel.addEventListener('change', () => {
             cond.field = fieldSel.value;
-            this._renderConditionInputs(inputsDiv, fieldSel.value);
-            this._syncFoldersCheckbox();
-            this._updateSearchBtn();
+            this.renderConditionInputs(inputsDiv, fieldSel.value);
+            this.syncFoldersCheckbox();
+            this.updateSearchBtn();
         });
 
-        this._updateRemoveButtons();
-        this._updateSearchBtn();
+        this.updateRemoveButtons();
+        this.updateSearchBtn();
         return cond;
     },
 
-    _removeCondition(id) {
+    removeCondition(id) {
         if (this.conditions.length <= 1) return;
         this.conditions = this.conditions.filter(c => c.id !== id);
         const row = document.querySelector(`.search-condition-row[data-cond-id="${id}"]`);
         if (row) row.remove();
-        this._updateRemoveButtons();
-        this._syncFoldersCheckbox();
-        this._updateSearchBtn();
+        this.updateRemoveButtons();
+        this.syncFoldersCheckbox();
+        this.updateSearchBtn();
     },
 
-    _syncFoldersCheckbox() {
+    syncFoldersCheckbox() {
         const cb = document.getElementById('search-adv-folders');
         if (!cb) return;
         const hasFolderOnly = this.conditions.some(c => c.field === 'files');
@@ -326,7 +326,7 @@ const Search = {
         }
     },
 
-    _updateRemoveButtons() {
+    updateRemoveButtons() {
         const rows = document.querySelectorAll('.search-condition-row');
         rows.forEach(row => {
             const btn = row.querySelector('.search-condition-remove');
@@ -334,14 +334,14 @@ const Search = {
         });
     },
 
-    _renderConditionInputs(container, field) {
+    renderConditionInputs(container, field) {
         container.innerHTML = '';
         const bind = () => {
             container.querySelectorAll('input, select').forEach(el => {
-                el.addEventListener('input', () => this._updateSearchBtn());
-                el.addEventListener('change', () => this._updateSearchBtn());
+                el.addEventListener('input', () => this.updateSearchBtn());
+                el.addEventListener('change', () => this.updateSearchBtn());
                 el.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') this._doSearch();
+                    if (e.key === 'Enter') this.doSearch();
                 });
             });
         };
@@ -513,7 +513,7 @@ const Search = {
         }
     },
 
-    _readConditionValues() {
+    readConditionValues() {
         const result = [];
         for (const cond of this.conditions) {
             const row = document.querySelector(`.search-condition-row[data-cond-id="${cond.id}"]`);
@@ -563,10 +563,10 @@ const Search = {
         return result;
     },
 
-    _getAdvancedValues() {
+    getAdvancedValues() {
         const values = {
             mode: 'advanced',
-            conditions: this._readConditionValues(),
+            conditions: this.readConditionValues(),
             files: document.getElementById('search-adv-files').checked,
             folders: document.getElementById('search-adv-folders').checked,
         };
@@ -577,8 +577,8 @@ const Search = {
         return values;
     },
 
-    _hasAdvancedFilters() {
-        const conds = this._readConditionValues();
+    hasAdvancedFilters() {
+        const conds = this.readConditionValues();
         return conds.some(c => {
             if (c.field === 'size') return c.min || c.max;
             if (c.field === 'date' || c.field === 'duplicates' || c.field === 'files') return c.from || c.to;
@@ -586,29 +586,29 @@ const Search = {
         });
     },
 
-    _clearAdvanced() {
+    clearAdvanced() {
         document.getElementById('search-conditions').innerHTML = '';
         this.conditions = [];
         this.nextCondId = 0;
         document.getElementById('search-adv-files').checked = true;
         document.getElementById('search-adv-folders').checked = false;
-        this._addCondition('include');
+        this.addCondition('include');
     },
 
     // ── Saved searches ──
 
-    _savedParams: {},
+    savedParams: {},
 
-    _initSavedSearches() {
+    initSavedSearches() {
         PromptModal.init();
-        document.getElementById('search-save').addEventListener('click', () => this._saveSearch());
-        document.getElementById('search-adv-save').addEventListener('click', () => this._saveSearch());
+        document.getElementById('search-save').addEventListener('click', () => this.saveSearch());
+        document.getElementById('search-adv-save').addEventListener('click', () => this.saveSearch());
         this.loadSavedSearches();
     },
 
-    async _saveSearch() {
-        if (!this._hasFilters()) return;
-        const values = this._getValues();
+    async saveSearch() {
+        if (!this.hasFilters()) return;
+        const values = this.getValues();
         const name = await PromptModal.open({
             title: 'Save Search',
             message: 'Save current search as:',
@@ -622,16 +622,16 @@ const Search = {
     async loadSavedSearches() {
         const res = await API.get('/api/searches');
         if (!res.ok) return;
-        this._renderSavedSearches(res.data);
+        this.renderSavedSearches(res.data);
     },
 
-    _renderSavedSearches(searches) {
+    renderSavedSearches(searches) {
         const container = document.getElementById('saved-searches');
         if (!searches.length) { container.innerHTML = ''; return; }
 
-        this._savedParams = {};
+        this.savedParams = {};
         for (const s of searches) {
-            this._savedParams[s.id] = typeof s.params === 'string' ? JSON.parse(s.params) : s.params;
+            this.savedParams[s.id] = typeof s.params === 'string' ? JSON.parse(s.params) : s.params;
         }
 
         container.innerHTML = searches.map(s =>
@@ -644,8 +644,8 @@ const Search = {
         container.querySelectorAll('.saved-search-name').forEach(el => {
             el.addEventListener('click', () => {
                 const item = el.closest('.saved-search-item');
-                const params = this._savedParams[item.dataset.id];
-                if (params) this._applySavedSearch(params);
+                const params = this.savedParams[item.dataset.id];
+                if (params) this.applySavedSearch(params);
             });
         });
 
@@ -658,29 +658,29 @@ const Search = {
         });
     },
 
-    async _applySavedSearch(params) {
+    async applySavedSearch(params) {
         if (params.mode === 'content') {
             if (this.onContentSearch) this.onContentSearch(params);
             return;
         }
         if (params.mode === 'advanced') {
-            if (this.mode !== 'advanced') this._toggleMode();
-            this._clearAdvanced();
+            if (this.mode !== 'advanced') this.toggleMode();
+            this.clearAdvanced();
             // Rebuild conditions from saved params
             if (params.conditions && params.conditions.length) {
-                // Remove the default condition added by _clearAdvanced
+                // Remove the default condition added by clearAdvanced
                 document.getElementById('search-conditions').innerHTML = '';
                 this.conditions = [];
                 this.nextCondId = 0;
                 for (const c of params.conditions) {
-                    const cond = this._addCondition(c.op || 'include');
+                    const cond = this.addCondition(c.op || 'include');
                     // Set field
                     const row = document.querySelector(`.search-condition-row[data-cond-id="${cond.id}"]`);
                     const fieldSel = row.querySelector('select.search-select');
                     fieldSel.value = c.field;
                     cond.field = c.field;
                     const inputsDiv = row.querySelector('.search-condition-inputs');
-                    this._renderConditionInputs(inputsDiv, c.field);
+                    this.renderConditionInputs(inputsDiv, c.field);
                     // Set values
                     switch (c.field) {
                         case 'size': {
@@ -716,10 +716,10 @@ const Search = {
             }
             if (params.folders) document.getElementById('search-adv-folders').checked = true;
             if (params.files === false) document.getElementById('search-adv-files').checked = false;
-            this._syncFoldersCheckbox();
+            this.syncFoldersCheckbox();
         } else {
             // Switch to basic mode if not already
-            if (this.mode === 'advanced') this._toggleMode();
+            if (this.mode === 'advanced') this.toggleMode();
             // Clear all fields
             document.getElementById('search-basic').querySelectorAll('input[type="text"], input[type="date"], input[type="number"]').forEach(el => el.value = '');
             document.getElementById('search-basic').querySelectorAll('select').forEach(el => el.selectedIndex = 0);
@@ -761,8 +761,8 @@ const Search = {
         this.visible = true;
         this.panelEl.classList.remove('hidden');
         this.toggleBtn.classList.add('btn-active');
-        this._updateSearchBtn();
-        this._doSearch();
+        this.updateSearchBtn();
+        this.doSearch();
     },
 };
 

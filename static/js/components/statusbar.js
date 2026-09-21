@@ -14,33 +14,33 @@ const StatusBar = {
     statsEl: null,
     activityEl: null,
     connectionEl: null,
-    _loadEl: null,
-    _loadBarEl: null,
-    _loadDropdown: null,
-    _dropdownOpen: false,
-    _activities: [],
-    _scanningLocationId: null,
-    _pendingQueue: [],
-    _stats: null,
+    loadEl: null,
+    loadBarEl: null,
+    loadDropdown: null,
+    dropdownOpen: false,
+    activities: [],
+    scanningLocationId: null,
+    pendingQueue: [],
+    stats: null,
 
     init() {
         this.statsEl = document.getElementById('status-stats');
         this.activityEl = document.getElementById('status-activity');
         this.connectionEl = document.getElementById('status-connection');
-        this._loadEl = document.getElementById('status-load');
-        this._loadBarEl = document.getElementById('status-load-bar');
-        this._loadDropdown = document.getElementById('status-load-dropdown');
+        this.loadEl = document.getElementById('status-load');
+        this.loadBarEl = document.getElementById('status-load-bar');
+        this.loadDropdown = document.getElementById('status-load-dropdown');
 
-        if (this._loadEl) {
-            this._loadEl.addEventListener('click', (e) => {
+        if (this.loadEl) {
+            this.loadEl.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._toggleDropdown();
+                this.toggleDropdown();
             });
         }
-        if (this._loadDropdown) {
-            this._loadDropdown.addEventListener('click', (e) => e.stopPropagation());
+        if (this.loadDropdown) {
+            this.loadDropdown.addEventListener('click', (e) => e.stopPropagation());
         }
-        document.addEventListener('click', () => this._closeDropdown());
+        document.addEventListener('click', () => this.closeDropdown());
 
         this.loadStats();
         this.renderActivity('idle');
@@ -50,24 +50,24 @@ const StatusBar = {
     async loadStats() {
         const res = await API.get('/api/stats');
         if (res.ok) {
-            this._stats = res.data;
-            this._renderStats();
+            this.stats = res.data;
+            this.renderStats();
         }
     },
 
     updateStatsFromProgress(msg) {
-        if (!this._stats) return;
-        if (msg.globalFileCount !== undefined) this._stats.totalFiles = msg.globalFileCount;
+        if (!this.stats) return;
+        if (msg.globalFileCount !== undefined) this.stats.totalFiles = msg.globalFileCount;
         if (msg.globalTotalSize !== undefined) {
-            this._stats.totalSize = msg.globalTotalSize;
-            this._stats.totalSizeFormatted = formatSize(msg.globalTotalSize);
+            this.stats.totalSize = msg.globalTotalSize;
+            this.stats.totalSizeFormatted = formatSize(msg.globalTotalSize);
         }
-        if (msg.globalDuplicateCount !== undefined) this._stats.duplicateFiles = msg.globalDuplicateCount;
-        this._renderStats();
+        if (msg.globalDuplicateCount !== undefined) this.stats.duplicateFiles = msg.globalDuplicateCount;
+        this.renderStats();
     },
 
-    _renderStats() {
-        const s = this._stats;
+    renderStats() {
+        const s = this.stats;
         const pendingHtml = s.pendingOps > 0
             ? `<span class="status-item"><span>Pending:</span><span class="status-value" style="color:var(--color-pending-text)">${s.pendingOps}</span></span>`
             : '';
@@ -92,19 +92,19 @@ const StatusBar = {
         `;
     },
 
-    _renderQueueBadge() {
-        const count = this._pendingQueue.length;
+    renderQueueBadge() {
+        const count = this.pendingQueue.length;
         if (count === 0) return '';
         return `<span class="status-queue-info">+${count} queued</span>`;
     },
 
     renderActivity(state, detail, locationId) {
         if (state === 'active') {
-            this._scanningLocationId = locationId || null;
+            this.scanningLocationId = locationId || null;
             this.activityEl.innerHTML = `
                 <span class="status-activity-text scanning">
                     ${detail || '...'}
-                    ${locationId ? this._renderQueueBadge() : ''}
+                    ${locationId ? this.renderQueueBadge() : ''}
                     ${locationId ? '<span class="status-cancel" title="Cancel">✕</span>' : ''}
                 </span>
             `;
@@ -117,7 +117,7 @@ const StatusBar = {
                 });
             }
         } else {
-            this._scanningLocationId = null;
+            this.scanningLocationId = null;
             this.activityEl.innerHTML = `
                 <span class="status-activity-text">Idle</span>
             `;
@@ -125,11 +125,11 @@ const StatusBar = {
     },
 
     updateQueue(queueState) {
-        this._pendingQueue = (queueState && queueState.pending) || [];
+        this.pendingQueue = (queueState && queueState.pending) || [];
         // Re-render the queue badge if currently scanning
-        if (this._scanningLocationId) {
+        if (this.scanningLocationId) {
             const badge = this.activityEl.querySelector('.status-queue-info');
-            const count = this._pendingQueue.length;
+            const count = this.pendingQueue.length;
             if (badge) {
                 if (count === 0) {
                     badge.remove();
@@ -153,11 +153,11 @@ const StatusBar = {
     },
 
     isScanning() {
-        return this._scanningLocationId !== null;
+        return this.scanningLocationId !== null;
     },
 
     getQueue() {
-        return this._pendingQueue;
+        return this.pendingQueue;
     },
 
     renderConnection(connected) {
@@ -170,52 +170,52 @@ const StatusBar = {
     },
 
     updateServerActivity(msg) {
-        this._activities = msg.activities || [];
+        this.activities = msg.activities || [];
         const count = msg.count || 0;
         const maxOps = 5;
         const pct = Math.min(count / maxOps, 1) * 100;
 
-        if (this._loadBarEl) {
-            this._loadBarEl.style.width = pct + '%';
+        if (this.loadBarEl) {
+            this.loadBarEl.style.width = pct + '%';
         }
-        if (this._loadEl) {
+        if (this.loadEl) {
             if (count === 0) {
-                this._loadEl.title = 'Server idle';
+                this.loadEl.title = 'Server idle';
             } else {
-                const labels = this._activities.map(a => {
+                const labels = this.activities.map(a => {
                     const p = a.progress ? ` (${a.progress})` : '';
                     return a.label + p;
                 });
-                this._loadEl.title = labels.join('\n');
+                this.loadEl.title = labels.join('\n');
             }
         }
-        if (this._dropdownOpen) {
-            this._renderDropdown();
+        if (this.dropdownOpen) {
+            this.renderDropdown();
         }
     },
 
-    _toggleDropdown() {
-        if (this._dropdownOpen) {
-            this._closeDropdown();
+    toggleDropdown() {
+        if (this.dropdownOpen) {
+            this.closeDropdown();
         } else {
-            this._dropdownOpen = true;
-            this._renderDropdown();
-            if (this._loadDropdown) this._loadDropdown.classList.remove('hidden');
+            this.dropdownOpen = true;
+            this.renderDropdown();
+            if (this.loadDropdown) this.loadDropdown.classList.remove('hidden');
         }
     },
 
-    _closeDropdown() {
-        this._dropdownOpen = false;
-        if (this._loadDropdown) this._loadDropdown.classList.add('hidden');
+    closeDropdown() {
+        this.dropdownOpen = false;
+        if (this.loadDropdown) this.loadDropdown.classList.add('hidden');
     },
 
-    _renderDropdown() {
-        if (!this._loadDropdown) return;
-        if (this._activities.length === 0) {
-            this._loadDropdown.innerHTML = '<div class="load-dropdown-empty">Server idle</div>';
+    renderDropdown() {
+        if (!this.loadDropdown) return;
+        if (this.activities.length === 0) {
+            this.loadDropdown.innerHTML = '<div class="load-dropdown-empty">Server idle</div>';
             return;
         }
-        this._loadDropdown.innerHTML = this._activities.map(a => {
+        this.loadDropdown.innerHTML = this.activities.map(a => {
             const progress = a.progress ? `<span class="load-progress">${a.progress}</span>` : '';
             return `<div class="load-dropdown-item"><span class="load-label">${a.label}</span>${progress}</div>`;
         }).join('');

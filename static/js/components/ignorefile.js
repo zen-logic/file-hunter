@@ -16,7 +16,7 @@ const IgnoreFileModal = {
     countEl: null,
     locationLabelEl: null,
     onConfirm: null,
-    _file: null,
+    file: null,
 
     init(onConfirm) {
         this.overlayEl = document.getElementById('ignore-file-modal');
@@ -27,7 +27,7 @@ const IgnoreFileModal = {
         this.onConfirm = onConfirm;
 
         document.getElementById('ignore-file-cancel').addEventListener('click', () => this.close());
-        document.getElementById('ignore-file-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('ignore-file-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -39,13 +39,13 @@ const IgnoreFileModal = {
                 this.close();
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                this._doConfirm();
+                this.confirm();
             }
         });
     },
 
     async open(file) {
-        this._file = file;
+        this.file = file;
         this.nameEl.textContent = file.filename;
         this.sizeEl.textContent = formatSize(file.file_size);
         this.countEl.textContent = '';
@@ -77,16 +77,16 @@ const IgnoreFileModal = {
 
     close() {
         this.overlayEl.classList.add('hidden');
-        this._file = null;
+        this.file = null;
     },
 
-    _doConfirm() {
-        if (!this._file || !this.onConfirm) return;
+    confirm() {
+        if (!this.file || !this.onConfirm) return;
         const scope = this.overlayEl.querySelector('input[name="ignore-scope"]:checked');
-        const locationId = (scope && scope.value === 'location') ? this._file.locationId : null;
+        const locationId = (scope && scope.value === 'location') ? this.file.locationId : null;
         this.onConfirm({
-            filename: this._file.filename,
-            file_size: this._file.file_size,
+            filename: this.file.filename,
+            file_size: this.file.file_size,
             location_id: locationId,
         });
         this.close();

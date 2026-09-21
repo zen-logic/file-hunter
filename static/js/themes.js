@@ -1,15 +1,15 @@
-let _themes = null;
+let themes = null;
 
 export async function loadThemes() {
-    if (_themes) return _themes;
+    if (themes) return themes;
     const res = await fetch('/api/themes', { credentials: 'same-origin' });
     if (res.ok) {
         const data = await res.json();
-        _themes = data.data || [];
+        themes = data.data || [];
     } else {
-        _themes = [{ name: 'default', builtIn: true }];
+        themes = [{ name: 'default', builtIn: true }];
     }
-    return _themes;
+    return themes;
 }
 
 export async function loadThemeNames() {
@@ -18,13 +18,13 @@ export async function loadThemeNames() {
 }
 
 export function isBuiltIn(name) {
-    if (!_themes) return true;
-    const t = _themes.find(t => t.name === name);
+    if (!themes) return true;
+    const t = themes.find(t => t.name === name);
     return t ? t.builtIn : true;
 }
 
 export function clearThemeCache() {
-    _themes = null;
+    themes = null;
 }
 
 export function applyTheme(name, bustCache) {

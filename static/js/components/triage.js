@@ -6,7 +6,7 @@
  * Renders a bar above the file table showing action buttons with counts.
  */
 
-// 'zip' is appended deliberately — _execute indexes the first four to build
+// 'zip' is appended deliberately — execute indexes the first four to build
 // the SlideshowTriage.show(delete, consolidate, tag, move) argument list.
 const OPERATIONS = ['delete', 'consolidate', 'tag', 'move', 'zip'];
 const OP_LABELS = { delete: 'Delete', consolidate: 'Consolidate', tag: 'Tag', move: 'Move / Copy', zip: 'Download ZIP' };
@@ -21,7 +21,7 @@ const OP_CSS = {
 
 const Triage = {
     // Each queue: Map<fileId, { id, name }>
-    _queues: {
+    queues: {
         delete: new Map(),
         consolidate: new Map(),
         tag: new Map(),
@@ -29,22 +29,22 @@ const Triage = {
         zip: new Map(),
     },
 
-    _barEl: null,
-    _onExecute: null,   // callback(op, items) — triggers the triage dialog
-    _onRender: null,    // callback() — re-render file list badges
-    _onZip: null,       // callback(items) — starts a ZIP build, no dialog
+    barEl: null,
+    onExecute: null,   // callback(op, items) — triggers the triage dialog
+    onRender: null,    // callback() — re-render file list badges
+    onZip: null,       // callback(items) — starts a ZIP build, no dialog
 
     init(onExecute, onRender, onZip) {
-        this._onExecute = onExecute;
-        this._onRender = onRender;
-        this._onZip = onZip;
+        this.onExecute = onExecute;
+        this.onRender = onRender;
+        this.onZip = onZip;
     },
 
     /** Mount the triage bar inside parentEl, before refEl. */
     mount(parentEl, refEl) {
-        this._barEl = document.createElement('div');
-        this._barEl.className = 'triage-bar hidden';
-        parentEl.insertBefore(this._barEl, refEl);
+        this.barEl = document.createElement('div');
+        this.barEl.className = 'triage-bar hidden';
+        parentEl.insertBefore(this.barEl, refEl);
     },
 
     /** Handle a key press — returns true if consumed. */
@@ -55,11 +55,11 @@ const Triage = {
 
         for (const item of fileItems) {
             if (item.type === 'folder') continue;
-            this._toggle(op, item);
+            this.toggle(op, item);
         }
 
-        this._renderBar();
-        if (this._onRender) this._onRender();
+        this.renderBar();
+        if (this.onRender) this.onRender();
         return true;
     },
 
@@ -67,7 +67,7 @@ const Triage = {
     getMarks(fileId) {
         const marks = [];
         for (const op of OPERATIONS) {
-            if (this._queues[op].has(fileId)) marks.push(op);
+            if (this.queues[op].has(fileId)) marks.push(op);
         }
         return marks;
     },
@@ -75,29 +75,29 @@ const Triage = {
     /** Total marked items across all queues. */
     totalMarked() {
         let n = 0;
-        for (const op of OPERATIONS) n += this._queues[op].size;
+        for (const op of OPERATIONS) n += this.queues[op].size;
         return n;
     },
 
     /** Clear a single operation queue. */
     clearOp(op) {
-        this._queues[op].clear();
-        this._renderBar();
-        if (this._onRender) this._onRender();
+        this.queues[op].clear();
+        this.renderBar();
+        if (this.onRender) this.onRender();
     },
 
     /** Clear all queues. */
     clearAll() {
-        for (const op of OPERATIONS) this._queues[op].clear();
-        this._renderBar();
-        if (this._onRender) this._onRender();
+        for (const op of OPERATIONS) this.queues[op].clear();
+        this.renderBar();
+        if (this.onRender) this.onRender();
     },
 
     // ── Internal ──
 
-    _toggle(op, item) {
+    toggle(op, item) {
         const id = item.id;
-        const q = this._queues[op];
+        const q = this.queues[op];
 
         if (q.has(id)) {
             q.delete(id);
@@ -106,36 +106,36 @@ const Triage = {
 
         // Exclusion rules before marking
         if (op === 'delete') {
-            this._queues.move.delete(id);
-            this._queues.consolidate.delete(id);
-            this._queues.tag.delete(id);
+            this.queues.move.delete(id);
+            this.queues.consolidate.delete(id);
+            this.queues.tag.delete(id);
         } else if (op === 'move') {
-            this._queues.delete.delete(id);
-            this._queues.consolidate.delete(id);
+            this.queues.delete.delete(id);
+            this.queues.consolidate.delete(id);
         } else if (op === 'consolidate') {
-            this._queues.delete.delete(id);
-            this._queues.move.delete(id);
+            this.queues.delete.delete(id);
+            this.queues.move.delete(id);
         } else if (op === 'tag') {
-            this._queues.delete.delete(id);
+            this.queues.delete.delete(id);
         }
 
         q.set(id, { id, name: item.name });
     },
 
-    _renderBar() {
-        if (!this._barEl) return;
+    renderBar() {
+        if (!this.barEl) return;
         const total = this.totalMarked();
         if (total === 0) {
-            this._barEl.classList.add('hidden');
-            this._barEl.innerHTML = '';
+            this.barEl.classList.add('hidden');
+            this.barEl.innerHTML = '';
             return;
         }
 
-        this._barEl.classList.remove('hidden');
-        this._barEl.innerHTML = '';
+        this.barEl.classList.remove('hidden');
+        this.barEl.innerHTML = '';
 
         for (const op of OPERATIONS) {
-            const count = this._queues[op].size;
+            const count = this.queues[op].size;
             if (count === 0) continue;
 
             const btn = document.createElement('button');
@@ -143,9 +143,9 @@ const Triage = {
             btn.textContent = `${OP_LABELS[op]} (${count})`;
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._execute(op);
+                this.execute(op);
             });
-            this._barEl.appendChild(btn);
+            this.barEl.appendChild(btn);
         }
 
         const clearBtn = document.createElement('button');
@@ -155,31 +155,31 @@ const Triage = {
             e.stopPropagation();
             this.clearAll();
         });
-        this._barEl.appendChild(clearBtn);
+        this.barEl.appendChild(clearBtn);
     },
 
-    _execute(op) {
-        const items = Array.from(this._queues[op].values());
+    execute(op) {
+        const items = Array.from(this.queues[op].values());
         if (items.length === 0) return;
 
         if (op === 'zip') {
             // No triage dialog — this starts a build immediately, the same as
             // the Download ZIP button. The zip_ready socket message delivers
             // the file, so nothing further is needed here.
-            if (this._onZip) this._onZip(items);
+            if (this.onZip) this.onZip(items);
         } else {
             // Build args for SlideshowTriage.show(delete, consolidate, tag, move)
             const args = [[], [], [], []];
             const idx = OPERATIONS.indexOf(op);
             args[idx] = items;
 
-            if (this._onExecute) this._onExecute(...args);
+            if (this.onExecute) this.onExecute(...args);
         }
 
         // Clear this queue after triggering
-        this._queues[op].clear();
-        this._renderBar();
-        if (this._onRender) this._onRender();
+        this.queues[op].clear();
+        this.renderBar();
+        if (this.onRender) this.onRender();
     },
 };
 

@@ -12,7 +12,7 @@ const NewFolderModal = {
         this.onConfirm = onConfirm;
 
         document.getElementById('new-folder-cancel').addEventListener('click', () => this.close());
-        document.getElementById('new-folder-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('new-folder-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -25,7 +25,7 @@ const NewFolderModal = {
         });
 
         this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this._doConfirm();
+            if (e.key === 'Enter') this.confirm();
         });
     },
 
@@ -45,7 +45,7 @@ const NewFolderModal = {
         this.parentNode = null;
     },
 
-    async _doConfirm() {
+    async confirm() {
         const name = this.nameInput.value.trim();
         if (!name) return;
         if (!this.parentNode || !this.onConfirm) return;

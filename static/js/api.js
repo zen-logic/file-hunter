@@ -1,14 +1,14 @@
 const API = {
     baseUrl: '',
 
-    _headers() {
+    headers() {
         const h = { 'Content-Type': 'application/json' };
         const token = localStorage.getItem('fh-token');
         if (token) h['Authorization'] = `Bearer ${token}`;
         return h;
     },
 
-    _checkAuth(res, path) {
+    checkAuth(res, path) {
         if (res.status === 401 && !path.startsWith('/api/auth/')) {
             localStorage.removeItem('fh-token');
             location.reload();
@@ -17,39 +17,39 @@ const API = {
 
     async get(path, { signal } = {}) {
         const res = await fetch(`${this.baseUrl}${path}`, {
-            headers: this._headers(),
+            headers: this.headers(),
             signal,
         });
-        this._checkAuth(res, path);
+        this.checkAuth(res, path);
         return res.json();
     },
 
     async post(path, data) {
         const res = await fetch(`${this.baseUrl}${path}`, {
             method: 'POST',
-            headers: this._headers(),
+            headers: this.headers(),
             body: JSON.stringify(data),
         });
-        this._checkAuth(res, path);
+        this.checkAuth(res, path);
         return res.json();
     },
 
     async patch(path, data) {
         const res = await fetch(`${this.baseUrl}${path}`, {
             method: 'PATCH',
-            headers: this._headers(),
+            headers: this.headers(),
             body: JSON.stringify(data),
         });
-        this._checkAuth(res, path);
+        this.checkAuth(res, path);
         return res.json();
     },
 
     async delete(path) {
         const res = await fetch(`${this.baseUrl}${path}`, {
             method: 'DELETE',
-            headers: this._headers(),
+            headers: this.headers(),
         });
-        this._checkAuth(res, path);
+        this.checkAuth(res, path);
         return res.json();
     },
 

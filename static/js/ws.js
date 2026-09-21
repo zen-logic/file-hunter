@@ -1,13 +1,13 @@
 const WS = {
     socket: null,
     listeners: {},
-    _reconnectScheduled: false,
+    reconnectScheduled: false,
 
     connect() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const token = localStorage.getItem('fh-token') || '';
         this.socket = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`);
-        this._reconnectScheduled = false;
+        this.reconnectScheduled = false;
 
         this.socket.onopen = () => {
             const handlers = this.listeners['__open'] || [];
@@ -23,17 +23,17 @@ const WS = {
         this.socket.onclose = () => {
             const handlers = this.listeners['__close'] || [];
             handlers.forEach(fn => fn());
-            this._scheduleReconnect();
+            this.scheduleReconnect();
         };
 
         this.socket.onerror = () => {
-            this._scheduleReconnect();
+            this.scheduleReconnect();
         };
     },
 
-    _scheduleReconnect() {
-        if (this._reconnectScheduled) return;
-        this._reconnectScheduled = true;
+    scheduleReconnect() {
+        if (this.reconnectScheduled) return;
+        this.reconnectScheduled = true;
         setTimeout(() => this.connect(), 3000);
     },
 

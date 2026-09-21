@@ -10,27 +10,27 @@ function formatSize(bytes) {
 }
 
 const Treemap = {
-    _modal: null,
-    _closeBtn: null,
-    _breadcrumbEl: null,
-    _container: null,
-    _locationId: null,
-    _parentId: null,
-    _onFileClick: null,
+    modal: null,
+    closeBtn: null,
+    breadcrumbEl: null,
+    container: null,
+    locationId: null,
+    parentId: null,
+    onFileClick: null,
 
     init(opts) {
-        if (opts && opts.onFileClick) this._onFileClick = opts.onFileClick;
-        this._modal = document.getElementById('treemap-modal');
-        this._closeBtn = document.getElementById('treemap-close');
-        this._breadcrumbEl = document.getElementById('treemap-breadcrumb');
-        this._container = document.getElementById('treemap-container');
+        if (opts && opts.onFileClick) this.onFileClick = opts.onFileClick;
+        this.modal = document.getElementById('treemap-modal');
+        this.closeBtn = document.getElementById('treemap-close');
+        this.breadcrumbEl = document.getElementById('treemap-breadcrumb');
+        this.container = document.getElementById('treemap-container');
 
-        this._closeBtn.addEventListener('click', () => this.close());
-        this._modal.addEventListener('click', (e) => {
-            if (e.target === this._modal) this.close();
+        this.closeBtn.addEventListener('click', () => this.close());
+        this.modal.addEventListener('click', (e) => {
+            if (e.target === this.modal) this.close();
         });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this._modal.classList.contains('hidden')) {
+            if (e.key === 'Escape' && !this.modal.classList.contains('hidden')) {
                 this.close();
             }
         });
@@ -40,40 +40,40 @@ const Treemap = {
         const idStr = String(nodeId);
         if (idStr.startsWith('fld-')) {
             // Folder — need the location ID and start at this folder
-            this._locationId = parseInt(String(locationId).replace('loc-', ''), 10);
-            this._parentId = parseInt(idStr.replace('fld-', ''), 10);
+            this.locationId = parseInt(String(locationId).replace('loc-', ''), 10);
+            this.parentId = parseInt(idStr.replace('fld-', ''), 10);
         } else {
             // Location root
-            this._locationId = parseInt(idStr.replace('loc-', ''), 10);
-            this._parentId = null;
+            this.locationId = parseInt(idStr.replace('loc-', ''), 10);
+            this.parentId = null;
         }
-        this._modal.classList.remove('hidden');
-        this._load();
+        this.modal.classList.remove('hidden');
+        this.load();
     },
 
     close() {
-        this._modal.classList.add('hidden');
-        this._container.innerHTML = '';
-        this._breadcrumbEl.innerHTML = '';
+        this.modal.classList.add('hidden');
+        this.container.innerHTML = '';
+        this.breadcrumbEl.innerHTML = '';
     },
 
-    async _load() {
-        this._container.innerHTML = '<div class="treemap-loading">Loading...</div>';
-        let url = `/api/treemap/${this._locationId}`;
-        if (this._parentId !== null) url += `?parent_id=${this._parentId}`;
+    async load() {
+        this.container.innerHTML = '<div class="treemap-loading">Loading...</div>';
+        let url = `/api/treemap/${this.locationId}`;
+        if (this.parentId !== null) url += `?parent_id=${this.parentId}`;
         const res = await API.get(url);
         if (!res.ok) {
-            this._container.innerHTML = '<div class="treemap-loading">Failed to load data.</div>';
+            this.container.innerHTML = '<div class="treemap-loading">Failed to load data.</div>';
             return;
         }
         const data = res.data;
-        this._renderBreadcrumb(data.breadcrumb);
-        this._renderTreemap(data);
+        this.renderBreadcrumb(data.breadcrumb);
+        this.renderTreemap(data);
     },
 
-    _renderBreadcrumb(breadcrumb) {
+    renderBreadcrumb(breadcrumb) {
         if (!breadcrumb || breadcrumb.length === 0) {
-            this._breadcrumbEl.innerHTML = '';
+            this.breadcrumbEl.innerHTML = '';
             return;
         }
         const segments = breadcrumb.map((entry, i) => {
@@ -85,19 +85,19 @@ const Treemap = {
                 ? 'null' : entry.id;
             return `<span class="treemap-bc-segment treemap-bc-link" data-parent-id="${dataId}">${entry.name}</span>`;
         });
-        this._breadcrumbEl.innerHTML = segments.join('<span class="treemap-bc-sep">/</span>');
+        this.breadcrumbEl.innerHTML = segments.join('<span class="treemap-bc-sep">/</span>');
 
-        this._breadcrumbEl.querySelectorAll('.treemap-bc-link').forEach(el => {
+        this.breadcrumbEl.querySelectorAll('.treemap-bc-link').forEach(el => {
             el.addEventListener('click', () => {
                 const pid = el.dataset.parentId;
-                this._parentId = pid === 'null' ? null : parseInt(pid, 10);
-                this._load();
+                this.parentId = pid === 'null' ? null : parseInt(pid, 10);
+                this.load();
             });
         });
     },
 
-    _renderTreemap(data) {
-        this._container.innerHTML = '';
+    renderTreemap(data) {
+        this.container.innerHTML = '';
         const items = [];
 
         for (const child of data.children) {
@@ -148,7 +148,7 @@ const Treemap = {
         }
 
         if (items.length === 0) {
-            this._container.innerHTML = '<div class="treemap-loading">No data to display.</div>';
+            this.container.innerHTML = '<div class="treemap-loading">No data to display.</div>';
             return;
         }
 
@@ -159,14 +159,14 @@ const Treemap = {
         const rect = {
             x: 0,
             y: 0,
-            w: this._container.clientWidth,
-            h: this._container.clientHeight,
+            w: this.container.clientWidth,
+            h: this.container.clientHeight,
         };
 
         if (rect.w === 0 || rect.h === 0) return;
 
-        const rects = this._squarify(items, rect, totalSize);
-        const colors = this._generateColors(items.length);
+        const rects = this.squarify(items, rect, totalSize);
+        const colors = this.generateColors(items.length);
 
         rects.forEach((r, i) => {
             const item = items[i];
@@ -198,21 +198,21 @@ const Treemap = {
 
             if (item.drillable) {
                 div.addEventListener('click', () => {
-                    this._parentId = item.id;
-                    this._load();
+                    this.parentId = item.id;
+                    this.load();
                 });
-            } else if (item.isFile && item.id && this._onFileClick) {
+            } else if (item.isFile && item.id && this.onFileClick) {
                 div.addEventListener('click', () => {
                     this.close();
-                    this._onFileClick(item.id);
+                    this.onFileClick(item.id);
                 });
             }
 
-            this._container.appendChild(div);
+            this.container.appendChild(div);
         });
     },
 
-    _squarify(items, rect, totalSize) {
+    squarify(items, rect, totalSize) {
         const result = [];
         if (items.length === 0 || totalSize === 0) return result;
 
@@ -236,15 +236,15 @@ const Treemap = {
                 continue;
             }
 
-            const currentWorst = this._worstRatio(row, rowAreaSum, remaining);
-            const testWorst = this._worstRatio(testRow, testSum, remaining);
+            const currentWorst = this.worstRatio(row, rowAreaSum, remaining);
+            const testWorst = this.worstRatio(testRow, testSum, remaining);
 
             if (testWorst <= currentWorst) {
                 row.push(area);
                 rowAreaSum += area;
                 idx++;
             } else {
-                const laid = this._layoutRow(row, rowAreaSum, remaining);
+                const laid = this.layoutRow(row, rowAreaSum, remaining);
                 result.push(...laid.rects);
                 remaining = laid.remaining;
                 row = [];
@@ -253,14 +253,14 @@ const Treemap = {
         }
 
         if (row.length > 0) {
-            const laid = this._layoutRow(row, rowAreaSum, remaining);
+            const laid = this.layoutRow(row, rowAreaSum, remaining);
             result.push(...laid.rects);
         }
 
         return result;
     },
 
-    _worstRatio(row, rowAreaSum, rect) {
+    worstRatio(row, rowAreaSum, rect) {
         const shorter = Math.min(rect.w, rect.h);
         if (shorter === 0 || rowAreaSum === 0) return Infinity;
         const s2 = shorter * shorter;
@@ -273,7 +273,7 @@ const Treemap = {
         return worst;
     },
 
-    _layoutRow(row, rowAreaSum, rect) {
+    layoutRow(row, rowAreaSum, rect) {
         const rects = [];
         const horizontal = rect.w >= rect.h;
         const shorter = horizontal ? rect.h : rect.w;
@@ -326,7 +326,7 @@ const Treemap = {
         return { rects, remaining };
     },
 
-    _generateColors(count) {
+    generateColors(count) {
         const style = getComputedStyle(document.documentElement);
         const palette = [];
         for (let i = 1; i <= 8; i++) {

@@ -14,7 +14,7 @@ const ActivityLog = {
     toggleEl: null,
     indicatorEl: null,
     open: false,
-    _autoScroll: true,
+    autoScroll: true,
 
     init() {
         this.el = document.getElementById('activity-log');
@@ -25,36 +25,36 @@ const ActivityLog = {
         const ind = document.createElement('div');
         ind.className = 'activity-new-indicator hidden';
         ind.textContent = 'New activity \u25BE';
-        ind.addEventListener('click', () => this._scrollToBottom());
+        ind.addEventListener('click', () => this.scrollToBottom());
         this.el.appendChild(ind);
         this.indicatorEl = ind;
 
         this.open = localStorage.getItem(STORAGE_KEY) !== 'false';
-        this._apply();
+        this.apply();
 
         this.toggleEl.addEventListener('click', () => {
             this.open = !this.open;
             localStorage.setItem(STORAGE_KEY, this.open);
-            this._apply();
+            this.apply();
         });
 
-        this.listEl.addEventListener('scroll', () => this._onScroll());
+        this.listEl.addEventListener('scroll', () => this.onScroll());
     },
 
-    _apply() {
+    apply() {
         this.el.classList.toggle('collapsed', !this.open);
         this.toggleEl.textContent = this.open ? 'Activity \u25BE' : 'Activity \u25B8';
     },
 
-    _onScroll() {
-        if (this._ignoreScroll) return;
+    onScroll() {
+        if (this.ignoreScroll) return;
         const el = this.listEl;
         if (el.scrollHeight <= el.clientHeight) {
-            this._autoScroll = true;
+            this.autoScroll = true;
             return;
         }
         const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-        this._autoScroll = atBottom;
+        this.autoScroll = atBottom;
         if (atBottom) {
             this.indicatorEl.classList.add('hidden');
         } else {
@@ -62,12 +62,12 @@ const ActivityLog = {
         }
     },
 
-    _scrollToBottom() {
-        this._autoScroll = true;
-        this._ignoreScroll = true;
+    scrollToBottom() {
+        this.autoScroll = true;
+        this.ignoreScroll = true;
         this.listEl.scrollTop = this.listEl.scrollHeight;
         this.indicatorEl.classList.add('hidden');
-        requestAnimationFrame(() => { this._ignoreScroll = false; });
+        requestAnimationFrame(() => { this.ignoreScroll = false; });
     },
 
     add(text) {
@@ -78,10 +78,10 @@ const ActivityLog = {
         while (this.listEl.childElementCount > 100) {
             this.listEl.removeChild(this.listEl.firstElementChild);
         }
-        if (this._autoScroll) {
-            this._ignoreScroll = true;
+        if (this.autoScroll) {
+            this.ignoreScroll = true;
             this.listEl.scrollTop = this.listEl.scrollHeight;
-            requestAnimationFrame(() => { this._ignoreScroll = false; });
+            requestAnimationFrame(() => { this.ignoreScroll = false; });
         } else if (this.listEl.scrollHeight > this.listEl.clientHeight) {
             this.indicatorEl.classList.remove('hidden');
         }

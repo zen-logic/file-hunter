@@ -3,33 +3,33 @@ import StatusBar from './statusbar.js';
 import Toast from './toast.js';
 
 const Upload = {
-    _getTarget: null,
-    _fileInput: null,
+    getTarget: null,
+    fileInput: null,
 
     init(getTarget) {
-        this._getTarget = getTarget;
+        this.getTarget = getTarget;
 
         // Hidden file input
-        this._fileInput = document.createElement('input');
-        this._fileInput.type = 'file';
-        this._fileInput.multiple = true;
-        this._fileInput.style.display = 'none';
-        document.body.appendChild(this._fileInput);
+        this.fileInput = document.createElement('input');
+        this.fileInput.type = 'file';
+        this.fileInput.multiple = true;
+        this.fileInput.style.display = 'none';
+        document.body.appendChild(this.fileInput);
 
-        this._fileInput.addEventListener('change', () => {
-            if (this._fileInput.files.length > 0) {
-                this._doUpload(this._fileInput.files);
+        this.fileInput.addEventListener('change', () => {
+            if (this.fileInput.files.length > 0) {
+                this.doUpload(this.fileInput.files);
             }
-            this._fileInput.value = '';
+            this.fileInput.value = '';
         });
 
         // Upload button
         const btn = document.getElementById('btn-upload');
         if (btn) {
             btn.addEventListener('click', () => {
-                const target = this._getTarget();
+                const target = this.getTarget();
                 if (target && target.online !== false) {
-                    this._fileInput.click();
+                    this.fileInput.click();
                 }
             });
         }
@@ -40,7 +40,7 @@ const Upload = {
             filePanel.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 if (e.dataTransfer.types.includes('application/x-filehunter-move')) return;
-                const target = this._getTarget();
+                const target = this.getTarget();
                 if (target && target.online !== false) {
                     e.dataTransfer.dropEffect = 'copy';
                     filePanel.classList.add('drop-active');
@@ -61,13 +61,13 @@ const Upload = {
                 filePanel.classList.remove('drop-active');
                 // Ignore internal file-move drags
                 if (e.dataTransfer.types.includes('application/x-filehunter-move')) return;
-                const target = this._getTarget();
+                const target = this.getTarget();
                 if (!target || target.online === false) {
                     Toast.error('Select an online location or folder first.');
                     return;
                 }
                 if (e.dataTransfer.files.length > 0) {
-                    this._doUpload(e.dataTransfer.files);
+                    this.doUpload(e.dataTransfer.files);
                 }
             });
         }
@@ -87,8 +87,8 @@ const Upload = {
         }
     },
 
-    async _doUpload(fileList) {
-        const target = this._getTarget();
+    async doUpload(fileList) {
+        const target = this.getTarget();
         if (!target) {
             Toast.error('No location selected.');
             return;

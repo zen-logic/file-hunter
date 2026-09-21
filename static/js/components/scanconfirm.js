@@ -15,7 +15,7 @@ const ScanConfirm = {
         this.onConfirm = onConfirm;
 
         document.getElementById('scan-confirm-cancel').addEventListener('click', () => this.close());
-        document.getElementById('scan-confirm-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('scan-confirm-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -55,7 +55,7 @@ const ScanConfirm = {
         this.folderNode = null;
     },
 
-    _doConfirm() {
+    confirm() {
         if (!this.locationNode || !this.onConfirm) return;
         const selected = this.overlayEl.querySelector('input[name="scan-type"]:checked');
         const type = selected ? selected.value : 'full';

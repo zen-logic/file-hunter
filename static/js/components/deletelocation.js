@@ -10,7 +10,7 @@ const DeleteLocationModal = {
         this.onConfirm = onConfirm;
 
         document.getElementById('delete-location-cancel').addEventListener('click', () => this.close());
-        document.getElementById('delete-location-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('delete-location-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -22,7 +22,7 @@ const DeleteLocationModal = {
                 this.close();
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                this._doConfirm();
+                this.confirm();
             }
         });
     },
@@ -38,7 +38,7 @@ const DeleteLocationModal = {
         this.node = null;
     },
 
-    _doConfirm() {
+    confirm() {
         if (this.node && this.onConfirm) this.onConfirm(this.node);
         this.close();
     },

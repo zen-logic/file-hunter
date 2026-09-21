@@ -46,9 +46,9 @@ async function reloadTreeAndFileList(focusFileId) {
     const folderId = selectedNode ? selectedNode.id : null;
     await Tree.reload();
     if (folderId) {
-        selectedNode = Tree._findNode(folderId);
+        selectedNode = Tree.findNode(folderId);
         // Don't blow away search results or in-flight select-all
-        if (!FileList._searchMode) {
+        if (!FileList.searchMode) {
             if (focusFileId) FileList.pendingFocusFile = focusFileId;
             if (folderId === FileList.currentFolder) {
                 await FileList.refreshFolder();
@@ -61,7 +61,7 @@ async function reloadTreeAndFileList(focusFileId) {
 
 async function refreshDetailPanel() {
     // Don't overwrite search results detail panel with folder/location view
-    if (FileList._searchMode && !selectedFile) return;
+    if (FileList.searchMode && !selectedFile) return;
     if (selectedFile) {
         const result = await Detail.renderFile(selectedFile);
         selectedFileDups = Detail.getFileDups();
@@ -164,8 +164,8 @@ function wireDownloadZipBtn(node) {
             btn.textContent = 'Building ZIP\u2026';
             const resp = await API.post(url);
             if (resp.ok) {
-                _pendingZipBtn = btn;
-                _pendingZipOrigText = 'Download ZIP';
+                pendingZipBtn = btn;
+                pendingZipOrigText = 'Download ZIP';
                 const zipLabel = target.label || 'download';
                 Activity.started('zip-' + resp.data.jobId, {
                     label: `Building ZIP: ${zipLabel}`,
@@ -181,8 +181,8 @@ function wireDownloadZipBtn(node) {
     }
 }
 
-let _pendingZipBtn = null;
-let _pendingZipOrigText = 'Download ZIP';
+let pendingZipBtn = null;
+let pendingZipOrigText = 'Download ZIP';
 
 function wireRenameFileBtn() {
     const btn = document.getElementById('detail-rename-file');
@@ -206,7 +206,7 @@ function wireDeleteFileBtn() {
     const btn = document.getElementById('detail-delete-file');
     if (btn && selectedFile) {
         btn.addEventListener('click', () => {
-            const lastDetail = Detail._lastDetail || {};
+            const lastDetail = Detail.lastDetail || {};
             DeleteFileModal.open({
                 type: 'file',
                 id: selectedFile.id,
@@ -222,7 +222,7 @@ function wireIgnoreFileBtn() {
     const btn = document.getElementById('detail-ignore-file');
     if (btn && selectedFile) {
         btn.addEventListener('click', () => {
-            const lastDetail = Detail._lastDetail || {};
+            const lastDetail = Detail.lastDetail || {};
             const locIdStr = lastDetail.locationId || '';
             const locId = locIdStr.replace('loc-', '');
             IgnoreFileModal.open({
@@ -235,7 +235,7 @@ function wireIgnoreFileBtn() {
     }
 }
 
-function _pickTranscodeQuality(filename) {
+function pickTranscodeQuality(filename) {
     const overlay = document.getElementById('transcode-quality-modal');
     const nameEl = document.getElementById('transcode-quality-filename');
     const cancelBtn = document.getElementById('transcode-quality-cancel');
@@ -267,7 +267,7 @@ function wireTranscodeBtn() {
     const btn = document.getElementById('detail-transcode');
     if (btn && selectedFile) {
         btn.addEventListener('click', async () => {
-            const quality = await _pickTranscodeQuality(selectedFile.name || '');
+            const quality = await pickTranscodeQuality(selectedFile.name || '');
             if (!quality) return;
             const res = await API.post(`/api/files/${selectedFile.id}/transcode`, { quality });
             if (!res.ok) {
@@ -373,7 +373,7 @@ function wireTreemapBtn() {
             if (selectedNode.type === 'location') {
                 Treemap.open(selectedNode.id);
             } else {
-                const locId = Detail._currentLocationId;
+                const locId = Detail.currentLocationId;
                 if (locId) Treemap.open(selectedNode.id, `loc-${locId}`);
             }
         });
@@ -437,8 +437,8 @@ function wireBatchActions(items) {
             downloadBtn.textContent = 'Building ZIP\u2026';
             const resp = await API.post('/api/batch/download', { file_ids: fileIds, folder_ids: folderIds });
             if (resp.ok) {
-                _pendingZipBtn = downloadBtn;
-                _pendingZipOrigText = 'Download ZIP';
+                pendingZipBtn = downloadBtn;
+                pendingZipOrigText = 'Download ZIP';
                 Toast.info('Building ZIP...');
             } else {
                 downloadBtn.disabled = false;
@@ -491,10 +491,10 @@ function wireBatchActions(items) {
 
 function startApp(user) {
     currentUser = user;
-    Detail._locationActivityFn = (nodeId) => {
-        if (Tree._scanningLocations.has(nodeId)) return 'Scanning';
-        if (Tree._queuedLocations.has(nodeId)) return 'Queued';
-        if (Tree._backfillingLocations.has(nodeId)) return 'Backfilling';
+    Detail.locationActivityFn = (nodeId) => {
+        if (Tree.scanningLocations.has(nodeId)) return 'Scanning';
+        if (Tree.queuedLocations.has(nodeId)) return 'Queued';
+        if (Tree.backfillingLocations.has(nodeId)) return 'Backfilling';
         return null;
     };
     StatusBar.init();
@@ -541,7 +541,7 @@ function startApp(user) {
             if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
         },
     });
-    Keyboard.setSelectAllHandler(() => FileList._selectAll());
+    Keyboard.setSelectAllHandler(() => FileList.selectAll());
     Keyboard.setNewLocationHandler(() => AddLocationModal.open());
     Keyboard.setScanHandler(() => scanBtn.click());
     Keyboard.setDeleteHandler(() => {
@@ -637,7 +637,7 @@ consolidateBtn.addEventListener('click', async () => {
 });
 
 SlideshowTriage.init();
-SlideshowTriage._consolidateOpen = (files, onDone) => {
+SlideshowTriage.consolidateOpen = (files, onDone) => {
     Consolidate.open({ files, onDone });
 };
 Detail.slideshowTriage = SlideshowTriage;
@@ -847,7 +847,7 @@ MoveFileModal.init(async (item, destinationFolderId, copy) => {
         const currentFolderId = selectedNode ? selectedNode.id : null;
         await Tree.reload();
         if (currentFolderId) {
-            selectedNode = Tree._findNode(currentFolderId);
+            selectedNode = Tree.findNode(currentFolderId);
             await FileList.showFolder(currentFolderId);
         }
         await StatusBar.loadStats();
@@ -905,7 +905,7 @@ function wireFileSlideshowBtn(file) {
     if (!slot) return;
     if ((file.typeHigh || '').toLowerCase() !== 'image') return;
     const folderId = FileList.currentFolder;
-    const searchId = FileList._searchId;
+    const searchId = FileList.searchId;
     if (!folderId && !searchId) return;
     slot.innerHTML = `<button class="btn btn-sm" id="detail-file-slideshow" style="margin-top:0.4rem">Slideshow</button>`;
     document.getElementById('detail-file-slideshow').addEventListener('click', async () => {
@@ -916,7 +916,7 @@ function wireFileSlideshowBtn(file) {
             mode: 'slideshow',
             startAt: file.id,
             sort: FileList.sortKey,
-            sortDir: FileList._sortDirStr(),
+            sortDir: FileList.sortDirStr(),
         };
         if (searchId) {
             params.type = 'search';
@@ -926,7 +926,7 @@ function wireFileSlideshowBtn(file) {
             params.folderId = folderId;
         }
         await Detail.startSlideshow(params);
-        if (Detail._slideshowTotal === 0) {
+        if (Detail.slideshowTotal === 0) {
             btn.textContent = 'No images';
             setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
         }
@@ -951,8 +951,8 @@ function wireSlideshowBtn() {
             const btn = document.getElementById('detail-slideshow');
             btn.disabled = true;
             btn.textContent = 'Loading\u2026';
-            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'slideshow', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
-            if (Detail._slideshowTotal === 0) {
+            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'slideshow', sort: FileList.sortKey, sortDir: FileList.sortDirStr() });
+            if (Detail.slideshowTotal === 0) {
                 btn.textContent = 'No images available';
                 setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
             }
@@ -963,8 +963,8 @@ function wireSlideshowBtn() {
             const btn = document.getElementById('detail-playlist');
             btn.disabled = true;
             btn.textContent = 'Loading\u2026';
-            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'playlist', sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
-            if (Detail._slideshowTotal === 0) {
+            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'playlist', sort: FileList.sortKey, sortDir: FileList.sortDirStr() });
+            if (Detail.slideshowTotal === 0) {
                 btn.textContent = 'No videos available';
                 setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);
             }
@@ -980,7 +980,7 @@ Tree.init(async (node) => {
     consolidateBtn.disabled = true;
     Upload.updateState(node);
     Search.setScopeContext(node);
-    _updateSimilarityScope(node);
+    updateSimilarityScope(node);
     Search.close();
     if (similarityVisible) {
         similarityVisible = false;
@@ -1031,7 +1031,7 @@ Tree.init(async (node) => {
     consolidateBtn.disabled = true;
     Upload.updateState(null);
     Search.setScopeContext(null);
-    _updateSimilarityScope(null);
+    updateSimilarityScope(null);
     FileList.renderFavourites();
     Detail.renderDashboard();
 });
@@ -1101,7 +1101,7 @@ FileList.init(async (file) => {
         scanBtn.disabled = false;
         Upload.updateState(node);
         Search.setScopeContext(node);
-        _updateSimilarityScope(node);
+        updateSimilarityScope(node);
     }
     if (isLocation) {
         const [, result] = await Promise.all([
@@ -1194,7 +1194,7 @@ FileList.onPreview = (file) => Detail.openPreviewFor(file);
 // the enlarged view follows the selection.
 Detail.onPreviewNavigate = (delta) => FileList.moveSelection(delta);
 Detail.onSlideshowClose = (fileId) => FileList.focusFile(fileId);
-Detail.getSortParams = () => ({ sort: FileList.sortKey, sortDir: FileList._sortDirStr() });
+Detail.getSortParams = () => ({ sort: FileList.sortKey, sortDir: FileList.sortDirStr() });
 
 Detail.init({
     async onNavigateToFolder(nodeId, fileId) {
@@ -1270,11 +1270,11 @@ Search.init({
             contentSearchSlider.value = params.semanticThreshold;
         }
         // Restore location filter
-        await _loadLocations();
-        _csLoc.reset();
+        await loadLocations();
+        csLoc.reset();
         if (params.semanticLocations && Array.isArray(params.semanticLocations)) {
-            _csLoc.setIds(params.semanticLocations);
-            _csLoc.render();
+            csLoc.setIds(params.semanticLocations);
+            csLoc.render();
         }
         document.getElementById('content-search-go').click();
     },
@@ -1283,22 +1283,22 @@ Search.init({
         if (values.mode === 'advanced') {
             params.set('mode', 'advanced');
             values.conditions.forEach((c, i) => {
-                params.set(`c${i}_field`, c.field);
-                params.set(`c${i}_op`, c.op);
+                params.set(`c${i}field`, c.field);
+                params.set(`c${i}op`, c.op);
                 switch (c.field) {
                     case 'size':
-                        if (c.min) params.set(`c${i}_min`, c.min);
-                        if (c.max) params.set(`c${i}_max`, c.max);
+                        if (c.min) params.set(`c${i}min`, c.min);
+                        if (c.max) params.set(`c${i}max`, c.max);
                         break;
                     case 'date':
                     case 'duplicates':
                     case 'files':
-                        if (c.from) params.set(`c${i}_from`, c.from);
-                        if (c.to) params.set(`c${i}_to`, c.to);
+                        if (c.from) params.set(`c${i}from`, c.from);
+                        if (c.to) params.set(`c${i}to`, c.to);
                         break;
                     default:
-                        if (c.value) params.set(`c${i}_value`, c.value);
-                        if (c.match) params.set(`c${i}_match`, c.match);
+                        if (c.value) params.set(`c${i}value`, c.value);
+                        if (c.match) params.set(`c${i}match`, c.match);
                         break;
                 }
             });
@@ -1364,13 +1364,13 @@ const similarityPanel = document.getElementById('similarity-panel');
 const similaritySlider = document.getElementById('similarity-threshold-slider');
 const similarityThreshold = document.getElementById('similarity-threshold');
 let similarityVisible = false;
-let _similarityUrl = '';
+let similarityUrl = '';
 
 // ── Similarity location filter ──
 // ── Location multiselect ──
 // Shared data (loaded once, used by all location selectors)
-let _locItems = [];     // [{id, label}]
-let _locLoaded = false;
+let locItems = [];     // [{id, label}]
+let locLoaded = false;
 
 function createLocationSelect(elementId) {
     const dropdown = document.getElementById(elementId);
@@ -1387,10 +1387,10 @@ function createLocationSelect(elementId) {
     });
 
     function updateLabel() {
-        if (selected.size === 0 || selected.size === _locItems.length) {
+        if (selected.size === 0 || selected.size === locItems.length) {
             toggle.textContent = 'All locations';
         } else if (selected.size === 1) {
-            const loc = _locItems.find(l => selected.has(l.id));
+            const loc = locItems.find(l => selected.has(l.id));
             toggle.textContent = loc ? loc.label : '1 location';
         } else {
             toggle.textContent = `${selected.size} locations`;
@@ -1407,7 +1407,7 @@ function createLocationSelect(elementId) {
         allBtn.textContent = 'All';
         allBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            _locItems.forEach(l => selected.add(l.id));
+            locItems.forEach(l => selected.add(l.id));
             menu.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
             updateLabel();
         });
@@ -1424,7 +1424,7 @@ function createLocationSelect(elementId) {
         controls.appendChild(noneBtn);
         menu.appendChild(controls);
 
-        for (const loc of _locItems) {
+        for (const loc of locItems) {
             const item = document.createElement('label');
             item.className = 'multiselect-dropdown-item';
             const cb = document.createElement('input');
@@ -1448,7 +1448,7 @@ function createLocationSelect(elementId) {
         render,
         reset() { selected.clear(); render(); },
         getIds() {
-            if (selected.size === 0 || selected.size === _locItems.length) return null;
+            if (selected.size === 0 || selected.size === locItems.length) return null;
             return [...selected];
         },
         setIds(ids) { selected.clear(); for (const id of ids) selected.add(id); },
@@ -1456,27 +1456,27 @@ function createLocationSelect(elementId) {
     };
 }
 
-const _simLoc = createLocationSelect('similarity-locations');
-const _csLoc = createLocationSelect('content-search-locations');
+const simLoc = createLocationSelect('similarity-locations');
+const csLoc = createLocationSelect('content-search-locations');
 
-async function _loadLocations() {
-    if (_locLoaded) return;
+async function loadLocations() {
+    if (locLoaded) return;
     const res = await API.get('/api/locations');
     if (!res.ok) return;
-    _locItems = res.data.map(l => ({
+    locItems = res.data.map(l => ({
         id: parseInt(l.id.replace('loc-', ''), 10),
         label: l.label,
     }));
-    _locLoaded = true;
-    _simLoc.render();
-    _csLoc.render();
+    locLoaded = true;
+    simLoc.render();
+    csLoc.render();
 }
 
 function updateSimilarityButton(settings) {
     const available = settings.similaritySearchEnabled === '1' && !!settings.similaritySearchUrl;
     similarityBtn.classList.toggle('hidden', !available);
     contentSearchBtn.classList.toggle('hidden', !available);
-    _similarityUrl = settings.similaritySearchUrl || '';
+    similarityUrl = settings.similaritySearchUrl || '';
     Detail.similarityEnabled = available;
     if (!available && similarityVisible) {
         similarityVisible = false;
@@ -1490,7 +1490,7 @@ function updateSimilarityButton(settings) {
     }
 }
 
-let _similarityUploadData = null;
+let similarityUploadData = null;
 
 const similarityUploadBtn = document.getElementById('similarity-upload-btn');
 const similarityUploadFile = document.getElementById('similarity-upload-file');
@@ -1500,7 +1500,7 @@ similarityUploadBtn.addEventListener('click', () => similarityUploadFile.click()
 similarityUploadFile.addEventListener('change', () => {
     const file = similarityUploadFile.files[0];
     if (!file) {
-        _similarityUploadData = null;
+        similarityUploadData = null;
         similarityUploadName.textContent = '';
         return;
     }
@@ -1508,7 +1508,7 @@ similarityUploadFile.addEventListener('change', () => {
     const reader = new FileReader();
     reader.onload = () => {
         // Strip the data:image/...;base64, prefix
-        _similarityUploadData = reader.result.split(',')[1];
+        similarityUploadData = reader.result.split(',')[1];
     };
     reader.readAsDataURL(file);
 });
@@ -1522,13 +1522,13 @@ similarityBtn.addEventListener('click', () => {
         contentSearchVisible = false;
         contentSearchPanel.classList.add('hidden');
         contentSearchBtn.classList.remove('btn-active');
-        _loadLocations();
+        loadLocations();
         document.getElementById('similarity-text').focus();
     }
 });
 
 // Close similarity/content panels when regular search opens
-const _origSearchToggle = Search.toggle.bind(Search);
+const origSearchToggle = Search.toggle.bind(Search);
 Search.toggle = function() {
     if (!Search.visible) {
         similarityVisible = false;
@@ -1538,7 +1538,7 @@ Search.toggle = function() {
         contentSearchPanel.classList.add('hidden');
         contentSearchBtn.classList.remove('btn-active');
     }
-    _origSearchToggle();
+    origSearchToggle();
 };
 
 similaritySlider.addEventListener('input', () => {
@@ -1548,25 +1548,25 @@ similarityThreshold.addEventListener('input', () => {
     similaritySlider.value = similarityThreshold.value;
 });
 
-let _similarityScopeNode = null;
-const _simLocRow = document.getElementById('similarity-locations-row');
-function _updateSimilarityScope(node) {
+let similarityScopeNode = null;
+const simLocRow = document.getElementById('similarity-locations-row');
+function updateSimilarityScope(node) {
     const scopeEl = document.getElementById('similarity-scope');
     const nameEl = document.getElementById('similarity-scope-name');
     const checkEl = document.getElementById('similarity-scope-check');
     if (node && (node.type === 'location' || node.type === 'folder')) {
-        _similarityScopeNode = node;
+        similarityScopeNode = node;
         nameEl.textContent = node.label || node.name;
         scopeEl.classList.remove('hidden');
     } else {
-        _similarityScopeNode = null;
+        similarityScopeNode = null;
         scopeEl.classList.add('hidden');
         checkEl.checked = false;
-        _simLocRow.classList.remove('hidden');
+        simLocRow.classList.remove('hidden');
     }
 }
 document.getElementById('similarity-scope-check').addEventListener('change', (e) => {
-    _simLocRow.classList.toggle('hidden', e.target.checked);
+    simLocRow.classList.toggle('hidden', e.target.checked);
 });
 
 document.getElementById('similarity-go').addEventListener('click', async () => {
@@ -1574,7 +1574,7 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     const text = document.getElementById('similarity-text').value.trim();
     const threshold = parseFloat(similarityThreshold.value);
 
-    const hasUpload = !!_similarityUploadData;
+    const hasUpload = !!similarityUploadData;
     if (!useImage && !text && !hasUpload) {
         Toast.error('Enter search features, select an image, or upload one.');
         return;
@@ -1587,13 +1587,13 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     const payload = { threshold };
     if (text) payload.text = text;
     if (useImage && selectedFile) payload.file_id = selectedFile.id;
-    if (hasUpload) payload.image_data = _similarityUploadData;
-    const scopeChecked = document.getElementById('similarity-scope-check').checked && _similarityScopeNode;
+    if (hasUpload) payload.image_data = similarityUploadData;
+    const scopeChecked = document.getElementById('similarity-scope-check').checked && similarityScopeNode;
     if (scopeChecked) {
-        payload.scopeType = _similarityScopeNode.type;
-        payload.scopeId = _similarityScopeNode.id;
+        payload.scopeType = similarityScopeNode.type;
+        payload.scopeId = similarityScopeNode.id;
     } else {
-        const locIds = _simLoc.getIds();
+        const locIds = simLoc.getIds();
         if (locIds) payload.location_ids = locIds;
     }
 
@@ -1613,10 +1613,10 @@ document.getElementById('similarity-clear').addEventListener('click', () => {
     document.getElementById('similarity-text').value = '';
     similaritySlider.value = 0.3;
     similarityThreshold.value = 0.3;
-    _similarityUploadData = null;
+    similarityUploadData = null;
     similarityUploadFile.value = '';
     similarityUploadName.textContent = '';
-    _simLoc.reset();
+    simLoc.reset();
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {
@@ -1647,7 +1647,7 @@ contentSearchBtn.addEventListener('click', () => {
         similarityVisible = false;
         similarityPanel.classList.add('hidden');
         similarityBtn.classList.remove('btn-active');
-        _loadLocations();
+        loadLocations();
         document.getElementById('content-search-text').focus();
     }
 });
@@ -1669,7 +1669,7 @@ document.getElementById('content-search-go').addEventListener('click', async () 
     const params = new URLSearchParams();
     params.set('semantic', text);
     params.set('semanticThreshold', threshold);
-    const csLocIds = _csLoc.getIds();
+    const csLocIds = csLoc.getIds();
     if (csLocIds) params.set('semanticLocations', csLocIds.join(','));
     params.set('page', '0');
     FileList.showLoading();
@@ -1692,7 +1692,7 @@ document.getElementById('content-search-clear').addEventListener('click', () => 
     document.getElementById('content-search-text').value = '';
     contentSearchSlider.value = 0.3;
     contentSearchThreshold.value = 0.3;
-    _csLoc.reset();
+    csLoc.reset();
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {
@@ -1708,7 +1708,7 @@ document.getElementById('content-search-save').addEventListener('click', async (
         semantic: text,
         semanticThreshold: contentSearchThreshold.value,
     };
-    const savedLocIds = _csLoc.getIds();
+    const savedLocIds = csLoc.getIds();
     if (savedLocIds) values.semanticLocations = savedLocIds;
     const name = await PromptModal.open({
         title: 'Save Search',
@@ -1851,7 +1851,7 @@ WS.on('scan_completed', async (msg) => {
     Activity.completed('scan-' + msg.locationId, { log: logText });
     Tree.clearScanningLocation(msg.locationId);
     if (msg.totalSize !== undefined) Tree.updateLocationSize(msg.locationId, msg.totalSize);
-    FileList._fresh = true;
+    FileList.fresh = true;
     if (selectedNode) await FileList.refreshFolder();
     await StatusBar.loadStats();
     await Detail.refreshStats();
@@ -1897,36 +1897,36 @@ function syncQueuedLocations(queue) {
 
     // Collect all locations that currently have badges
     const affected = new Set([
-        ...Tree._scanningLocations,
-        ...Tree._backfillingLocations,
-        ...Tree._deletingLocations,
-        ...Tree._queuedLocations.keys(),
+        ...Tree.scanningLocations,
+        ...Tree.backfillingLocations,
+        ...Tree.deletingLocations,
+        ...Tree.queuedLocations.keys(),
     ]);
 
     // Rebuild all badge sets from queue state (single source of truth)
-    Tree._scanningLocations.clear();
-    Tree._backfillingLocations.clear();
-    Tree._deletingLocations.clear();
-    Tree._queuedLocations.clear();
+    Tree.scanningLocations.clear();
+    Tree.backfillingLocations.clear();
+    Tree.deletingLocations.clear();
+    Tree.queuedLocations.clear();
     if (queue) {
         if (queue.scanning_location_ids) {
             for (const locId of queue.scanning_location_ids) {
                 const key = 'loc-' + locId;
-                Tree._scanningLocations.add(key);
+                Tree.scanningLocations.add(key);
                 affected.add(key);
             }
         }
         if (queue.backfilling_location_ids) {
             for (const locId of queue.backfilling_location_ids) {
                 const key = 'loc-' + locId;
-                Tree._backfillingLocations.add(key);
+                Tree.backfillingLocations.add(key);
                 affected.add(key);
             }
         }
         if (queue.deleting_location_ids) {
             for (const locId of queue.deleting_location_ids) {
                 const key = 'loc-' + locId;
-                Tree._deletingLocations.add(key);
+                Tree.deletingLocations.add(key);
                 affected.add(key);
             }
         }
@@ -1934,14 +1934,14 @@ function syncQueuedLocations(queue) {
         if (!queue.scanning_location_ids && queue.running_location_ids) {
             for (const locId of queue.running_location_ids) {
                 const key = 'loc-' + locId;
-                Tree._scanningLocations.add(key);
+                Tree.scanningLocations.add(key);
                 affected.add(key);
             }
         }
         if (queue.pending) {
             for (const entry of queue.pending) {
                 const key = 'loc-' + entry.location_id;
-                Tree._queuedLocations.set(key, entry.queue_id);
+                Tree.queuedLocations.set(key, entry.queue_id);
                 affected.add(key);
             }
         }
@@ -1949,7 +1949,7 @@ function syncQueuedLocations(queue) {
 
     // Targeted badge update for each affected location
     for (const nodeId of affected) {
-        Tree._updateLocationBadges(nodeId);
+        Tree.updateLocationBadges(nodeId);
     }
     Detail.updateActivity();
 }
@@ -1983,21 +1983,21 @@ WS.on('scan_queue_skipped', (msg) => {
 });
 
 WS.on('queue_paused', (msg) => {
-    Tree._paused = true;
-    for (const loc of Tree.treeData) Tree._updateLocationBadges(loc.id);
+    Tree.paused = true;
+    for (const loc of Tree.treeData) Tree.updateLocationBadges(loc.id);
     if (msg.reason === 'dup_exclude') {
         const verb = msg.direction === 'exclude' ? 'Excluding' : 'Including';
         const prep = msg.direction === 'exclude' ? 'from' : 'in';
         ActivityLog.add(`Operations paused: ${verb.toLowerCase()} folder ${prep} duplicates`);
-        _startDupExcludePoll();
+        startDupExcludePoll();
     } else {
         ActivityLog.add(`Operations paused: importing <b>${msg.location}</b>`);
     }
 });
 
 WS.on('queue_resumed', () => {
-    Tree._paused = false;
-    for (const loc of Tree.treeData) Tree._updateLocationBadges(loc.id);
+    Tree.paused = false;
+    for (const loc of Tree.treeData) Tree.updateLocationBadges(loc.id);
     ActivityLog.add('Operations resumed');
 });
 
@@ -2085,7 +2085,7 @@ WS.on('size_recalc_started', (msg) => {
     for (const lid of msg.locationIds) {
         Tree.updateLocationSize(lid, null);
         const key = `loc-${lid}`;
-        const el = Tree._findItemEl(key);
+        const el = Tree.findItemEl(key);
         if (el) {
             const sizeSpan = el.querySelector('.tree-size');
             if (sizeSpan) {
@@ -2101,18 +2101,18 @@ WS.on('size_recalc_completed', async msg => {
     ActivityLog.add('Location sizes recalculated');
     StatusBar.renderActivity('idle');
     await Tree.reload();
-    if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
+    if (selectedNode) selectedNode = Tree.findNode(selectedNode.id);
     await StatusBar.loadStats();
     Detail.refreshStats();
     Toast.success('Sizes updated');
 });
 WS.on('dup_recalc_started', (msg) => {
     if (msg.locationIds) {
-        for (const id of msg.locationIds) Detail._dupRecalcLocations.add(id);
-        Detail._applyDupRecalcOverride();
+        for (const id of msg.locationIds) Detail.dupRecalcLocations.add(id);
+        Detail.applyDupRecalcOverride();
     }
     // Don't show separate activity if this is part of an active scan
-    const duringActiveScan = (msg.locationIds || []).some(id => Tree._scanningLocations.has('loc-' + id));
+    const duringActiveScan = (msg.locationIds || []).some(id => Tree.scanningLocations.has('loc-' + id));
     if (!duringActiveScan) {
         Activity.started('dup-recalc', {
             label: 'Recalculating duplicates',
@@ -2122,10 +2122,10 @@ WS.on('dup_recalc_started', (msg) => {
 });
 WS.on('dup_recalc_completed', async (msg) => {
     if (msg.locationIds) {
-        for (const id of msg.locationIds) Detail._dupRecalcLocations.delete(id);
+        for (const id of msg.locationIds) Detail.dupRecalcLocations.delete(id);
     }
     const count = msg.hashCount ? msg.hashCount.toLocaleString() : '0';
-    const duringActiveScan = (msg.locationIds || []).some(id => Tree._scanningLocations.has('loc-' + id));
+    const duringActiveScan = (msg.locationIds || []).some(id => Tree.scanningLocations.has('loc-' + id));
     if (!duringActiveScan) {
         Activity.completed('dup-recalc', {
             log: `Duplicate recalculation complete — ${count} hashes processed`,
@@ -2140,11 +2140,11 @@ WS.on('dup_recalc_completed', async (msg) => {
 });
 
 // --- Dup exclude progress polling ---
-let _dupExcludePollTimer = null;
-function _startDupExcludePoll() {
-    if (_dupExcludePollTimer) return;
+let dupExcludePollTimer = null;
+function startDupExcludePoll() {
+    if (dupExcludePollTimer) return;
     Activity.started('dup-exclude', { label: 'Updating exclusions', log: false });
-    _dupExcludePollTimer = setInterval(async () => {
+    dupExcludePollTimer = setInterval(async () => {
         const res = await API.get('/api/dup-exclude/progress');
         if (!res.ok) return;
         const p = res.data;
@@ -2161,21 +2161,21 @@ function _startDupExcludePoll() {
         } else if (p.status === 'pausing') {
             Activity.progress('dup-exclude', { detail: 'Pausing operations...' });
         } else if (p.status === 'complete' || p.status === 'error' || p.status === 'idle') {
-            _stopDupExcludePoll();
+            stopDupExcludePoll();
         }
         await StatusBar.loadStats();
     }, 500);
 }
-function _stopDupExcludePoll() {
-    if (_dupExcludePollTimer) {
-        clearInterval(_dupExcludePollTimer);
-        _dupExcludePollTimer = null;
+function stopDupExcludePoll() {
+    if (dupExcludePollTimer) {
+        clearInterval(dupExcludePollTimer);
+        dupExcludePollTimer = null;
         Activity.completed('dup-exclude');
     }
 }
 
 WS.on('dup_exclude_completed', async msg => {
-    _stopDupExcludePoll();
+    stopDupExcludePoll();
     const verb = msg.direction === 'exclude' ? 'excluded' : 'included';
     ActivityLog.add(`Duplicate exclusion updated: <b>${msg.folder}</b> ${verb} — ${(msg.fileCount || 0).toLocaleString()} files, ${(msg.hashCount || 0).toLocaleString()} hashes recalculated`);
     await reloadTreeAndFileList();
@@ -2190,7 +2190,7 @@ WS.on('location_changed', async (msg) => {
         return;
     }
     await Tree.reload();
-    if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
+    if (selectedNode) selectedNode = Tree.findNode(selectedNode.id);
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
@@ -2202,7 +2202,7 @@ WS.on('import_completed', async (msg) => {
     });
     Toast.success(`Import completed: ${msg.location}`);
     await Tree.reload();
-    if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
+    if (selectedNode) selectedNode = Tree.findNode(selectedNode.id);
     await StatusBar.loadStats();
     await Detail.refreshStats();
 });
@@ -2230,7 +2230,7 @@ WS.on('location_deleted', async (msg) => {
         selectedFile = null;
     }
     await Tree.reload();
-    if (selectedNode) selectedNode = Tree._findNode(selectedNode.id);
+    if (selectedNode) selectedNode = Tree.findNode(selectedNode.id);
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });
@@ -2291,7 +2291,7 @@ WS.on('file_moved', async (msg) => {
     const currentFolderId = selectedNode ? selectedNode.id : null;
     await Tree.reload();
     if (currentFolderId) {
-        selectedNode = Tree._findNode(currentFolderId);
+        selectedNode = Tree.findNode(currentFolderId);
         await FileList.showFolder(currentFolderId);
     }
     await StatusBar.loadStats();
@@ -2472,8 +2472,8 @@ WS.on('batch_tag_completed', async (msg) => {
 
 WS.on('status_bar_idle', () => {
     // Server explicitly requests idle — clear all ops
-    Activity._ops.clear();
-    Activity._render();
+    Activity.ops.clear();
+    Activity.render();
 });
 
 // --- ZIP download (async build) ---
@@ -2483,8 +2483,8 @@ WS.on('zip_progress', (msg) => {
         label: `Building ZIP: ${msg.filename}`,
         detail: `${msg.done}/${msg.total} files`,
     });
-    if (_pendingZipBtn) {
-        _pendingZipBtn.textContent = `Building ZIP\u2026 ${msg.done}/${msg.total}`;
+    if (pendingZipBtn) {
+        pendingZipBtn.textContent = `Building ZIP\u2026 ${msg.done}/${msg.total}`;
     }
 });
 
@@ -2503,10 +2503,10 @@ WS.on('zip_ready', (msg) => {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    if (_pendingZipBtn) {
-        _pendingZipBtn.disabled = false;
-        _pendingZipBtn.textContent = _pendingZipOrigText;
-        _pendingZipBtn = null;
+    if (pendingZipBtn) {
+        pendingZipBtn.disabled = false;
+        pendingZipBtn.textContent = pendingZipOrigText;
+        pendingZipBtn = null;
     }
 });
 
@@ -2515,10 +2515,10 @@ WS.on('zip_error', (msg) => {
         log: `ZIP build failed: <b>${msg.filename}</b>`,
     });
     Toast.error(`ZIP build failed: ${msg.filename}`);
-    if (_pendingZipBtn) {
-        _pendingZipBtn.disabled = false;
-        _pendingZipBtn.textContent = _pendingZipOrigText;
-        _pendingZipBtn = null;
+    if (pendingZipBtn) {
+        pendingZipBtn.disabled = false;
+        pendingZipBtn.textContent = pendingZipOrigText;
+        pendingZipBtn = null;
     }
 });
 

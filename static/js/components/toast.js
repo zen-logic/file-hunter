@@ -1,19 +1,19 @@
 const Toast = {
-    _container: null,
+    container: null,
 
-    _ensureContainer() {
-        if (this._container) return;
-        this._container = document.createElement('div');
-        this._container.id = 'toast-container';
-        document.body.appendChild(this._container);
+    ensureContainer() {
+        if (this.container) return;
+        this.container = document.createElement('div');
+        this.container.id = 'toast-container';
+        document.body.appendChild(this.container);
     },
 
-    success(msg) { this._show(msg, 'success'); },
-    error(msg)   { this._show(msg, 'error'); },
-    info(msg)    { this._show(msg, 'info'); },
+    success(msg) { this.show(msg, 'success'); },
+    error(msg)   { this.show(msg, 'error'); },
+    info(msg)    { this.show(msg, 'info'); },
 
-    _show(message, level) {
-        this._ensureContainer();
+    show(message, level) {
+        this.ensureContainer();
 
         const toast = document.createElement('div');
         toast.className = `toast toast-${level}`;
@@ -22,18 +22,18 @@ const Toast = {
             <button class="toast-close">&times;</button>
         `;
 
-        toast.querySelector('.toast-close').addEventListener('click', () => this._dismiss(toast));
+        toast.querySelector('.toast-close').addEventListener('click', () => this.dismiss(toast));
 
-        this._container.appendChild(toast);
+        this.container.appendChild(toast);
 
         // Trigger slide-in on next frame
         requestAnimationFrame(() => toast.classList.add('toast-visible'));
 
         // Auto-dismiss after 4 seconds
-        setTimeout(() => this._dismiss(toast), 4000);
+        setTimeout(() => this.dismiss(toast), 4000);
     },
 
-    _dismiss(toast) {
+    dismiss(toast) {
         if (toast.classList.contains('toast-dismissing')) return;
         toast.classList.add('toast-dismissing');
         toast.addEventListener('transitionend', () => toast.remove(), { once: true });

@@ -12,7 +12,7 @@ const RenameFolderModal = {
         this.onConfirm = onConfirm;
 
         document.getElementById('rename-folder-cancel').addEventListener('click', () => this.close());
-        document.getElementById('rename-folder-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('rename-folder-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -25,7 +25,7 @@ const RenameFolderModal = {
         });
 
         this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this._doConfirm();
+            if (e.key === 'Enter') this.confirm();
         });
     },
 
@@ -46,7 +46,7 @@ const RenameFolderModal = {
         this.folder = null;
     },
 
-    async _doConfirm() {
+    async confirm() {
         const newName = this.nameInput.value.trim();
         if (!newName) return;
         if (!this.folder || !this.onConfirm) return;

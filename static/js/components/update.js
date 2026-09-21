@@ -2,10 +2,10 @@ import API from '../api.js';
 import WS from '../ws.js';
 
 const Update = {
-    _overlay: null,
+    overlay: null,
 
     async open(savedKey, proActive) {
-        if (this._overlay) return;
+        if (this.overlay) return;
 
         const title = proActive ? 'Pro Updates' : 'Upgrade to Pro';
         const overlay = document.createElement('div');
@@ -13,13 +13,13 @@ const Update = {
         overlay.id = 'update-modal';
 
         if (proActive) {
-            overlay.innerHTML = this._proLayout(title, savedKey);
+            overlay.innerHTML = this.proLayout(title, savedKey);
         } else {
-            overlay.innerHTML = this._upgradeLayout(title, savedKey);
+            overlay.innerHTML = this.upgradeLayout(title, savedKey);
         }
 
         document.body.appendChild(overlay);
-        this._overlay = overlay;
+        this.overlay = overlay;
 
         // Close handlers
         overlay.addEventListener('click', (e) => {
@@ -28,16 +28,16 @@ const Update = {
         document.getElementById('update-close').addEventListener('click', () => this.close());
 
         if (proActive) {
-            this._bindProEvents();
-            await this._showCurrentStatus();
+            this.bindProEvents();
+            await this.showCurrentStatus();
         } else {
-            this._bindUpgradeEvents();
+            this.bindUpgradeEvents();
         }
     },
 
     // ── Free mode: single "Upgrade" button ──────────────────────────
 
-    _upgradeLayout(title, savedKey) {
+    upgradeLayout(title, savedKey) {
         return `
             <div class="modal-dialog" style="width:440px">
                 <div class="settings-header">
@@ -49,7 +49,7 @@ const Update = {
                         <label class="modal-label">License Key</label>
                         <input type="text" class="modal-input" id="update-key"
                                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                               value="${this._esc(savedKey || '')}"
+                               value="${this.esc(savedKey || '')}"
                                spellcheck="false" autocomplete="off">
                     </div>
                     <div style="margin-top:0.75rem">
@@ -69,8 +69,8 @@ const Update = {
             </div>`;
     },
 
-    _bindUpgradeEvents() {
-        document.getElementById('update-upgrade').addEventListener('click', () => this._upgrade());
+    bindUpgradeEvents() {
+        document.getElementById('update-upgrade').addEventListener('click', () => this.upgrade());
         document.getElementById('update-file').addEventListener('change', (e) => {
             const uploadBtn = document.getElementById('update-upload');
             if (e.target.files.length) {
@@ -79,13 +79,13 @@ const Update = {
                 uploadBtn.classList.add('hidden');
             }
         });
-        document.getElementById('update-upload').addEventListener('click', () => this._uploadFile());
+        document.getElementById('update-upload').addEventListener('click', () => this.uploadFile());
     },
 
-    async _upgrade() {
+    async upgrade() {
         const key = document.getElementById('update-key').value.trim();
         if (!key) {
-            this._setStatus('Enter your license key.', 'error');
+            this.setStatus('Enter your license key.', 'error');
             return;
         }
 
@@ -93,34 +93,34 @@ const Update = {
         btn.disabled = true;
 
         // Save key, validate, then install — one click
-        this._setStatus('Validating…', 'muted');
+        this.setStatus('Validating…', 'muted');
         await API.patch('/api/settings', { license_key: key });
 
         const check = await API.post('/api/update/check', { key });
         if (!check.ok) {
-            this._setStatus(check.error || 'Invalid key.', 'error');
+            this.setStatus(check.error || 'Invalid key.', 'error');
             btn.disabled = false;
             return;
         }
 
-        this._setStatus('Downloading and installing…', 'muted');
+        this.setStatus('Downloading and installing…', 'muted');
         const res = await API.post('/api/update/install', { key });
 
         if (res.ok) {
             btn.classList.add('hidden');
-            this._setStatus(res.data.message, 'success');
-            this._showRestartButton();
+            this.setStatus(res.data.message, 'success');
+            this.showRestartButton();
         } else {
             btn.disabled = false;
-            this._setStatus(res.error || 'Install failed.', 'error');
+            this.setStatus(res.error || 'Install failed.', 'error');
         }
     },
 
-    async _uploadFile() {
+    async uploadFile() {
         const fileInput = document.getElementById('update-file');
         const file = fileInput.files[0];
         if (!file) {
-            this._setStatus('Choose a .filehunter package first.', 'error');
+            this.setStatus('Choose a .filehunter package first.', 'error');
             return;
         }
 
@@ -129,7 +129,7 @@ const Update = {
             .map(id => document.getElementById(id)).filter(Boolean);
         uploadBtn.disabled = true;
         otherBtns.forEach(b => b.disabled = true);
-        this._setStatus('Uploading and installing…', 'muted');
+        this.setStatus('Uploading and installing…', 'muted');
 
         const form = new FormData();
         form.append('file', file);
@@ -146,23 +146,23 @@ const Update = {
             if (res.ok) {
                 uploadBtn.classList.add('hidden');
                 otherBtns.forEach(b => b.classList.add('hidden'));
-                this._setStatus(res.data.message, 'success');
-                this._showRestartButton();
+                this.setStatus(res.data.message, 'success');
+                this.showRestartButton();
             } else {
                 uploadBtn.disabled = false;
                 otherBtns.forEach(b => b.disabled = false);
-                this._setStatus(res.error || 'Upload failed.', 'error');
+                this.setStatus(res.error || 'Upload failed.', 'error');
             }
         } catch (e) {
             uploadBtn.disabled = false;
             otherBtns.forEach(b => b.disabled = false);
-            this._setStatus('Upload failed — could not reach server.', 'error');
+            this.setStatus('Upload failed — could not reach server.', 'error');
         }
     },
 
     // ── Pro mode: check + install ───────────────────────────────────
 
-    _proLayout(title, savedKey) {
+    proLayout(title, savedKey) {
         return `
             <div class="modal-dialog" style="width:440px">
                 <div class="settings-header">
@@ -175,7 +175,7 @@ const Update = {
                         <div class="settings-inline">
                             <input type="text" class="modal-input" id="update-key"
                                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                                   value="${this._esc(savedKey || '')}"
+                                   value="${this.esc(savedKey || '')}"
                                    spellcheck="false" autocomplete="off">
                             <button class="btn btn-sm" id="update-save-key">Save</button>
                         </div>
@@ -198,10 +198,10 @@ const Update = {
             </div>`;
     },
 
-    _bindProEvents() {
-        document.getElementById('update-save-key').addEventListener('click', () => this._saveKey());
-        document.getElementById('update-check').addEventListener('click', () => this._check());
-        document.getElementById('update-install').addEventListener('click', () => this._install());
+    bindProEvents() {
+        document.getElementById('update-save-key').addEventListener('click', () => this.saveKey());
+        document.getElementById('update-check').addEventListener('click', () => this.check());
+        document.getElementById('update-install').addEventListener('click', () => this.install());
         document.getElementById('update-file').addEventListener('change', (e) => {
             const uploadBtn = document.getElementById('update-upload');
             if (e.target.files.length) {
@@ -210,35 +210,35 @@ const Update = {
                 uploadBtn.classList.add('hidden');
             }
         });
-        document.getElementById('update-upload').addEventListener('click', () => this._uploadFile());
+        document.getElementById('update-upload').addEventListener('click', () => this.uploadFile());
     },
 
-    async _saveKey() {
+    async saveKey() {
         const key = document.getElementById('update-key').value.trim();
         const res = await API.patch('/api/settings', { license_key: key });
         if (res.ok) {
-            this._setStatus('Key saved.', 'muted');
+            this.setStatus('Key saved.', 'muted');
         } else {
-            this._setStatus(res.error || 'Failed to save key.', 'error');
+            this.setStatus(res.error || 'Failed to save key.', 'error');
         }
     },
 
-    async _showCurrentStatus() {
+    async showCurrentStatus() {
         const res = await API.get('/api/pro/status');
         if (res.ok && res.data.active) {
             const ver = res.data.version ? ` (v${res.data.version})` : '';
-            this._setStatus(`Pro installed${ver}`, 'success');
+            this.setStatus(`Pro installed${ver}`, 'success');
         }
     },
 
-    async _check() {
+    async check() {
         const key = document.getElementById('update-key').value.trim();
         if (!key) {
-            this._setStatus('Enter a license key first.', 'error');
+            this.setStatus('Enter a license key first.', 'error');
             return;
         }
 
-        this._setStatus('Checking…', 'muted');
+        this.setStatus('Checking…', 'muted');
         const checkBtn = document.getElementById('update-check');
         checkBtn.disabled = true;
 
@@ -246,17 +246,17 @@ const Update = {
         checkBtn.disabled = false;
 
         if (res.ok) {
-            this._setStatus(`Available: v${res.data.version} (${res.data.filename})`, 'success');
+            this.setStatus(`Available: v${res.data.version} (${res.data.filename})`, 'success');
             const installBtn = document.getElementById('update-install');
             installBtn.classList.remove('hidden');
             installBtn.dataset.version = res.data.version;
         } else {
-            this._setStatus(res.error || 'Check failed.', 'error');
+            this.setStatus(res.error || 'Check failed.', 'error');
             document.getElementById('update-install').classList.add('hidden');
         }
     },
 
-    async _install() {
+    async install() {
         const key = document.getElementById('update-key').value.trim();
         if (!key) return;
 
@@ -264,32 +264,32 @@ const Update = {
         const checkBtn = document.getElementById('update-check');
         installBtn.disabled = true;
         checkBtn.disabled = true;
-        this._setStatus('Downloading and installing…', 'muted');
+        this.setStatus('Downloading and installing…', 'muted');
 
         const res = await API.post('/api/update/install', { key });
 
         if (res.ok) {
             installBtn.classList.add('hidden');
             checkBtn.disabled = true;
-            this._setStatus(res.data.message, 'success');
-            this._showRestartButton();
+            this.setStatus(res.data.message, 'success');
+            this.showRestartButton();
         } else {
             installBtn.disabled = false;
             checkBtn.disabled = false;
-            this._setStatus(res.error || 'Install failed.', 'error');
+            this.setStatus(res.error || 'Install failed.', 'error');
         }
     },
 
     // ── Shared ──────────────────────────────────────────────────────
 
     close() {
-        if (this._overlay) {
-            this._overlay.remove();
-            this._overlay = null;
+        if (this.overlay) {
+            this.overlay.remove();
+            this.overlay = null;
         }
     },
 
-    _showRestartButton() {
+    showRestartButton() {
         const container = document.getElementById('update-body');
         if (!container || document.getElementById('update-restart')) return;
 
@@ -298,14 +298,14 @@ const Update = {
         btn.className = 'btn btn-sm btn-primary';
         btn.textContent = 'Restart Now';
         btn.style.marginTop = '0.75rem';
-        btn.addEventListener('click', () => this._restart());
+        btn.addEventListener('click', () => this.restart());
         container.appendChild(btn);
     },
 
-    async _restart() {
+    async restart() {
         const btn = document.getElementById('update-restart');
         if (btn) btn.disabled = true;
-        this._setStatus('Restarting…', 'muted');
+        this.setStatus('Restarting…', 'muted');
 
         // Register reconnect handler before triggering restart —
         // the server will die mid-request, so the fetch may throw
@@ -335,7 +335,7 @@ const Update = {
         }
     },
 
-    _setStatus(msg, type) {
+    setStatus(msg, type) {
         const el = document.getElementById('update-status');
         if (!el) return;
         el.classList.remove('hidden');
@@ -346,7 +346,7 @@ const Update = {
             'var(--color-text-muted)';
     },
 
-    _esc(s) {
+    esc(s) {
         const d = document.createElement('div');
         d.textContent = s;
         return d.innerHTML;

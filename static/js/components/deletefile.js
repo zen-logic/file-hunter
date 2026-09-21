@@ -18,7 +18,7 @@ const DeleteFileModal = {
         this.onConfirm = onConfirm;
 
         document.getElementById('delete-file-cancel').addEventListener('click', () => this.close());
-        document.getElementById('delete-file-submit').addEventListener('click', () => this._doConfirm());
+        document.getElementById('delete-file-submit').addEventListener('click', () => this.confirm());
 
         this.overlayEl.addEventListener('click', (e) => {
             if (e.target === this.overlayEl) this.close();
@@ -30,7 +30,7 @@ const DeleteFileModal = {
                 this.close();
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                this._doConfirm();
+                this.confirm();
             }
         });
     },
@@ -95,7 +95,7 @@ const DeleteFileModal = {
         this.item = null;
     },
 
-    _doConfirm() {
+    confirm() {
         if (this.item && this.onConfirm) {
             this.item.deleteAllDuplicates = this.dupsCheckEl.checked;
             this.onConfirm(this.item);

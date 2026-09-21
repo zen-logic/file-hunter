@@ -2,10 +2,10 @@ import API from '../api.js';
 import { loadThemeNames, applyTheme } from '../themes.js';
 
 const Login = {
-    _onAuthenticated: null,
+    onAuthenticated: null,
 
     init(onAuthenticated) {
-        this._onAuthenticated = onAuthenticated;
+        this.onAuthenticated = onAuthenticated;
     },
 
     showSetup() {
@@ -40,7 +40,7 @@ const Login = {
                 </div>
             </div>
         `;
-        this._wireThemeSelector();
+        this.wireThemeSelector();
         const submit = document.getElementById('setup-submit');
         const inputs = screen.querySelectorAll('input');
         inputs.forEach(input => {
@@ -48,7 +48,7 @@ const Login = {
                 if (e.key === 'Enter') submit.click();
             });
         });
-        submit.addEventListener('click', () => this._handleSetup());
+        submit.addEventListener('click', () => this.handleSetup());
         document.getElementById('setup-username').focus();
     },
 
@@ -59,7 +59,7 @@ const Login = {
         const title = serverName ? `File Hunter — ${serverName}` : 'File Hunter';
         screen.innerHTML = `
             <div class="login-card">
-                <h1 class="login-title">${this._esc(title)}</h1>
+                <h1 class="login-title">${this.esc(title)}</h1>
                 <div class="login-field">
                     <label class="login-label" for="login-username">Username</label>
                     <input type="text" class="modal-input" id="login-username" autocomplete="username">
@@ -79,7 +79,7 @@ const Login = {
                 if (e.key === 'Enter') submit.click();
             });
         });
-        submit.addEventListener('click', () => this._handleLogin());
+        submit.addEventListener('click', () => this.handleLogin());
         document.getElementById('login-username').focus();
     },
 
@@ -90,7 +90,7 @@ const Login = {
         document.getElementById('app').classList.remove('hidden');
     },
 
-    async _handleSetup() {
+    async handleSetup() {
         const username = document.getElementById('setup-username').value.trim();
         const displayName = document.getElementById('setup-display').value.trim();
         const password = document.getElementById('setup-password').value;
@@ -98,11 +98,11 @@ const Login = {
         const errorEl = document.getElementById('setup-error');
 
         if (!username || !password) {
-            this._showError(errorEl, 'Username and password are required.');
+            this.showError(errorEl, 'Username and password are required.');
             return;
         }
         if (password !== confirm) {
-            this._showError(errorEl, 'Passwords do not match.');
+            this.showError(errorEl, 'Passwords do not match.');
             return;
         }
 
@@ -114,21 +114,21 @@ const Login = {
         if (res.ok) {
             localStorage.setItem('fh-token', res.data.token);
             this.hide();
-            if (this._onAuthenticated) this._onAuthenticated(res.data.user);
+            if (this.onAuthenticated) this.onAuthenticated(res.data.user);
         } else {
             submitBtn.disabled = false;
             submitBtn.textContent = 'Create Account';
-            this._showError(errorEl, res.error || 'Setup failed.');
+            this.showError(errorEl, res.error || 'Setup failed.');
         }
     },
 
-    async _handleLogin() {
+    async handleLogin() {
         const username = document.getElementById('login-username').value.trim();
         const password = document.getElementById('login-password').value;
         const errorEl = document.getElementById('login-error');
 
         if (!username || !password) {
-            this._showError(errorEl, 'Username and password are required.');
+            this.showError(errorEl, 'Username and password are required.');
             return;
         }
 
@@ -140,20 +140,20 @@ const Login = {
         if (res.ok) {
             localStorage.setItem('fh-token', res.data.token);
             this.hide();
-            if (this._onAuthenticated) this._onAuthenticated(res.data.user);
+            if (this.onAuthenticated) this.onAuthenticated(res.data.user);
         } else {
             submitBtn.disabled = false;
             submitBtn.textContent = 'Log In';
-            this._showError(errorEl, res.error || 'Login failed.');
+            this.showError(errorEl, res.error || 'Login failed.');
         }
     },
 
-    _showError(el, msg) {
+    showError(el, msg) {
         el.textContent = msg;
         el.classList.remove('hidden');
     },
 
-    async _wireThemeSelector() {
+    async wireThemeSelector() {
         const sel = document.getElementById('login-theme');
         if (!sel) return;
         const themeNames = await loadThemeNames();
@@ -169,7 +169,7 @@ const Login = {
         sel.addEventListener('change', () => applyTheme(sel.value));
     },
 
-    _esc(s) {
+    esc(s) {
         const d = document.createElement('div');
         d.textContent = s;
         return d.innerHTML;

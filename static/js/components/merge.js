@@ -20,11 +20,11 @@ const Merge = {
     cancelBtn: null,
     submitBtn: null,
     onMerge: null,
-    _sourceNode: null,
-    _selectedDest: null,
-    _treeData: null,
-    _favourites: [],
-    _expandedNodes: new Set(),
+    sourceNode: null,
+    selectedDest: null,
+    treeData: null,
+    favourites: [],
+    expandedNodes: new Set(),
 
     init(onMerge) {
         this.onMerge = onMerge;
@@ -45,13 +45,13 @@ const Merge = {
                 this.close();
             }
         });
-        this.submitBtn.addEventListener('click', () => this._doSubmit());
+        this.submitBtn.addEventListener('click', () => this.doSubmit());
     },
 
     async open(sourceNode) {
-        this._sourceNode = sourceNode;
-        this._selectedDest = null;
-        this._expandedNodes = new Set();
+        this.sourceNode = sourceNode;
+        this.selectedDest = null;
+        this.expandedNodes = new Set();
 
         this.sourceNameEl.textContent = sourceNode.label || sourceNode.name;
         this.sourceStatsEl.textContent = 'Loading stats...';
@@ -78,10 +78,10 @@ const Merge = {
             API.get('/api/locations'),
             API.get('/api/favourites'),
         ]);
-        this._treeData = res.ok ? res.data : [];
-        this._favourites = favRes.ok ? favRes.data : [];
+        this.treeData = res.ok ? res.data : [];
+        this.favourites = favRes.ok ? favRes.data : [];
 
-        this._renderTree();
+        this.renderTree();
         this.overlay.classList.remove('hidden');
     },
 
@@ -89,29 +89,29 @@ const Merge = {
         this.overlay.classList.add('hidden');
     },
 
-    _renderTree() {
+    renderTree() {
         this.treePicker.innerHTML = '';
-        if (!this._treeData) return;
-        this._renderFavourites(this.treePicker);
-        this._treeData.forEach(loc => {
-            this._renderTreeNode(this.treePicker, loc, 0);
+        if (!this.treeData) return;
+        this.renderFavourites(this.treePicker);
+        this.treeData.forEach(loc => {
+            this.renderTreeNode(this.treePicker, loc, 0);
         });
     },
 
-    _renderFavourites(container) {
-        if (!this._favourites || this._favourites.length === 0) return;
+    renderFavourites(container) {
+        if (!this.favourites || this.favourites.length === 0) return;
 
         const header = document.createElement('div');
         header.className = 'ct-section-header';
         header.textContent = 'Favourites';
         container.appendChild(header);
 
-        for (const fav of this._favourites) {
-            const isDisabled = this._isSourceOrChild(fav.id);
+        for (const fav of this.favourites) {
+            const isDisabled = this.isSourceOrChild(fav.id);
             const div = document.createElement('div');
             div.className = 'ct-node';
             if (isDisabled) div.classList.add('ct-offline');
-            if (this._selectedDest === fav.id) div.classList.add('ct-selected');
+            if (this.selectedDest === fav.id) div.classList.add('ct-selected');
 
             const heartIcon = document.createElement('span');
             heartIcon.className = 'ct-icon';
@@ -126,9 +126,9 @@ const Merge = {
             div.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (isDisabled) return;
-                this._selectedDest = fav.id;
-                this._updateDestDisplay();
-                this._renderTree();
+                this.selectedDest = fav.id;
+                this.updateDestDisplay();
+                this.renderTree();
             });
 
             container.appendChild(div);
@@ -139,12 +139,12 @@ const Merge = {
         container.appendChild(divider);
     },
 
-    _renderTreeNode(container, node, depth) {
-        const isDisabled = node.online === false || this._isSourceOrChild(node.id);
+    renderTreeNode(container, node, depth) {
+        const isDisabled = node.online === false || this.isSourceOrChild(node.id);
         const div = document.createElement('div');
         div.className = 'ct-node';
         if (isDisabled) div.classList.add('ct-offline');
-        if (this._selectedDest === node.id) div.classList.add('ct-selected');
+        if (this.selectedDest === node.id) div.classList.add('ct-selected');
 
         for (let i = 0; i < depth; i++) {
             const indent = document.createElement('span');
@@ -156,7 +156,7 @@ const Merge = {
         const toggle = document.createElement('span');
         toggle.className = 'ct-icon';
         if (hasChildren) {
-            toggle.textContent = this._expandedNodes.has(node.id) ? '\u25BE' : '\u25B8';
+            toggle.textContent = this.expandedNodes.has(node.id) ? '\u25BE' : '\u25B8';
         }
         div.appendChild(toggle);
 
@@ -176,11 +176,11 @@ const Merge = {
 
             let expanded = false;
             if (hasChildren) {
-                if (this._expandedNodes.has(node.id)) {
-                    this._expandedNodes.delete(node.id);
+                if (this.expandedNodes.has(node.id)) {
+                    this.expandedNodes.delete(node.id);
                 } else {
                     expanded = true;
-                    this._expandedNodes.add(node.id);
+                    this.expandedNodes.add(node.id);
                     // Lazy-load children if not yet fetched
                     if (node.children === null) {
                         const numId = node.id.replace('fld-', '');
@@ -193,9 +193,9 @@ const Merge = {
                     }
                 }
             }
-            this._selectedDest = node.id;
-            this._updateDestDisplay();
-            this._renderTree();
+            this.selectedDest = node.id;
+            this.updateDestDisplay();
+            this.renderTree();
             if (expanded) {
                 const sel = this.treePicker.querySelector('.ct-selected');
                 if (sel) {
@@ -213,81 +213,81 @@ const Merge = {
 
         container.appendChild(div);
 
-        if (node.children && node.children.length > 0 && this._expandedNodes.has(node.id)) {
-            node.children.forEach(child => this._renderTreeNode(container, child, depth + 1));
+        if (node.children && node.children.length > 0 && this.expandedNodes.has(node.id)) {
+            node.children.forEach(child => this.renderTreeNode(container, child, depth + 1));
         }
     },
 
-    _isSourceOrChild(nodeId) {
-        if (!this._sourceNode) return false;
-        const sourceId = String(this._sourceNode.id);
+    isSourceOrChild(nodeId) {
+        if (!this.sourceNode) return false;
+        const sourceId = String(this.sourceNode.id);
         const checkId = String(nodeId);
 
         // Exact match
         if (checkId === sourceId) return true;
 
         // Check if nodeId is a descendant of source by walking tree
-        return this._isDescendantOf(this._treeData, sourceId, checkId);
+        return this.isDescendantOf(this.treeData, sourceId, checkId);
     },
 
-    _isDescendantOf(nodes, ancestorId, targetId) {
+    isDescendantOf(nodes, ancestorId, targetId) {
         for (const n of nodes) {
             if (String(n.id) === ancestorId) {
                 // Found the ancestor — check if targetId is in its subtree
-                return this._containsNode(n.children || [], targetId);
+                return this.containsNode(n.children || [], targetId);
             }
             if (n.children) {
-                const found = this._isDescendantOf(n.children, ancestorId, targetId);
+                const found = this.isDescendantOf(n.children, ancestorId, targetId);
                 if (found) return true;
             }
         }
         return false;
     },
 
-    _containsNode(children, targetId) {
+    containsNode(children, targetId) {
         if (!children) return false;
         for (const c of children) {
             if (String(c.id) === targetId) return true;
-            if (c.children && this._containsNode(c.children, targetId)) return true;
+            if (c.children && this.containsNode(c.children, targetId)) return true;
         }
         return false;
     },
 
-    _updateDestDisplay() {
-        if (!this._selectedDest) {
+    updateDestDisplay() {
+        if (!this.selectedDest) {
             this.destDisplay.textContent = 'No folder selected';
             this.submitBtn.disabled = true;
             return;
         }
-        const node = this._findNode(this._treeData, this._selectedDest);
+        const node = this.findNode(this.treeData, this.selectedDest);
         if (node) {
             this.destDisplay.textContent = node.label;
             this.submitBtn.disabled = false;
         }
     },
 
-    _findNode(nodes, id) {
+    findNode(nodes, id) {
         for (const n of nodes) {
             if (n.id === id) return n;
             if (n.children) {
-                const found = this._findNode(n.children, id);
+                const found = this.findNode(n.children, id);
                 if (found) return found;
             }
         }
-        if (nodes === this._treeData && this._favourites) {
-            const fav = this._favourites.find(f => f.id === id);
+        if (nodes === this.treeData && this.favourites) {
+            const fav = this.favourites.find(f => f.id === id);
             if (fav) return { id: fav.id, label: fav.path, type: fav.type };
         }
         return null;
     },
 
-    _doSubmit() {
-        if (!this._selectedDest) return;
+    doSubmit() {
+        if (!this.selectedDest) return;
 
         const copyOnly = document.getElementById('merge-copy-only').checked;
         this.onMerge({
-            source_id: this._sourceNode.id,
-            destination_id: this._selectedDest,
+            source_id: this.sourceNode.id,
+            destination_id: this.selectedDest,
             mode: copyOnly ? 'copy' : 'move',
         });
         this.close();

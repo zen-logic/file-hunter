@@ -10,12 +10,12 @@ const MoveFileModal = {
     cancelBtn: null,
     submitBtn: null,
     onMove: null,
-    _file: null,
-    _excludeId: null,
-    _selectedDest: null,
-    _treeData: null,
-    _favourites: [],
-    _expandedNodes: new Set(),
+    file: null,
+    excludeId: null,
+    selectedDest: null,
+    treeData: null,
+    favourites: [],
+    expandedNodes: new Set(),
 
     init(onMove) {
         this.onMove = onMove;
@@ -38,20 +38,20 @@ const MoveFileModal = {
                 this.close();
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                this._doSubmit();
+                this.doSubmit();
             }
         });
-        this.submitBtn.addEventListener('click', () => this._doSubmit());
+        this.submitBtn.addEventListener('click', () => this.doSubmit());
         this.copyCheckbox.addEventListener('change', () => {
             this.submitBtn.textContent = this.copyCheckbox.checked ? 'Copy' : 'Move';
         });
     },
 
     async open(file, excludeId) {
-        this._file = file;
-        this._excludeId = excludeId || null;
-        this._selectedDest = null;
-        this._expandedNodes = new Set();
+        this.file = file;
+        this.excludeId = excludeId || null;
+        this.selectedDest = null;
+        this.expandedNodes = new Set();
 
         this.fileNameEl.textContent = file.name;
         this.submitBtn.disabled = true;
@@ -67,10 +67,10 @@ const MoveFileModal = {
             API.get('/api/locations'),
             API.get('/api/favourites'),
         ]);
-        this._treeData = res.ok ? res.data : [];
-        this._favourites = favRes.ok ? favRes.data : [];
+        this.treeData = res.ok ? res.data : [];
+        this.favourites = favRes.ok ? favRes.data : [];
 
-        this._renderTree();
+        this.renderTree();
         this.overlay.classList.remove('hidden');
     },
 
@@ -78,29 +78,29 @@ const MoveFileModal = {
         this.overlay.classList.add('hidden');
     },
 
-    _renderTree() {
+    renderTree() {
         this.treePicker.innerHTML = '';
-        if (!this._treeData) return;
-        this._renderFavourites(this.treePicker);
-        this._treeData.forEach(loc => {
-            this._renderTreeNode(this.treePicker, loc, 0);
+        if (!this.treeData) return;
+        this.renderFavourites(this.treePicker);
+        this.treeData.forEach(loc => {
+            this.renderTreeNode(this.treePicker, loc, 0);
         });
     },
 
-    _renderFavourites(container) {
-        if (!this._favourites || this._favourites.length === 0) return;
+    renderFavourites(container) {
+        if (!this.favourites || this.favourites.length === 0) return;
 
         const header = document.createElement('div');
         header.className = 'ct-section-header';
         header.textContent = 'Favourites';
         container.appendChild(header);
 
-        for (const fav of this._favourites) {
-            const isDisabled = this._isExcluded(fav.id);
+        for (const fav of this.favourites) {
+            const isDisabled = this.isExcluded(fav.id);
             const div = document.createElement('div');
             div.className = 'ct-node';
             if (isDisabled) div.classList.add('ct-offline');
-            if (this._selectedDest === fav.id) div.classList.add('ct-selected');
+            if (this.selectedDest === fav.id) div.classList.add('ct-selected');
 
             const heartIcon = document.createElement('span');
             heartIcon.className = 'ct-icon';
@@ -115,9 +115,9 @@ const MoveFileModal = {
             div.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (isDisabled) return;
-                this._selectedDest = fav.id;
-                this._updateDestDisplay();
-                this._renderTree();
+                this.selectedDest = fav.id;
+                this.updateDestDisplay();
+                this.renderTree();
             });
 
             container.appendChild(div);
@@ -128,14 +128,14 @@ const MoveFileModal = {
         container.appendChild(divider);
     },
 
-    _renderTreeNode(container, node, depth) {
-        const isDisabled = this._isExcluded(node.id);
+    renderTreeNode(container, node, depth) {
+        const isDisabled = this.isExcluded(node.id);
         const isOffline = node.online === false;
         const div = document.createElement('div');
         div.className = 'ct-node';
         if (isDisabled) div.classList.add('ct-offline');
         if (isOffline) div.classList.add('ct-offline-hint');
-        if (this._selectedDest === node.id) div.classList.add('ct-selected');
+        if (this.selectedDest === node.id) div.classList.add('ct-selected');
 
         for (let i = 0; i < depth; i++) {
             const indent = document.createElement('span');
@@ -147,7 +147,7 @@ const MoveFileModal = {
         const toggle = document.createElement('span');
         toggle.className = 'ct-icon';
         if (hasChildren) {
-            toggle.textContent = this._expandedNodes.has(node.id) ? '\u25BE' : '\u25B8';
+            toggle.textContent = this.expandedNodes.has(node.id) ? '\u25BE' : '\u25B8';
         }
         div.appendChild(toggle);
 
@@ -167,11 +167,11 @@ const MoveFileModal = {
 
             let expanded = false;
             if (hasChildren) {
-                if (this._expandedNodes.has(node.id)) {
-                    this._expandedNodes.delete(node.id);
+                if (this.expandedNodes.has(node.id)) {
+                    this.expandedNodes.delete(node.id);
                 } else {
                     expanded = true;
-                    this._expandedNodes.add(node.id);
+                    this.expandedNodes.add(node.id);
                     if (node.children === null) {
                         const numId = node.id.replace('fld-', '');
                         const res = await API.get(`/api/tree/children?ids=${numId}`);
@@ -183,9 +183,9 @@ const MoveFileModal = {
                     }
                 }
             }
-            this._selectedDest = node.id;
-            this._updateDestDisplay();
-            this._renderTree();
+            this.selectedDest = node.id;
+            this.updateDestDisplay();
+            this.renderTree();
             if (expanded) {
                 const sel = this.treePicker.querySelector('.ct-selected');
                 if (sel) {
@@ -203,18 +203,18 @@ const MoveFileModal = {
 
         container.appendChild(div);
 
-        if (node.children && node.children.length > 0 && this._expandedNodes.has(node.id)) {
-            node.children.forEach(child => this._renderTreeNode(container, child, depth + 1));
+        if (node.children && node.children.length > 0 && this.expandedNodes.has(node.id)) {
+            node.children.forEach(child => this.renderTreeNode(container, child, depth + 1));
         }
     },
 
-    _updateDestDisplay() {
-        if (!this._selectedDest) {
+    updateDestDisplay() {
+        if (!this.selectedDest) {
             this.destDisplay.textContent = 'No folder selected';
             this.submitBtn.disabled = true;
             return;
         }
-        const node = this._findNode(this._treeData, this._selectedDest);
+        const node = this.findNode(this.treeData, this.selectedDest);
         if (node) {
             this.destDisplay.textContent = node.online === false
                 ? `${node.label} (offline \u2014 will be queued)`
@@ -223,52 +223,52 @@ const MoveFileModal = {
         }
     },
 
-    _findNode(nodes, id) {
+    findNode(nodes, id) {
         for (const n of nodes) {
             if (n.id === id) return n;
             if (n.children) {
-                const found = this._findNode(n.children, id);
+                const found = this.findNode(n.children, id);
                 if (found) return found;
             }
         }
-        if (nodes === this._treeData && this._favourites) {
-            const fav = this._favourites.find(f => f.id === id);
+        if (nodes === this.treeData && this.favourites) {
+            const fav = this.favourites.find(f => f.id === id);
             if (fav) return { id: fav.id, label: fav.path, type: fav.type };
         }
         return null;
     },
 
-    _isExcluded(nodeId) {
-        if (!this._excludeId) return false;
-        const excludeStr = String(this._excludeId);
+    isExcluded(nodeId) {
+        if (!this.excludeId) return false;
+        const excludeStr = String(this.excludeId);
         const checkStr = String(nodeId);
         if (checkStr === excludeStr) return true;
-        return this._isDescendantOf(this._treeData, excludeStr, checkStr);
+        return this.isDescendantOf(this.treeData, excludeStr, checkStr);
     },
 
-    _isDescendantOf(nodes, ancestorId, targetId) {
+    isDescendantOf(nodes, ancestorId, targetId) {
         for (const n of nodes) {
             if (String(n.id) === ancestorId) {
-                return this._containsNode(n.children || [], targetId);
+                return this.containsNode(n.children || [], targetId);
             }
             if (n.children) {
-                const found = this._isDescendantOf(n.children, ancestorId, targetId);
+                const found = this.isDescendantOf(n.children, ancestorId, targetId);
                 if (found) return true;
             }
         }
         return false;
     },
 
-    _containsNode(children, targetId) {
+    containsNode(children, targetId) {
         if (!children) return false;
         for (const c of children) {
             if (String(c.id) === targetId) return true;
-            if (c.children && this._containsNode(c.children, targetId)) return true;
+            if (c.children && this.containsNode(c.children, targetId)) return true;
         }
         return false;
     },
 
-    _setBusy(busy) {
+    setBusy(busy) {
         this.submitBtn.disabled = busy;
         this.cancelBtn.disabled = busy;
         this.copyCheckbox.disabled = busy;
@@ -282,26 +282,26 @@ const MoveFileModal = {
         }
     },
 
-    async _doSubmit() {
-        if (!this._selectedDest || !this._file) return;
+    async doSubmit() {
+        if (!this.selectedDest || !this.file) return;
 
         if (this.errorEl) {
             this.errorEl.textContent = '';
             this.errorEl.classList.add('hidden');
         }
 
-        this._setBusy(true);
+        this.setBusy(true);
         const copy = this.copyCheckbox.checked;
-        const result = await this.onMove(this._file, this._selectedDest, copy);
+        const result = await this.onMove(this.file, this.selectedDest, copy);
         if (result && result.error) {
-            this._setBusy(false);
+            this.setBusy(false);
             if (this.errorEl) {
                 this.errorEl.textContent = result.error;
                 this.errorEl.classList.remove('hidden');
             }
             return;
         }
-        this._setBusy(false);
+        this.setBusy(false);
         this.close();
     },
 };

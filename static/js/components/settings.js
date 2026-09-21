@@ -7,20 +7,20 @@ import Update from './update.js';
 import RepairCatalog from './repaircatalog.js';
 
 const Settings = {
-    _currentUser: null,
+    currentUser: null,
 
     open(currentUser) {
-        this._currentUser = currentUser;
+        this.currentUser = currentUser;
         const modal = document.getElementById('settings-modal');
         modal.classList.remove('hidden');
-        this._render();
+        this.render();
     },
 
     close() {
         document.getElementById('settings-modal').classList.add('hidden');
     },
 
-    async _render() {
+    async render() {
         const content = document.getElementById('settings-content');
         content.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div>Loading…</div>';
 
@@ -46,7 +46,7 @@ const Settings = {
                     <label class="modal-label" for="settings-server-name">Server Name</label>
                     <div class="settings-inline">
                         <input type="text" class="modal-input" id="settings-server-name"
-                               value="${this._esc(settings.serverName || '')}"
+                               value="${this.esc(settings.serverName || '')}"
                                placeholder="e.g. My Archive Server">
                         <button class="btn btn-sm" id="settings-save-name">Save</button>
                     </div>
@@ -87,7 +87,7 @@ const Settings = {
                     <label class="modal-label" for="settings-similarity-url">Embedding Service URL</label>
                     <div class="settings-inline">
                         <input type="text" class="modal-input" id="settings-similarity-url"
-                               value="${this._esc(settings.similaritySearchUrl || '')}"
+                               value="${this.esc(settings.similaritySearchUrl || '')}"
                                placeholder="e.g. http://hostname:8002">
                         <button class="btn btn-sm" id="settings-save-similarity">Save</button>
                     </div>
@@ -210,10 +210,10 @@ const Settings = {
         });
 
         // Users table
-        this._renderUsers(users);
+        this.renderUsers(users);
 
         // Applications table
-        this._renderApps(apps);
+        this.renderApps(apps);
 
         // Save server name
         document.getElementById('settings-save-name').addEventListener('click', async () => {
@@ -238,8 +238,8 @@ const Settings = {
         });
 
         // Add user / application
-        document.getElementById('settings-add-user').addEventListener('click', () => this._showAddUser());
-        document.getElementById('settings-add-app').addEventListener('click', () => this._showAddApp());
+        document.getElementById('settings-add-user').addEventListener('click', () => this.showAddUser());
+        document.getElementById('settings-add-app').addEventListener('click', () => this.showAddApp());
 
         // Repair catalog
         document.getElementById('settings-repair-catalog').addEventListener('click', () => {
@@ -284,16 +284,16 @@ const Settings = {
         });
     },
 
-    _renderUsers(users) {
+    renderUsers(users) {
         const tbody = document.getElementById('settings-users-body');
         if (!tbody) return;
         tbody.innerHTML = '';
         for (const user of users) {
             const tr = document.createElement('tr');
-            const isSelf = this._currentUser && this._currentUser.id === user.id;
+            const isSelf = this.currentUser && this.currentUser.id === user.id;
             tr.innerHTML = `
-                <td>${this._esc(user.username)}${isSelf ? ' <em>(you)</em>' : ''}</td>
-                <td>${this._esc(user.displayName || '')}</td>
+                <td>${this.esc(user.username)}${isSelf ? ' <em>(you)</em>' : ''}</td>
+                <td>${this.esc(user.displayName || '')}</td>
                 <td class="settings-user-actions">
                     <button class="btn btn-sm settings-edit-user" data-id="${user.id}">Edit</button>
                     ${isSelf ? '' : `<button class="btn btn-sm btn-danger settings-delete-user" data-id="${user.id}">Delete</button>`}
@@ -306,7 +306,7 @@ const Settings = {
             btn.addEventListener('click', () => {
                 const id = parseInt(btn.dataset.id, 10);
                 const user = users.find(u => u.id === id);
-                if (user) this._showEditUser(user);
+                if (user) this.showEditUser(user);
             });
         });
 
@@ -322,14 +322,14 @@ const Settings = {
                     });
                     if (ok) {
                         await API.delete(`/api/auth/users/${id}`);
-                        this._render();
+                        this.render();
                     }
                 }
             });
         });
     },
 
-    _showAddUser() {
+    showAddUser() {
         // Remove any existing form
         const existing = document.getElementById('settings-user-form');
         if (existing) existing.remove();
@@ -368,7 +368,7 @@ const Settings = {
 
             const res = await API.post('/api/auth/users', { username, password, displayName });
             if (res.ok) {
-                this._render();
+                this.render();
             } else {
                 errEl.textContent = res.error || 'Failed to create user.';
                 errEl.classList.remove('hidden');
@@ -376,7 +376,7 @@ const Settings = {
         });
     },
 
-    _showEditUser(user) {
+    showEditUser(user) {
         // Remove any existing form
         const existingForm = document.getElementById('settings-user-form');
         if (existingForm) existingForm.remove();
@@ -392,8 +392,8 @@ const Settings = {
                 form.className = 'settings-user-form';
                 form.innerHTML = `
                     <div class="settings-user-form-fields">
-                        <input type="text" class="modal-input" id="edit-user-username" value="${this._esc(user.username)}" autocomplete="off">
-                        <input type="text" class="modal-input" id="edit-user-display" value="${this._esc(user.displayName || '')}" placeholder="Display Name" autocomplete="off">
+                        <input type="text" class="modal-input" id="edit-user-username" value="${this.esc(user.username)}" autocomplete="off">
+                        <input type="text" class="modal-input" id="edit-user-display" value="${this.esc(user.displayName || '')}" placeholder="Display Name" autocomplete="off">
                         <input type="password" class="modal-input modal-input-full" id="edit-user-password" placeholder="New password (leave blank to keep)" autocomplete="new-password">
                     </div>
                     <div class="settings-user-form-actions">
@@ -407,7 +407,7 @@ const Settings = {
                 table.parentNode.insertBefore(form, table.nextSibling);
 
                 document.getElementById('edit-user-username').focus();
-                document.getElementById('edit-user-cancel').addEventListener('click', () => this._render());
+                document.getElementById('edit-user-cancel').addEventListener('click', () => this.render());
                 document.getElementById('edit-user-save').addEventListener('click', async () => {
                     const username = document.getElementById('edit-user-username').value.trim();
                     const displayName = document.getElementById('edit-user-display').value.trim();
@@ -426,11 +426,11 @@ const Settings = {
                     const res = await API.patch(`/api/auth/users/${user.id}`, body);
                     if (res.ok) {
                         // If editing self, update cached user
-                        if (this._currentUser && this._currentUser.id === user.id) {
-                            this._currentUser.username = username;
-                            this._currentUser.displayName = displayName;
+                        if (this.currentUser && this.currentUser.id === user.id) {
+                            this.currentUser.username = username;
+                            this.currentUser.displayName = displayName;
                         }
-                        this._render();
+                        this.render();
                     } else {
                         errEl.textContent = res.error || 'Failed to update user.';
                         errEl.classList.remove('hidden');
@@ -441,7 +441,7 @@ const Settings = {
         }
     },
 
-    _renderApps(apps) {
+    renderApps(apps) {
         const tbody = document.getElementById('settings-apps-body');
         if (!tbody) return;
         const table = document.getElementById('settings-apps-table');
@@ -454,12 +454,12 @@ const Settings = {
         for (const app of apps) {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${this._esc(app.name)}</td>
-                <td><code class="settings-token">${this._esc(app.token)}</code></td>
+                <td>${this.esc(app.name)}</td>
+                <td><code class="settings-token">${this.esc(app.token)}</code></td>
                 <td class="settings-user-actions">
-                    <button class="btn btn-sm settings-copy-token" data-token="${this._esc(app.token)}">Copy</button>
-                    <button class="btn btn-sm settings-regen-app" data-id="${app.id}" data-name="${this._esc(app.name)}">Regenerate</button>
-                    <button class="btn btn-sm btn-danger settings-delete-app" data-id="${app.id}" data-name="${this._esc(app.name)}">Delete</button>
+                    <button class="btn btn-sm settings-copy-token" data-token="${this.esc(app.token)}">Copy</button>
+                    <button class="btn btn-sm settings-regen-app" data-id="${app.id}" data-name="${this.esc(app.name)}">Regenerate</button>
+                    <button class="btn btn-sm btn-danger settings-delete-app" data-id="${app.id}" data-name="${this.esc(app.name)}">Delete</button>
                 </td>
             `;
             tbody.appendChild(tr);
@@ -472,9 +472,9 @@ const Settings = {
                     navigator.clipboard.writeText(text).then(() => {
                         btn.textContent = 'Copied';
                         setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-                    }).catch(() => this._fallbackCopy(text, btn));
+                    }).catch(() => this.fallbackCopy(text, btn));
                 } else {
-                    this._fallbackCopy(text, btn);
+                    this.fallbackCopy(text, btn);
                 }
             });
         });
@@ -491,7 +491,7 @@ const Settings = {
                 if (!ok) return;
                 const res = await API.post(`/api/auth/apps/${id}/regenerate`);
                 if (res.ok) {
-                    this._render();
+                    this.render();
                 } else {
                     Toast.error(res.error || 'Failed to regenerate token.');
                 }
@@ -509,13 +509,13 @@ const Settings = {
                 });
                 if (ok) {
                     await API.delete(`/api/auth/apps/${id}`);
-                    this._render();
+                    this.render();
                 }
             });
         });
     },
 
-    _showAddApp() {
+    showAddApp() {
         const existing = document.getElementById('settings-app-form');
         if (existing) existing.remove();
 
@@ -549,7 +549,7 @@ const Settings = {
 
             const res = await API.post('/api/auth/apps', { name });
             if (res.ok) {
-                this._render();
+                this.render();
             } else {
                 errEl.textContent = res.error || 'Failed to create application.';
                 errEl.classList.remove('hidden');
@@ -557,7 +557,7 @@ const Settings = {
         });
     },
 
-    _fallbackCopy(text, btn) {
+    fallbackCopy(text, btn) {
         const ta = document.createElement('textarea');
         ta.value = text;
         ta.style.position = 'fixed';
@@ -570,7 +570,7 @@ const Settings = {
         setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
     },
 
-    _esc(s) {
+    esc(s) {
         const d = document.createElement('div');
         d.textContent = s;
         return d.innerHTML;

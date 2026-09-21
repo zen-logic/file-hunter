@@ -7,11 +7,11 @@ const FSBrowser = {
     pathDisplay: null,
     cancelBtn: null,
     selectBtn: null,
-    _selectedPath: null,
-    _loadedChildren: new Map(),
-    _expandedPaths: new Set(),
-    _onSelect: null,
-    _browseUrl: '/api/browse',
+    selectedPath: null,
+    loadedChildren: new Map(),
+    expandedPaths: new Set(),
+    onSelect: null,
+    browseUrl: '/api/browse',
 
     init() {
         this.overlay = document.getElementById('fs-browser-modal');
@@ -29,16 +29,16 @@ const FSBrowser = {
                 this.close();
             }
         });
-        this.selectBtn.addEventListener('click', () => this._doSelect());
+        this.selectBtn.addEventListener('click', () => this.doSelect());
     },
 
     async open(initialPath, onSelect, browseUrl) {
-        this._onSelect = onSelect;
-        this._browseUrl = browseUrl || '/api/browse';
-        this._selectedPath = null;
-        this._loadedChildren = new Map();
-        this._expandedPaths = new Set();
-        this._updatePathDisplay();
+        this.onSelect = onSelect;
+        this.browseUrl = browseUrl || '/api/browse';
+        this.selectedPath = null;
+        this.loadedChildren = new Map();
+        this.expandedPaths = new Set();
+        this.updatePathDisplay();
 
         this.overlay.classList.remove('hidden');
 
@@ -46,12 +46,12 @@ const FSBrowser = {
         this.treeContainer.innerHTML = '<div class="fs-loading">Loading...</div>';
 
         // Load root entries
-        await this._loadEntries(null);
-        this._renderTree();
+        await this.loadEntries(null);
+        this.renderTree();
 
         // If initialPath provided, expand to it
         if (initialPath) {
-            await this._expandToPath(initialPath);
+            await this.expandToPath(initialPath);
         }
     },
 
@@ -59,36 +59,36 @@ const FSBrowser = {
         this.overlay.classList.add('hidden');
     },
 
-    _doSelect() {
-        if (this._selectedPath && this._onSelect) {
-            this._onSelect(this._selectedPath);
+    doSelect() {
+        if (this.selectedPath && this.onSelect) {
+            this.onSelect(this.selectedPath);
         }
         this.close();
     },
 
-    async _loadEntries(path) {
+    async loadEntries(path) {
         const key = path || '__root__';
-        if (this._loadedChildren.has(key)) return;
+        if (this.loadedChildren.has(key)) return;
 
-        const url = path ? `${this._browseUrl}?path=${encodeURIComponent(path)}` : this._browseUrl;
+        const url = path ? `${this.browseUrl}?path=${encodeURIComponent(path)}` : this.browseUrl;
         const res = await API.get(url);
         if (res.ok) {
-            this._loadedChildren.set(key, res.data.entries);
+            this.loadedChildren.set(key, res.data.entries);
         } else {
-            this._loadedChildren.set(key, []);
+            this.loadedChildren.set(key, []);
         }
     },
 
-    _renderTree() {
+    renderTree() {
         this.treeContainer.innerHTML = '';
-        const rootEntries = this._loadedChildren.get('__root__') || [];
-        rootEntries.forEach(entry => this._renderNode(entry, 0));
+        const rootEntries = this.loadedChildren.get('__root__') || [];
+        rootEntries.forEach(entry => this.renderNode(entry, 0));
     },
 
-    _renderNode(entry, depth) {
+    renderNode(entry, depth) {
         const div = document.createElement('div');
         div.className = 'ct-node';
-        if (this._selectedPath === entry.path) div.classList.add('ct-selected');
+        if (this.selectedPath === entry.path) div.classList.add('ct-selected');
 
         for (let i = 0; i < depth; i++) {
             const indent = document.createElement('span');
@@ -100,7 +100,7 @@ const FSBrowser = {
         const toggle = document.createElement('span');
         toggle.className = 'ct-icon';
         if (entry.hasChildren) {
-            toggle.textContent = this._expandedPaths.has(entry.path) ? '\u25BE' : '\u25B8';
+            toggle.textContent = this.expandedPaths.has(entry.path) ? '\u25BE' : '\u25B8';
         }
         div.appendChild(toggle);
 
@@ -119,18 +119,18 @@ const FSBrowser = {
         // Click to select + toggle expand
         div.addEventListener('click', async (e) => {
             e.stopPropagation();
-            this._selectedPath = entry.path;
-            this._updatePathDisplay();
+            this.selectedPath = entry.path;
+            this.updatePathDisplay();
 
             if (entry.hasChildren) {
-                if (this._expandedPaths.has(entry.path)) {
-                    this._expandedPaths.delete(entry.path);
-                    this._renderTree();
+                if (this.expandedPaths.has(entry.path)) {
+                    this.expandedPaths.delete(entry.path);
+                    this.renderTree();
                 } else {
-                    this._expandedPaths.add(entry.path);
-                    this._renderTree(); // show spinner immediately
-                    await this._loadEntries(entry.path);
-                    this._renderTree(); // replace spinner with children
+                    this.expandedPaths.add(entry.path);
+                    this.renderTree(); // show spinner immediately
+                    await this.loadEntries(entry.path);
+                    this.renderTree(); // replace spinner with children
                     const sel = this.treeContainer.querySelector('.ct-selected');
                     if (sel) {
                         const selDepth = sel.querySelectorAll('.ct-indent').length;
@@ -145,22 +145,22 @@ const FSBrowser = {
                     return;
                 }
             } else {
-                this._renderTree();
+                this.renderTree();
             }
         });
 
         // Double-click to confirm selection
         div.addEventListener('dblclick', (e) => {
             e.stopPropagation();
-            this._selectedPath = entry.path;
-            this._doSelect();
+            this.selectedPath = entry.path;
+            this.doSelect();
         });
 
         this.treeContainer.appendChild(div);
 
         // Render children if expanded
-        if (this._expandedPaths.has(entry.path)) {
-            if (!this._loadedChildren.has(entry.path)) {
+        if (this.expandedPaths.has(entry.path)) {
+            if (!this.loadedChildren.has(entry.path)) {
                 // Still loading — show inline spinner
                 const loading = document.createElement('div');
                 loading.className = 'fs-loading';
@@ -168,45 +168,45 @@ const FSBrowser = {
                 loading.textContent = 'Loading...';
                 this.treeContainer.appendChild(loading);
             } else {
-                const children = this._loadedChildren.get(entry.path) || [];
-                children.forEach(child => this._renderNode(child, depth + 1));
+                const children = this.loadedChildren.get(entry.path) || [];
+                children.forEach(child => this.renderNode(child, depth + 1));
             }
         }
     },
 
-    _updatePathDisplay() {
-        this.pathDisplay.textContent = this._selectedPath || 'No folder selected';
-        this.selectBtn.disabled = !this._selectedPath;
+    updatePathDisplay() {
+        this.pathDisplay.textContent = this.selectedPath || 'No folder selected';
+        this.selectBtn.disabled = !this.selectedPath;
     },
 
-    async _expandToPath(targetPath) {
+    async expandToPath(targetPath) {
         // Find which root entry is an ancestor of targetPath
-        const rootEntries = this._loadedChildren.get('__root__') || [];
+        const rootEntries = this.loadedChildren.get('__root__') || [];
         let ancestor = rootEntries.find(e => targetPath === e.path || targetPath.startsWith(e.path + '/'));
         if (!ancestor) return;
 
         // Walk down the path, expanding each segment
         let currentPath = ancestor.path;
-        this._selectedPath = currentPath;
-        this._expandedPaths.add(currentPath);
-        await this._loadEntries(currentPath);
+        this.selectedPath = currentPath;
+        this.expandedPaths.add(currentPath);
+        await this.loadEntries(currentPath);
 
         if (targetPath !== currentPath) {
             const remaining = targetPath.slice(currentPath.length + 1).split('/');
             for (const segment of remaining) {
-                const children = this._loadedChildren.get(currentPath) || [];
+                const children = this.loadedChildren.get(currentPath) || [];
                 const match = children.find(c => c.name === segment);
                 if (!match) break;
                 currentPath = match.path;
-                this._selectedPath = currentPath;
-                this._expandedPaths.add(currentPath);
-                await this._loadEntries(currentPath);
+                this.selectedPath = currentPath;
+                this.expandedPaths.add(currentPath);
+                await this.loadEntries(currentPath);
             }
         }
 
-        this._selectedPath = targetPath;
-        this._updatePathDisplay();
-        this._renderTree();
+        this.selectedPath = targetPath;
+        this.updatePathDisplay();
+        this.renderTree();
     },
 };
 

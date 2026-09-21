@@ -16,7 +16,7 @@ const AddLocationModal = {
 
         document.getElementById('btn-add-location').addEventListener('click', () => this.open());
         document.getElementById('add-loc-cancel').addEventListener('click', () => this.close());
-        document.getElementById('add-loc-submit').addEventListener('click', () => this._doSubmit());
+        document.getElementById('add-loc-submit').addEventListener('click', () => this.doSubmit());
         FSBrowser.init();
         document.getElementById('add-loc-browse').addEventListener('click', () => {
             FSBrowser.open(this.pathInput.value.trim() || null, (path) => {
@@ -36,7 +36,7 @@ const AddLocationModal = {
 
         this.overlayEl.querySelectorAll('input').forEach(el => {
             el.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') this._doSubmit();
+                if (e.key === 'Enter') this.doSubmit();
             });
         });
     },
@@ -56,7 +56,7 @@ const AddLocationModal = {
         this.overlayEl.classList.add('hidden');
     },
 
-    async _doSubmit() {
+    async doSubmit() {
         const name = this.nameInput.value.trim();
         const path = this.pathInput.value.trim();
         if (!name || !path) return;

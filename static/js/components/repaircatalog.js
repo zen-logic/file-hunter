@@ -2,14 +2,14 @@ import API from '../api.js';
 
 const RepairCatalog = {
     overlayEl: null,
-    _pollTimer: null,
-    _busy: false,
+    pollTimer: null,
+    busy: false,
 
     init() {
         this.overlayEl = document.getElementById('repair-catalog-modal');
         document.getElementById('repair-done-close').addEventListener('click', () => this.close());
         document.getElementById('repair-choose-cancel').addEventListener('click', () => this.close());
-        document.getElementById('repair-choose-start').addEventListener('click', () => this._startFromChoices());
+        document.getElementById('repair-choose-start').addEventListener('click', () => this.startFromChoices());
     },
 
     open() {
@@ -17,11 +17,11 @@ const RepairCatalog = {
         document.getElementById('repair-opt-hashes').checked = true;
         document.getElementById('repair-opt-duplicates').checked = true;
         document.getElementById('repair-opt-sizes').checked = true;
-        this._showStep('choose');
+        this.showStep('choose');
         this.overlayEl.classList.remove('hidden');
     },
 
-    _startFromChoices() {
+    startFromChoices() {
         const phases = [];
         if (document.getElementById('repair-opt-partials').checked) phases.push('partials');
         if (document.getElementById('repair-opt-hashes').checked) phases.push('hashes');
@@ -32,42 +32,42 @@ const RepairCatalog = {
     },
 
     async start(phases) {
-        this._busy = true;
-        this._showStep('progress');
+        this.busy = true;
+        this.showStep('progress');
         document.getElementById('repair-phase-label').textContent = 'Starting...';
         document.getElementById('repair-progress-fill').style.width = '0%';
         document.getElementById('repair-progress-text').textContent = '';
 
         const res = await API.post('/api/stats/repair', { phases });
         if (!res.ok) {
-            this._showDone({ status: 'error', error: res.error || 'Failed to start repair' });
+            this.showDone({ status: 'error', error: res.error || 'Failed to start repair' });
             return;
         }
 
-        this._startPolling();
+        this.startPolling();
     },
 
     close() {
-        if (this._busy) return;
-        if (this._pollTimer) {
-            clearInterval(this._pollTimer);
-            this._pollTimer = null;
+        if (this.busy) return;
+        if (this.pollTimer) {
+            clearInterval(this.pollTimer);
+            this.pollTimer = null;
         }
         this.overlayEl.classList.add('hidden');
     },
 
-    _showStep(step) {
+    showStep(step) {
         document.getElementById('repair-step-choose').classList.toggle('hidden', step !== 'choose');
         document.getElementById('repair-step-progress').classList.toggle('hidden', step !== 'progress');
         document.getElementById('repair-step-done').classList.toggle('hidden', step !== 'done');
     },
 
-    _startPolling() {
+    startPolling() {
         const fillEl = document.getElementById('repair-progress-fill');
         const textEl = document.getElementById('repair-progress-text');
         const phaseEl = document.getElementById('repair-phase-label');
 
-        this._pollTimer = setInterval(async () => {
+        this.pollTimer = setInterval(async () => {
             const res = await API.get('/api/stats/repair-progress');
             if (!res.ok) return;
 
@@ -150,19 +150,19 @@ const RepairCatalog = {
                 textEl.textContent =
                     `${p.locations_done} / ${p.locations_total} locations`;
             } else if (p.status === 'complete') {
-                clearInterval(this._pollTimer);
-                this._pollTimer = null;
-                this._showDone(p);
+                clearInterval(this.pollTimer);
+                this.pollTimer = null;
+                this.showDone(p);
             } else if (p.status === 'error') {
-                clearInterval(this._pollTimer);
-                this._pollTimer = null;
-                this._showDone(p);
+                clearInterval(this.pollTimer);
+                this.pollTimer = null;
+                this.showDone(p);
             }
         }, 500);
     },
 
-    _showDone(p) {
-        this._busy = false;
+    showDone(p) {
+        this.busy = false;
         const el = document.getElementById('repair-done-text');
         if (p.status === 'error') {
             el.innerHTML = `<span style="color:var(--color-status-error)">Repair failed: ${p.error || 'Unknown error'}</span>`;
@@ -212,7 +212,7 @@ const RepairCatalog = {
                 });
             });
         }
-        this._showStep('done');
+        this.showStep('done');
     },
 };
 

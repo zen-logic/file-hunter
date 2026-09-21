@@ -3,100 +3,100 @@ import icons from '../icons.js';
 
 const Consolidate = {
     // DOM — info step
-    _overlay: null,
-    _stepInfo: null,
-    _subtitle: null,
-    _fileList: null,
-    _modeGroup: null,
-    _filenameMatchCheck: null,
+    overlay: null,
+    stepInfo: null,
+    subtitle: null,
+    fileList: null,
+    modeGroup: null,
+    filenameMatchCheck: null,
 
     // DOM — merge step
-    _stepMerge: null,
-    _mergeList: null,
-    _mergeNextBtn: null,
-    _mergeSelectAll: null,
+    stepMerge: null,
+    mergeList: null,
+    mergeNextBtn: null,
+    mergeSelectAll: null,
 
     // DOM — destination step
-    _stepDest: null,
-    _treePicker: null,
-    _destDisplay: null,
+    stepDest: null,
+    treePicker: null,
+    destDisplay: null,
 
     // State
-    _file: null,
-    _files: null,
-    _allDups: [],
-    _dups: [],
-    _mode: 'copy',
-    _checkedDupIds: new Set(),
-    _selectedDest: null,
-    _treeData: null,
-    _favourites: [],
-    _expandedNodes: new Set(),
-    _onConsolidate: null,
-    _onDone: null,
+    file: null,
+    files: null,
+    allDups: [],
+    dups: [],
+    mode: 'copy',
+    checkedDupIds: new Set(),
+    selectedDest: null,
+    treeData: null,
+    favourites: [],
+    expandedNodes: new Set(),
+    onConsolidate: null,
+    onDone: null,
 
     init(onConsolidate) {
-        this._onConsolidate = onConsolidate;
+        this.onConsolidate = onConsolidate;
 
-        this._overlay = document.getElementById('consolidate-modal');
-        this._stepInfo = document.getElementById('consolidate-step-info');
-        this._stepMerge = document.getElementById('consolidate-step-merge');
-        this._stepDest = document.getElementById('consolidate-step-dest');
-        this._subtitle = document.getElementById('consolidate-subtitle');
-        this._fileList = document.getElementById('consolidate-file-list');
-        this._modeGroup = document.getElementById('consolidate-mode-group');
-        this._filenameMatchCheck = document.getElementById('consolidate-filename-match');
-        this._mergeList = document.getElementById('consolidate-merge-list');
-        this._mergeNextBtn = document.getElementById('consolidate-merge-next');
-        this._mergeSelectAll = document.getElementById('consolidate-merge-select-all');
-        this._treePicker = document.getElementById('consolidate-tree-picker');
-        this._destDisplay = document.getElementById('consolidate-dest-display');
+        this.overlay = document.getElementById('consolidate-modal');
+        this.stepInfo = document.getElementById('consolidate-step-info');
+        this.stepMerge = document.getElementById('consolidate-step-merge');
+        this.stepDest = document.getElementById('consolidate-step-dest');
+        this.subtitle = document.getElementById('consolidate-subtitle');
+        this.fileList = document.getElementById('consolidate-file-list');
+        this.modeGroup = document.getElementById('consolidate-mode-group');
+        this.filenameMatchCheck = document.getElementById('consolidate-filename-match');
+        this.mergeList = document.getElementById('consolidate-merge-list');
+        this.mergeNextBtn = document.getElementById('consolidate-merge-next');
+        this.mergeSelectAll = document.getElementById('consolidate-merge-select-all');
+        this.treePicker = document.getElementById('consolidate-tree-picker');
+        this.destDisplay = document.getElementById('consolidate-dest-display');
 
         // Info step
         document.getElementById('consolidate-cancel').addEventListener('click', () => this.close());
-        document.getElementById('consolidate-next').addEventListener('click', () => this._afterInfoStep());
+        document.getElementById('consolidate-next').addEventListener('click', () => this.afterInfoStep());
 
         // Merge step
         document.getElementById('consolidate-merge-cancel').addEventListener('click', () => this.close());
-        this._mergeNextBtn.addEventListener('click', () => this._showDestStep());
-        this._mergeSelectAll.addEventListener('change', () => {
-            if (this._mergeSelectAll.checked) {
-                this._dups.forEach(d => this._checkedDupIds.add(d.fileId));
+        this.mergeNextBtn.addEventListener('click', () => this.showDestStep());
+        this.mergeSelectAll.addEventListener('change', () => {
+            if (this.mergeSelectAll.checked) {
+                this.dups.forEach(d => this.checkedDupIds.add(d.fileId));
             } else {
-                this._checkedDupIds.clear();
+                this.checkedDupIds.clear();
             }
-            this._mergeSelectAll.indeterminate = false;
-            this._mergeNextBtn.disabled = this._checkedDupIds.size === 0;
-            this._renderMergeList();
+            this.mergeSelectAll.indeterminate = false;
+            this.mergeNextBtn.disabled = this.checkedDupIds.size === 0;
+            this.renderMergeList();
         });
 
         // Destination step
         document.getElementById('consolidate-dest-cancel').addEventListener('click', () => this.close());
-        document.getElementById('consolidate-submit').addEventListener('click', () => this._doSubmit());
+        document.getElementById('consolidate-submit').addEventListener('click', () => this.doSubmit());
 
         // Overlay + escape
-        this._overlay.addEventListener('click', (e) => {
-            if (e.target === this._overlay) this.close();
+        this.overlay.addEventListener('click', (e) => {
+            if (e.target === this.overlay) this.close();
         });
         document.addEventListener('keydown', (e) => {
-            if (this._overlay.classList.contains('hidden')) return;
+            if (this.overlay.classList.contains('hidden')) return;
             if (e.key === 'Escape') {
                 this.close();
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                this._doSubmit();
+                this.doSubmit();
             }
         });
 
         // Mode radio
-        this._modeGroup.addEventListener('change', (e) => {
+        this.modeGroup.addEventListener('change', (e) => {
             if (e.target.name === 'consolidate-mode') {
-                this._mode = e.target.value;
+                this.mode = e.target.value;
             }
         });
-        this._modeGroup.querySelectorAll('.consolidate-mode-option').forEach(label => {
+        this.modeGroup.querySelectorAll('.consolidate-mode-option').forEach(label => {
             label.addEventListener('click', () => {
-                this._modeGroup.querySelectorAll('.consolidate-mode-option').forEach(l => l.classList.remove('selected'));
+                this.modeGroup.querySelectorAll('.consolidate-mode-option').forEach(l => l.classList.remove('selected'));
                 label.classList.add('selected');
             });
         });
@@ -111,138 +111,138 @@ const Consolidate = {
      * @param {Function} [opts.onDone] Called when dialog closes (submit or cancel)
      */
     async open({ file, files, onDone } = {}) {
-        this._file = file || null;
-        this._files = files || null;
-        this._onDone = onDone || null;
-        this._selectedDest = null;
-        this._expandedNodes = new Set();
-        this._checkedDupIds = new Set();
-        this._mode = 'copy';
-        this._filenameMatchCheck.checked = false;
+        this.file = file || null;
+        this.files = files || null;
+        this.onDone = onDone || null;
+        this.selectedDest = null;
+        this.expandedNodes = new Set();
+        this.checkedDupIds = new Set();
+        this.mode = 'copy';
+        this.filenameMatchCheck.checked = false;
 
         // Reset mode selection
-        const radios = this._modeGroup.querySelectorAll('input[name="consolidate-mode"]');
+        const radios = this.modeGroup.querySelectorAll('input[name="consolidate-mode"]');
         radios.forEach(r => { r.checked = r.value === 'copy'; });
-        const options = this._modeGroup.querySelectorAll('.consolidate-mode-option');
+        const options = this.modeGroup.querySelectorAll('.consolidate-mode-option');
         options.forEach(o => o.classList.remove('selected'));
         options[0].classList.add('selected');
 
         // Subtitle and file list
-        if (this._files && this._files.length > 0) {
-            const n = this._files.length;
-            this._subtitle.textContent = `${n} file${n !== 1 ? 's' : ''}`;
-            this._renderFileList(this._files);
-            this._fileList.classList.remove('hidden');
-        } else if (this._file) {
-            this._subtitle.textContent = this._file.name;
-            this._fileList.innerHTML = '';
-            this._fileList.classList.add('hidden');
+        if (this.files && this.files.length > 0) {
+            const n = this.files.length;
+            this.subtitle.textContent = `${n} file${n !== 1 ? 's' : ''}`;
+            this.renderFileList(this.files);
+            this.fileList.classList.remove('hidden');
+        } else if (this.file) {
+            this.subtitle.textContent = this.file.name;
+            this.fileList.innerHTML = '';
+            this.fileList.classList.add('hidden');
         }
 
         // Load all copies via preview endpoint (includes source files
         // since the merge step needs to show them for move operations)
-        const previewIds = this._files
-            ? this._files.map(f => f.id)
-            : this._file ? [this._file.id] : [];
+        const previewIds = this.files
+            ? this.files.map(f => f.id)
+            : this.file ? [this.file.id] : [];
         if (previewIds.length > 0) {
             const preview = await API.post('/api/consolidate/preview', {
                 file_ids: previewIds,
             });
-            this._allDups = (preview.ok && preview.data.duplicates) ? preview.data.duplicates : [];
+            this.allDups = (preview.ok && preview.data.duplicates) ? preview.data.duplicates : [];
         } else {
-            this._allDups = [];
+            this.allDups = [];
         }
 
         // Show info step
-        this._showStep(this._stepInfo);
-        this._overlay.classList.remove('hidden');
+        this.showStep(this.stepInfo);
+        this.overlay.classList.remove('hidden');
     },
 
     close() {
-        this._overlay.classList.add('hidden');
-        const cb = this._onDone;
-        this._onDone = null;
+        this.overlay.classList.add('hidden');
+        const cb = this.onDone;
+        this.onDone = null;
         if (cb) cb();
     },
 
     // ── Step management ──
 
-    _showStep(step) {
-        this._stepInfo.classList.add('hidden');
-        this._stepMerge.classList.add('hidden');
-        this._stepDest.classList.add('hidden');
+    showStep(step) {
+        this.stepInfo.classList.add('hidden');
+        this.stepMerge.classList.add('hidden');
+        this.stepDest.classList.add('hidden');
         step.classList.remove('hidden');
     },
 
     // ── Info step ──
 
-    _renderFileList(files) {
-        this._fileList.innerHTML = '';
+    renderFileList(files) {
+        this.fileList.innerHTML = '';
         const max = 5;
         const shown = files.slice(0, max);
         for (const f of shown) {
             const div = document.createElement('div');
             div.textContent = f.name;
-            this._fileList.appendChild(div);
+            this.fileList.appendChild(div);
         }
         if (files.length > max) {
             const more = document.createElement('div');
             more.textContent = `...and ${files.length - max} more`;
             more.style.opacity = '0.5';
-            this._fileList.appendChild(more);
+            this.fileList.appendChild(more);
         }
     },
 
-    _getFilteredDups() {
-        let dups = this._allDups;
-        if (this._filenameMatchCheck.checked) {
+    getFilteredDups() {
+        let dups = this.allDups;
+        if (this.filenameMatchCheck.checked) {
             const sourceNames = new Set();
-            if (this._file) sourceNames.add(this._file.name);
-            if (this._files) this._files.forEach(f => sourceNames.add(f.name));
+            if (this.file) sourceNames.add(this.file.name);
+            if (this.files) this.files.forEach(f => sourceNames.add(f.name));
             dups = dups.filter(d => sourceNames.has(d.name));
         }
         return dups;
     },
 
-    _afterInfoStep() {
-        this._dups = this._getFilteredDups();
+    afterInfoStep() {
+        this.dups = this.getFilteredDups();
 
-        if (this._mode === 'move' && this._dups.length > 0) {
-            this._showMergeStep();
+        if (this.mode === 'move' && this.dups.length > 0) {
+            this.showMergeStep();
         } else {
-            this._showDestStep();
+            this.showDestStep();
         }
     },
 
     // ── Merge step (move only) ──
 
-    _showMergeStep() {
-        this._checkedDupIds = new Set();
-        this._mergeNextBtn.disabled = true;
-        this._mergeSelectAll.checked = false;
-        this._mergeSelectAll.indeterminate = false;
-        this._renderMergeList();
-        this._showStep(this._stepMerge);
+    showMergeStep() {
+        this.checkedDupIds = new Set();
+        this.mergeNextBtn.disabled = true;
+        this.mergeSelectAll.checked = false;
+        this.mergeSelectAll.indeterminate = false;
+        this.renderMergeList();
+        this.showStep(this.stepMerge);
     },
 
-    _renderMergeList() {
-        this._mergeList.innerHTML = '';
+    renderMergeList() {
+        this.mergeList.innerHTML = '';
 
-        for (const d of this._dups) {
+        for (const d of this.dups) {
             const label = document.createElement('label');
             label.className = 'consolidate-merge-item';
 
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
-            checkbox.checked = this._checkedDupIds.has(d.fileId);
+            checkbox.checked = this.checkedDupIds.has(d.fileId);
             checkbox.addEventListener('change', () => {
                 if (checkbox.checked) {
-                    this._checkedDupIds.add(d.fileId);
+                    this.checkedDupIds.add(d.fileId);
                 } else {
-                    this._checkedDupIds.delete(d.fileId);
+                    this.checkedDupIds.delete(d.fileId);
                 }
-                this._mergeNextBtn.disabled = this._checkedDupIds.size === 0;
-                this._updateMergeSelectAllState();
+                this.mergeNextBtn.disabled = this.checkedDupIds.size === 0;
+                this.updateMergeSelectAllState();
             });
             label.appendChild(checkbox);
 
@@ -251,42 +251,42 @@ const Consolidate = {
             text.textContent = `${d.location}${agent} ${d.path}`;
             label.appendChild(text);
 
-            this._mergeList.appendChild(label);
+            this.mergeList.appendChild(label);
         }
     },
 
-    _updateMergeSelectAllState() {
-        const total = this._dups.length;
-        const n = this._checkedDupIds.size;
-        this._mergeSelectAll.checked = total > 0 && n >= total;
-        this._mergeSelectAll.indeterminate = n > 0 && n < total;
+    updateMergeSelectAllState() {
+        const total = this.dups.length;
+        const n = this.checkedDupIds.size;
+        this.mergeSelectAll.checked = total > 0 && n >= total;
+        this.mergeSelectAll.indeterminate = n > 0 && n < total;
     },
 
     // ── Destination step ──
 
-    async _showDestStep() {
+    async showDestStep() {
         const [res, favRes] = await Promise.all([
             API.get('/api/locations'),
             API.get('/api/favourites'),
         ]);
-        this._treeData = res.ok ? res.data : [];
-        this._favourites = favRes.ok ? favRes.data : [];
+        this.treeData = res.ok ? res.data : [];
+        this.favourites = favRes.ok ? favRes.data : [];
 
-        this._selectedDest = null;
-        this._destDisplay.textContent = 'No folder selected';
-        this._renderTree();
-        this._showStep(this._stepDest);
+        this.selectedDest = null;
+        this.destDisplay.textContent = 'No folder selected';
+        this.renderTree();
+        this.showStep(this.stepDest);
     },
 
-    _renderTree() {
-        this._treePicker.innerHTML = '';
-        if (!this._treeData) return;
+    renderTree() {
+        this.treePicker.innerHTML = '';
+        if (!this.treeData) return;
 
         // "Consolidate in place" option — move mode only
-        if (this._mode === 'move') {
+        if (this.mode === 'move') {
             const keepDiv = document.createElement('div');
             keepDiv.className = 'ct-node';
-            if (this._selectedDest === 'keep_here') keepDiv.classList.add('ct-selected');
+            if (this.selectedDest === 'keep_here') keepDiv.classList.add('ct-selected');
 
             const icon = document.createElement('span');
             icon.className = 'ct-icon';
@@ -301,36 +301,36 @@ const Consolidate = {
 
             keepDiv.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._selectedDest = 'keep_here';
-                this._destDisplay.textContent = 'Consolidate in place';
-                this._renderTree();
+                this.selectedDest = 'keep_here';
+                this.destDisplay.textContent = 'Consolidate in place';
+                this.renderTree();
             });
 
-            this._treePicker.appendChild(keepDiv);
+            this.treePicker.appendChild(keepDiv);
 
             const divider = document.createElement('div');
             divider.className = 'ct-divider';
-            this._treePicker.appendChild(divider);
+            this.treePicker.appendChild(divider);
         }
 
-        this._renderFavourites(this._treePicker);
-        this._treeData.forEach(loc => {
-            this._renderTreeNode(this._treePicker, loc, 0);
+        this.renderFavourites(this.treePicker);
+        this.treeData.forEach(loc => {
+            this.renderTreeNode(this.treePicker, loc, 0);
         });
     },
 
-    _renderFavourites(container) {
-        if (!this._favourites || this._favourites.length === 0) return;
+    renderFavourites(container) {
+        if (!this.favourites || this.favourites.length === 0) return;
 
         const header = document.createElement('div');
         header.className = 'ct-section-header';
         header.textContent = 'Favourites';
         container.appendChild(header);
 
-        for (const fav of this._favourites) {
+        for (const fav of this.favourites) {
             const div = document.createElement('div');
             div.className = 'ct-node';
-            if (this._selectedDest === fav.id) div.classList.add('ct-selected');
+            if (this.selectedDest === fav.id) div.classList.add('ct-selected');
 
             const heartIcon = document.createElement('span');
             heartIcon.className = 'ct-icon';
@@ -344,9 +344,9 @@ const Consolidate = {
 
             div.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._selectedDest = fav.id;
-                this._destDisplay.textContent = fav.path;
-                this._renderTree();
+                this.selectedDest = fav.id;
+                this.destDisplay.textContent = fav.path;
+                this.renderTree();
             });
 
             container.appendChild(div);
@@ -357,11 +357,11 @@ const Consolidate = {
         container.appendChild(divider);
     },
 
-    _renderTreeNode(container, node, depth) {
+    renderTreeNode(container, node, depth) {
         const div = document.createElement('div');
         div.className = 'ct-node';
         if (node.online === false) div.classList.add('ct-offline');
-        if (this._selectedDest === node.id) div.classList.add('ct-selected');
+        if (this.selectedDest === node.id) div.classList.add('ct-selected');
 
         for (let i = 0; i < depth; i++) {
             const indent = document.createElement('span');
@@ -373,7 +373,7 @@ const Consolidate = {
         const toggle = document.createElement('span');
         toggle.className = 'ct-icon';
         if (hasChildren) {
-            toggle.textContent = this._expandedNodes.has(node.id) ? '\u25BE' : '\u25B8';
+            toggle.textContent = this.expandedNodes.has(node.id) ? '\u25BE' : '\u25B8';
         }
         div.appendChild(toggle);
 
@@ -393,11 +393,11 @@ const Consolidate = {
 
             let expanded = false;
             if (hasChildren) {
-                if (this._expandedNodes.has(node.id)) {
-                    this._expandedNodes.delete(node.id);
+                if (this.expandedNodes.has(node.id)) {
+                    this.expandedNodes.delete(node.id);
                 } else {
                     expanded = true;
-                    this._expandedNodes.add(node.id);
+                    this.expandedNodes.add(node.id);
                     if (node.children === null) {
                         const numId = node.id.replace('fld-', '');
                         const res = await API.get(`/api/tree/children?ids=${numId}`);
@@ -409,11 +409,11 @@ const Consolidate = {
                     }
                 }
             }
-            this._selectedDest = node.id;
-            this._destDisplay.textContent = node.label;
-            this._renderTree();
+            this.selectedDest = node.id;
+            this.destDisplay.textContent = node.label;
+            this.renderTree();
             if (expanded) {
-                const sel = this._treePicker.querySelector('.ct-selected');
+                const sel = this.treePicker.querySelector('.ct-selected');
                 if (sel) {
                     const selDepth = sel.querySelectorAll('.ct-indent').length;
                     let last = sel;
@@ -429,46 +429,46 @@ const Consolidate = {
 
         container.appendChild(div);
 
-        if (node.children && node.children.length > 0 && this._expandedNodes.has(node.id)) {
-            node.children.forEach(child => this._renderTreeNode(container, child, depth + 1));
+        if (node.children && node.children.length > 0 && this.expandedNodes.has(node.id)) {
+            node.children.forEach(child => this.renderTreeNode(container, child, depth + 1));
         }
     },
 
     // ── Submit ──
 
-    _doSubmit() {
-        if (!this._selectedDest) return;
+    doSubmit() {
+        if (!this.selectedDest) return;
 
-        const fnMatch = this._filenameMatchCheck.checked;
-        const isKeepHere = this._selectedDest === 'keep_here';
+        const fnMatch = this.filenameMatchCheck.checked;
+        const isKeepHere = this.selectedDest === 'keep_here';
 
         const params = {
-            consolidateMode: this._mode,
+            consolidateMode: this.mode,
         };
 
-        if (this._files && this._files.length > 0) {
-            params.file_ids = this._files.map(f => f.id);
+        if (this.files && this.files.length > 0) {
+            params.file_ids = this.files.map(f => f.id);
             params.batch = true;
-        } else if (this._file) {
-            params.file_id = this._file.id;
+        } else if (this.file) {
+            params.file_id = this.file.id;
         }
 
         // Map to backend modes
-        if (this._mode === 'move' && isKeepHere) {
+        if (this.mode === 'move' && isKeepHere) {
             params.mode = 'keep_here';
         } else {
             params.mode = 'move_to';
-            params.destination_folder_id = this._selectedDest;
+            params.destination_folder_id = this.selectedDest;
         }
 
         if (fnMatch) params.filename_match_only = true;
 
         // For move mode, pass the selected file IDs to stub
-        if (this._mode === 'move' && this._checkedDupIds.size > 0) {
-            params.stub_file_ids = Array.from(this._checkedDupIds);
+        if (this.mode === 'move' && this.checkedDupIds.size > 0) {
+            params.stub_file_ids = Array.from(this.checkedDupIds);
         }
 
-        if (this._onConsolidate) this._onConsolidate(params);
+        if (this.onConsolidate) this.onConsolidate(params);
         this.close();
     },
 };

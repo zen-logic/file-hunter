@@ -8,30 +8,30 @@ const PAGE_SIZE = 120;
 const GALLERY_MAX_CONCURRENT = 4;
 
 // ── Gallery image loader with concurrency cap ──
-const _galleryLoader = {
-    _queue: [],       // [{img, src}]
-    _active: 0,
-    _gen: 0,          // generation — incremented on reset to abandon old loads
+const galleryLoader = {
+    queue: [],       // [{img, src}]
+    active: 0,
+    gen: 0,          // generation — incremented on reset to abandon old loads
 
     reset() {
-        this._queue = [];
-        this._active = 0;
-        this._gen++;
+        this.queue = [];
+        this.active = 0;
+        this.gen++;
     },
 
     enqueue(img, src) {
-        this._queue.push({ img, src, gen: this._gen });
-        this._pump();
+        this.queue.push({ img, src, gen: this.gen });
+        this.pump();
     },
 
-    _pump() {
-        while (this._active < GALLERY_MAX_CONCURRENT && this._queue.length > 0) {
-            const entry = this._queue.shift();
-            if (entry.gen !== this._gen) continue;  // stale
-            this._active++;
+    pump() {
+        while (this.active < GALLERY_MAX_CONCURRENT && this.queue.length > 0) {
+            const entry = this.queue.shift();
+            if (entry.gen !== this.gen) continue;  // stale
+            this.active++;
             const done = () => {
-                this._active--;
-                this._pump();
+                this.active--;
+                this.pump();
             };
             entry.img.onload = done;
             entry.img.onerror = done;
@@ -90,8 +90,8 @@ const FileList = {
     totalFiles: 0,
     currentPage: 0,
     selectedItems: new Map(),   // key → item object
-    _anchorIdx: null,           // for Shift+click range select
-    _selectAllGen: 0,           // generation counter — incremented by _clearSelection to abort in-flight _selectAll
+    anchorIdx: null,           // for Shift+click range select
+    selectAllGen: 0,           // generation counter — incremented by clearSelection to abort in-flight selectAll
     onSelect: null,
     onFolderOpen: null,
     onDeselect: null,
@@ -103,16 +103,16 @@ const FileList = {
     filterText: '',
     sortKey: 'name',
     sortDir: 1,  // 1 = ascending, -1 = descending
-    _filterTimer: null,
-    _searchMode: false,
-    _searchParams: null,
-    _dupGroupMode: false,
-    _favouritesMode: false,
-    _searchId: null,
-    _ac: null,
+    filterTimer: null,
+    searchMode: false,
+    searchParams: null,
+    dupGroupMode: false,
+    favouritesMode: false,
+    searchId: null,
+    ac: null,
     pendingFocusFile: null,
-    _viewMode: 'list',  // 'list' or 'gallery'
-    _viewToggleEl: null,
+    viewMode: 'list',  // 'list' or 'gallery'
+    viewToggleEl: null,
 
     init(onSelect, onFolderOpen, onDeselect, onMultiSelect) {
         this.el = document.getElementById('file-content');
@@ -123,26 +123,26 @@ const FileList = {
         this.onDeselect = onDeselect;
         this.onMultiSelect = onMultiSelect;
 
-        this._viewToggleEl = document.getElementById('file-view-toggle');
-        this._viewToggleEl.innerHTML = icons.grid;
-        this._viewToggleEl.addEventListener('click', () => {
-            this._viewMode = this._viewMode === 'list' ? 'gallery' : 'list';
-            this._viewToggleEl.innerHTML = this._viewMode === 'list' ? icons.grid : icons.list;
-            this._viewToggleEl.title = this._viewMode === 'list' ? 'Gallery view' : 'List view';
+        this.viewToggleEl = document.getElementById('file-view-toggle');
+        this.viewToggleEl.innerHTML = icons.grid;
+        this.viewToggleEl.addEventListener('click', () => {
+            this.viewMode = this.viewMode === 'list' ? 'gallery' : 'list';
+            this.viewToggleEl.innerHTML = this.viewMode === 'list' ? icons.grid : icons.list;
+            this.viewToggleEl.title = this.viewMode === 'list' ? 'Gallery view' : 'List view';
             this.render();
         });
 
         this.filterEl.addEventListener('input', () => {
-            if (this._searchMode) return;  // search has its own filters
-            clearTimeout(this._filterTimer);
-            this._filterTimer = setTimeout(() => {
+            if (this.searchMode) return;  // search has its own filters
+            clearTimeout(this.filterTimer);
+            this.filterTimer = setTimeout(() => {
                 this.filterText = this.filterEl.value;
                 this.currentPage = 0;
-                this._clearSelection();
-                if (this._favouritesMode) {
-                    this._applyFavouritesFilter();
+                this.clearSelection();
+                if (this.favouritesMode) {
+                    this.applyFavouritesFilter();
                 } else {
-                    this._fetchFolder();
+                    this.fetchFolder();
                 }
             }, 300);
         });
@@ -150,8 +150,8 @@ const FileList = {
         this.el.addEventListener('click', (e) => {
             // Only deselect when clicking empty space (not rows/checkboxes)
             if (e.target === this.el || e.target.closest('.file-table') === null) {
-                this._clearSelection();
-                this._fireSelectionChange();
+                this.clearSelection();
+                this.fireSelectionChange();
                 this.render();
             }
         });
@@ -174,30 +174,30 @@ const FileList = {
         return this.selectedItems.size;
     },
 
-    _clearSelection() {
+    clearSelection() {
         this.selectedItems.clear();
-        this._anchorIdx = null;
-        this._selectAllGen++;
+        this.anchorIdx = null;
+        this.selectAllGen++;
     },
 
-    _selectOnly(item, idx) {
+    selectOnly(item, idx) {
         this.selectedItems.clear();
         this.selectedItems.set(itemKey(item), item);
-        this._anchorIdx = idx !== undefined ? idx : this._indexOfItem(item);
+        this.anchorIdx = idx !== undefined ? idx : this.indexOfItem(item);
     },
 
-    _toggleItem(item, idx) {
+    toggleItem(item, idx) {
         const key = itemKey(item);
         if (this.selectedItems.has(key)) {
             this.selectedItems.delete(key);
         } else {
             this.selectedItems.set(key, item);
         }
-        this._anchorIdx = idx !== undefined ? idx : this._indexOfItem(item);
+        this.anchorIdx = idx !== undefined ? idx : this.indexOfItem(item);
     },
 
-    _selectRange(fromIdx, toIdx) {
-        const items = this._getDisplayItems();
+    selectRange(fromIdx, toIdx) {
+        const items = this.getDisplayItems();
         const lo = Math.min(fromIdx, toIdx);
         const hi = Math.max(fromIdx, toIdx);
         for (let i = lo; i <= hi; i++) {
@@ -207,17 +207,17 @@ const FileList = {
         }
     },
 
-    _indexOfItem(item) {
-        const items = this._getDisplayItems();
+    indexOfItem(item) {
+        const items = this.getDisplayItems();
         const key = itemKey(item);
         return items.findIndex(f => itemKey(f) === key);
     },
 
-    _isSelected(item) {
+    isSelected(item) {
         return this.selectedItems.has(itemKey(item));
     },
 
-    _updateHeaderCheckbox() {
+    updateHeaderCheckbox() {
         const hcb = this.el.querySelector('thead input[type="checkbox"]');
         if (!hcb) return;
         const selCount = this.selectedItems.size;
@@ -234,7 +234,7 @@ const FileList = {
         }
     },
 
-    _fireSelectionChange() {
+    fireSelectionChange() {
         const count = this.selectedItems.size;
         if (count === 0) {
             if (this.onDeselect) this.onDeselect();
@@ -246,19 +246,19 @@ const FileList = {
         }
     },
 
-    async _selectAll() {
-        const gen = ++this._selectAllGen;
+    async selectAll() {
+        const gen = ++this.selectAllGen;
 
         // Select current page items immediately
-        const items = this._getDisplayItems();
+        const items = this.getDisplayItems();
         items.forEach(item => {
             this.selectedItems.set(itemKey(item), item);
         });
 
         // Fetch remaining pages if multi-page
-        const totalPages = this._totalPages();
+        const totalPages = this.totalPages();
         if (totalPages <= 1) {
-            this._fireSelectionChange();
+            this.fireSelectionChange();
             this.render();
             return;
         }
@@ -268,47 +268,47 @@ const FileList = {
         this.render();
 
         for (let page = 0; page < totalPages; page++) {
-            if (gen !== this._selectAllGen) return;  // selection was cleared — abort
+            if (gen !== this.selectAllGen) return;  // selection was cleared — abort
             if (page === this.currentPage) continue;
             let res;
-            if (this._searchMode) {
-                const params = new URLSearchParams(this._searchParams);
+            if (this.searchMode) {
+                const params = new URLSearchParams(this.searchParams);
                 params.set('page', page);
                 params.set('sort', this.sortKey);
-                params.set('sortDir', this._sortDirStr());
-                if (this._searchId) params.set('searchId', this._searchId);
+                params.set('sortDir', this.sortDirStr());
+                if (this.searchId) params.set('searchId', this.searchId);
                 res = await API.get(`/api/search?${params.toString()}`);
             } else {
                 const params = new URLSearchParams({
                     folder_id: this.currentFolder,
                     page,
                     sort: this.sortKey,
-                    sortDir: this._sortDirStr(),
+                    sortDir: this.sortDirStr(),
                 });
                 if (this.filterText) params.set('filter', this.filterText);
                 res = await API.get(`/api/files?${params.toString()}`);
             }
-            if (gen !== this._selectAllGen) return;  // check again after await
+            if (gen !== this.selectAllGen) return;  // check again after await
             if (res.ok && res.data.items) {
                 res.data.items.forEach(item => {
                     this.selectedItems.set(itemKey(item), item);
                 });
             }
         }
-        if (gen !== this._selectAllGen) return;
+        if (gen !== this.selectAllGen) return;
         // Also select all folders on current page
         if (this.currentFolders) {
             this.currentFolders.forEach(f => {
                 this.selectedItems.set(itemKey(f), f);
             });
         }
-        this._fireSelectionChange();
+        this.fireSelectionChange();
         this.render();
     },
 
-    _deselectAll() {
-        this._clearSelection();
-        this._fireSelectionChange();
+    deselectAll() {
+        this.clearSelection();
+        this.fireSelectionChange();
         this.render();
     },
 
@@ -324,13 +324,13 @@ const FileList = {
     set selectedFile(val) {
         // Legacy setter — used by showFolder, showSingleFile etc. to clear
         if (val === null) {
-            this._clearSelection();
+            this.clearSelection();
         }
     },
 
     // ── Display items ──
 
-    _getDisplayItems() {
+    getDisplayItems() {
         // Folders first, then file items — no client-side sort/filter
         const items = [];
         if (this.currentFolders) {
@@ -342,12 +342,12 @@ const FileList = {
         return items;
     },
 
-    _totalPages() {
+    totalPages() {
         return Math.max(1, Math.ceil(this.totalFiles / PAGE_SIZE));
     },
 
     handleKey(e) {
-        const items = this._getDisplayItems();
+        const items = this.getDisplayItems();
         if (!items || items.length === 0) return;
 
         // Find current cursor position based on last single-selected or anchor
@@ -356,14 +356,14 @@ const FileList = {
             // Use the last item in selection order or anchor
             const sel = this.getSelection();
             const lastItem = sel[sel.length - 1];
-            curIdx = this._indexOfItem(lastItem);
+            curIdx = this.indexOfItem(lastItem);
         }
 
         let newIdx = curIdx;
-        const totalPages = this._totalPages();
+        const totalPages = this.totalPages();
 
         // In gallery mode, left/right arrows navigate like up/down
-        const key = this._viewMode === 'gallery'
+        const key = this.viewMode === 'gallery'
             ? (e.key === 'ArrowRight' ? 'ArrowDown' : e.key === 'ArrowLeft' ? 'ArrowUp' : e.key)
             : e.key;
 
@@ -371,7 +371,7 @@ const FileList = {
             case 'ArrowDown':
                 e.preventDefault();
                 if (curIdx === items.length - 1 && this.currentPage < totalPages - 1) {
-                    this._goToPage(this.currentPage + 1, 'first', e.shiftKey);
+                    this.goToPage(this.currentPage + 1, 'first', e.shiftKey);
                     return;
                 }
                 newIdx = curIdx < items.length - 1 ? curIdx + 1 : curIdx;
@@ -379,40 +379,40 @@ const FileList = {
 
                 if (e.shiftKey) {
                     // Extend selection
-                    const anchor = this._anchorIdx !== null ? this._anchorIdx : curIdx;
+                    const anchor = this.anchorIdx !== null ? this.anchorIdx : curIdx;
                     this.selectedItems.clear();
-                    this._selectRange(anchor, newIdx);
-                    this._anchorIdx = anchor;
-                    this._fireSelectionChange();
+                    this.selectRange(anchor, newIdx);
+                    this.anchorIdx = anchor;
+                    this.fireSelectionChange();
                     this.render();
-                    this._scrollSelectedIntoView();
+                    this.scrollSelectedIntoView();
                     return;
                 }
                 break;
             case 'ArrowUp':
                 e.preventDefault();
                 if (curIdx === 0 && this.currentPage > 0) {
-                    this._goToPage(this.currentPage - 1, 'last', e.shiftKey);
+                    this.goToPage(this.currentPage - 1, 'last', e.shiftKey);
                     return;
                 }
                 newIdx = curIdx > 0 ? curIdx - 1 : 0;
                 if (curIdx === -1) newIdx = 0;
 
                 if (e.shiftKey) {
-                    const anchor = this._anchorIdx !== null ? this._anchorIdx : curIdx;
+                    const anchor = this.anchorIdx !== null ? this.anchorIdx : curIdx;
                     this.selectedItems.clear();
-                    this._selectRange(anchor, newIdx);
-                    this._anchorIdx = anchor;
-                    this._fireSelectionChange();
+                    this.selectRange(anchor, newIdx);
+                    this.anchorIdx = anchor;
+                    this.fireSelectionChange();
                     this.render();
-                    this._scrollSelectedIntoView();
+                    this.scrollSelectedIntoView();
                     return;
                 }
                 break;
             case 'Home':
                 e.preventDefault();
                 if (this.currentPage !== 0) {
-                    this._goToPage(0, 'first');
+                    this.goToPage(0, 'first');
                     return;
                 }
                 newIdx = 0;
@@ -420,7 +420,7 @@ const FileList = {
             case 'End':
                 e.preventDefault();
                 if (this.currentPage !== totalPages - 1) {
-                    this._goToPage(totalPages - 1, 'last');
+                    this.goToPage(totalPages - 1, 'last');
                     return;
                 }
                 newIdx = items.length - 1;
@@ -428,7 +428,7 @@ const FileList = {
             case 'PageDown':
                 e.preventDefault();
                 if (this.currentPage < totalPages - 1) {
-                    this._goToPage(this.currentPage + 1, 'first');
+                    this.goToPage(this.currentPage + 1, 'first');
                     return;
                 }
                 newIdx = items.length - 1;
@@ -436,7 +436,7 @@ const FileList = {
             case 'PageUp':
                 e.preventDefault();
                 if (this.currentPage > 0) {
-                    this._goToPage(this.currentPage - 1, 'first');
+                    this.goToPage(this.currentPage - 1, 'first');
                     return;
                 }
                 newIdx = 0;
@@ -475,9 +475,9 @@ const FileList = {
 
         const file = items[newIdx];
         if (!file) return;
-        this._selectOnly(file, newIdx);
+        this.selectOnly(file, newIdx);
         this.render();
-        this._fireSelectionChange();
+        this.fireSelectionChange();
     },
 
     /** Move the selection one row, as if the arrow key had been pressed.
@@ -493,8 +493,8 @@ const FileList = {
         });
     },
 
-    _scrollSelectedIntoView() {
-        if (this._viewMode === 'gallery') {
+    scrollSelectedIntoView() {
+        if (this.viewMode === 'gallery') {
             const el = this.el.querySelector('.gallery-item.selected');
             if (el) el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
             return;
@@ -522,18 +522,18 @@ const FileList = {
     },
 
     renderEmpty() {
-        _galleryLoader.reset();
-        this._galleryDirty = true;
+        galleryLoader.reset();
+        this.galleryDirty = true;
         this.currentItems = null;
         this.currentFolders = null;
         this.currentBreadcrumb = null;
         this.totalFiles = 0;
         this.currentPage = 0;
-        this._searchMode = false;
-        this._searchParams = null;
-        this._dupGroupMode = false;
-        this._favouritesMode = false;
-        this._clearSelection();
+        this.searchMode = false;
+        this.searchParams = null;
+        this.dupGroupMode = false;
+        this.favouritesMode = false;
+        this.clearSelection();
         this.breadcrumbEl.innerHTML = '';
         this.el.innerHTML = '<div class="panel-body" style="padding: 1rem; color: var(--color-text-placeholder);">Select a folder to view files.</div>';
     },
@@ -544,10 +544,10 @@ const FileList = {
         this.currentBreadcrumb = null;
         this.totalFiles = 0;
         this.currentPage = 0;
-        this._searchMode = false;
-        this._searchParams = null;
-        this._dupGroupMode = false;
-        this._clearSelection();
+        this.searchMode = false;
+        this.searchParams = null;
+        this.dupGroupMode = false;
+        this.clearSelection();
         this.breadcrumbEl.innerHTML = '';
 
         let res;
@@ -564,26 +564,26 @@ const FileList = {
             return;
         }
 
-        this._favouritesMode = true;
-        this._allFavourites = items.map(item => ({
+        this.favouritesMode = true;
+        this.allFavourites = items.map(item => ({
             id: item.id,
             name: item.name,
             type: 'folder',
             location: item.path,
             locationId: item.locationId,
         }));
-        this.currentFolders = this._allFavourites;
-        this._renderContent();
+        this.currentFolders = this.allFavourites;
+        this.renderContent();
     },
 
     showLoading() {
-        _galleryLoader.reset();
-        this._galleryDirty = true;
+        galleryLoader.reset();
+        this.galleryDirty = true;
         this.breadcrumbEl.innerHTML = '';
         this.el.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div><span>Searching\u2026</span></div>';
     },
 
-    _toggleSort(key) {
+    toggleSort(key) {
         if (this.sortKey === key) {
             this.sortDir *= -1;
         } else {
@@ -591,40 +591,40 @@ const FileList = {
             this.sortDir = 1;
         }
         this.currentPage = 0;
-        this._clearSelection();
-        this._refetch();
+        this.clearSelection();
+        this.refetch();
     },
 
-    _sortDirStr() {
+    sortDirStr() {
         return this.sortDir === 1 ? 'asc' : 'desc';
     },
 
-    _applyFavouritesFilter() {
-        if (!this._allFavourites) return;
+    applyFavouritesFilter() {
+        if (!this.allFavourites) return;
         const q = this.filterText.toLowerCase();
         this.currentFolders = q
-            ? this._allFavourites.filter(f =>
+            ? this.allFavourites.filter(f =>
                 f.name.toLowerCase().includes(q) || f.location.toLowerCase().includes(q))
-            : this._allFavourites;
-        this._renderContent();
+            : this.allFavourites;
+        this.renderContent();
     },
 
-    async _fetchFolder(focusFileId) {
+    async fetchFolder(focusFileId) {
         if (!this.currentFolder) return;
-        if (this._ac) this._ac.abort();
-        this._ac = new AbortController();
-        const signal = this._ac.signal;
+        if (this.ac) this.ac.abort();
+        this.ac = new AbortController();
+        const signal = this.ac.signal;
         const params = new URLSearchParams({
             folder_id: this.currentFolder,
             page: this.currentPage,
             sort: this.sortKey,
-            sortDir: this._sortDirStr(),
+            sortDir: this.sortDirStr(),
         });
         if (this.filterText) params.set('filter', this.filterText);
         if (focusFileId) params.set('focusFile', focusFileId);
-        if (this._fresh) {
+        if (this.fresh) {
             params.set('fresh', '1');
-            this._fresh = false;
+            this.fresh = false;
         }
 
         let res;
@@ -646,31 +646,31 @@ const FileList = {
             this.totalFiles = 0;
             this.currentBreadcrumb = null;
         }
-        this._renderContent();
+        this.renderContent();
 
         if (focusFileId && res.ok && res.data.focusFileId) {
             const foldersLen = this.currentFolders ? this.currentFolders.length : 0;
             const idx = this.currentItems.findIndex(f => f.id === res.data.focusFileId);
             if (idx >= 0) {
-                this._selectOnly(this.currentItems[idx], foldersLen + idx);
+                this.selectOnly(this.currentItems[idx], foldersLen + idx);
                 this.render();
-                this._fireSelectionChange();
-                this._scrollSelectedIntoView();
+                this.fireSelectionChange();
+                this.scrollSelectedIntoView();
             }
         }
     },
 
-    async _fetchSearch(focusFileId) {
-        if (!this._searchParams) return;
-        if (this._ac) this._ac.abort();
-        this._ac = new AbortController();
-        const signal = this._ac.signal;
-        const params = new URLSearchParams(this._searchParams);
+    async fetchSearch(focusFileId) {
+        if (!this.searchParams) return;
+        if (this.ac) this.ac.abort();
+        this.ac = new AbortController();
+        const signal = this.ac.signal;
+        const params = new URLSearchParams(this.searchParams);
         params.set('page', this.currentPage);
         params.set('sort', this.sortKey);
-        params.set('sortDir', this._sortDirStr());
-        if (this._searchId) {
-            params.set('searchId', this._searchId);
+        params.set('sortDir', this.sortDirStr());
+        if (this.searchId) {
+            params.set('searchId', this.searchId);
         }
         if (focusFileId) params.set('focusFile', focusFileId);
 
@@ -686,37 +686,37 @@ const FileList = {
             this.currentFolders = res.data.folders && res.data.folders.length ? res.data.folders : null;
             this.totalFiles = res.data.total;
             this.currentPage = res.data.page;
-            if (res.data.searchId) this._searchId = res.data.searchId;
+            if (res.data.searchId) this.searchId = res.data.searchId;
         } else {
             this.currentItems = [];
             this.currentFolders = null;
             this.totalFiles = 0;
         }
-        this._renderContent();
+        this.renderContent();
 
         if (focusFileId && res.ok && res.data.focusFileId) {
             const foldersLen = this.currentFolders ? this.currentFolders.length : 0;
             const idx = this.currentItems.findIndex(f => f.id === res.data.focusFileId);
             if (idx >= 0) {
-                this._selectOnly(this.currentItems[idx], foldersLen + idx);
+                this.selectOnly(this.currentItems[idx], foldersLen + idx);
                 this.render();
-                this._fireSelectionChange();
-                this._scrollSelectedIntoView();
+                this.fireSelectionChange();
+                this.scrollSelectedIntoView();
             }
         }
     },
 
-    _refetch() {
-        if (this._searchMode) {
-            this._fetchSearch();
+    refetch() {
+        if (this.searchMode) {
+            this.fetchSearch();
         } else {
-            this._fetchFolder();
+            this.fetchFolder();
         }
     },
 
-    _renderBreadcrumb() {
+    renderBreadcrumb() {
         this.breadcrumbEl.innerHTML = '';
-        if (!this.currentBreadcrumb || this.currentBreadcrumb.length === 0 || this._searchMode) return;
+        if (!this.currentBreadcrumb || this.currentBreadcrumb.length === 0 || this.searchMode) return;
         this.currentBreadcrumb.forEach((entry, i) => {
             if (i > 0) {
                 const sep = document.createElement('span');
@@ -736,16 +736,16 @@ const FileList = {
         });
     },
 
-    _renderContent() {
-        this._renderBreadcrumb();
-        const items = this._getDisplayItems();
+    renderContent() {
+        this.renderBreadcrumb();
+        const items = this.getDisplayItems();
         if (items.length === 0 && this.totalFiles === 0) {
-            const msg = this._searchMode ? 'No results found.' : 'Empty folder.';
+            const msg = this.searchMode ? 'No results found.' : 'Empty folder.';
             this.el.innerHTML = `<div class="panel-body" style="padding: 1rem; color: var(--color-text-placeholder);">${msg}</div>`;
             return;
         }
         this.el.scrollTop = 0;
-        this._galleryDirty = true;
+        this.galleryDirty = true;
         this.render();
     },
 
@@ -754,35 +754,35 @@ const FileList = {
         this.pendingFocusFile = null;
 
         this.currentFolder = folderId;
-        this._clearSelection();
-        this._searchId = null;
+        this.clearSelection();
+        this.searchId = null;
         this.filterText = '';
         this.filterEl.value = '';
         this.sortKey = 'name';
         this.sortDir = 1;
         this.currentPage = 0;
-        this._searchMode = false;
-        this._searchParams = null;
-        this._dupGroupMode = false;
-        this._favouritesMode = false;
+        this.searchMode = false;
+        this.searchParams = null;
+        this.dupGroupMode = false;
+        this.favouritesMode = false;
 
-        await this._fetchFolder(focusFileId);
+        await this.fetchFolder(focusFileId);
     },
 
     async focusFile(fileId) {
         // Try current page first — no round-trip needed
-        const items = this._getDisplayItems();
+        const items = this.getDisplayItems();
         const idx = items.findIndex(f => f.id === fileId);
         if (idx >= 0) {
-            this._selectOnly(items[idx], idx);
+            this.selectOnly(items[idx], idx);
             this.render();
-            this._fireSelectionChange();
-            this._scrollSelectedIntoView();
+            this.fireSelectionChange();
+            this.scrollSelectedIntoView();
             return;
         }
         // File is on a different page — refetch with focusFile
-        if (this._searchMode) {
-            await this._fetchSearch(fileId);
+        if (this.searchMode) {
+            await this.fetchSearch(fileId);
         } else if (this.currentFolder) {
             this.pendingFocusFile = fileId;
             await this.refreshFolder();
@@ -793,8 +793,8 @@ const FileList = {
         if (!this.currentFolder) return;
         const focusFileId = this.pendingFocusFile;
         this.pendingFocusFile = null;
-        this._clearSelection();
-        await this._fetchFolder(focusFileId);
+        this.clearSelection();
+        await this.fetchFolder(focusFileId);
     },
 
     showSingleFile(file) {
@@ -805,69 +805,69 @@ const FileList = {
         this.sortKey = 'name';
         this.sortDir = 1;
         this.currentPage = 0;
-        this._searchMode = false;
-        this._searchParams = null;
-        this._dupGroupMode = false;
+        this.searchMode = false;
+        this.searchParams = null;
+        this.dupGroupMode = false;
         this.currentItems = [file];
         this.currentFolders = null;
         this.totalFiles = 1;
-        this._clearSelection();
-        this._selectOnly(file, 0);
-        this._renderContent();
+        this.clearSelection();
+        this.selectOnly(file, 0);
+        this.renderContent();
     },
 
     async showDuplicateGroup(hash, sourceFileId) {
         this.currentFolder = null;
         this.currentBreadcrumb = null;
-        this._clearSelection();
-        this._searchId = null;
+        this.clearSelection();
+        this.searchId = null;
         this.filterText = '';
         this.filterEl.value = '';
         this.sortKey = 'name';
         this.sortDir = 1;
         this.currentPage = 0;
-        this._searchMode = true;
-        this._searchParams = { hash };
-        this._dupGroupMode = true;
-        this._dupGroupSourceId = sourceFileId || null;
+        this.searchMode = true;
+        this.searchParams = { hash };
+        this.dupGroupMode = true;
+        this.dupGroupSourceId = sourceFileId || null;
 
-        await this._fetchSearch();
+        await this.fetchSearch();
     },
 
     showSearchResults(data, searchParams) {
         this.currentFolder = null;
         this.currentBreadcrumb = null;
-        this._clearSelection();
-        this._searchId = data.searchId || null;
+        this.clearSelection();
+        this.searchId = data.searchId || null;
         this.filterText = '';
         this.filterEl.value = '';
         this.sortKey = 'name';
         this.sortDir = 1;
         this.currentPage = data.page;
-        this._searchMode = true;
-        this._searchParams = searchParams;
-        this._dupGroupMode = false;
+        this.searchMode = true;
+        this.searchParams = searchParams;
+        this.dupGroupMode = false;
 
         this.currentItems = data.items;
         this.currentFolders = data.folders && data.folders.length ? data.folders : null;
         this.totalFiles = data.total;
 
-        this._renderContent();
+        this.renderContent();
     },
 
-    async _goToPage(n, selectPosition, extend = false) {
-        const totalPages = this._totalPages();
+    async goToPage(n, selectPosition, extend = false) {
+        const totalPages = this.totalPages();
         this.currentPage = Math.max(0, Math.min(n, totalPages - 1));
 
-        await (this._searchMode ? this._fetchSearch() : this._fetchFolder());
+        await (this.searchMode ? this.fetchSearch() : this.fetchFolder());
 
         // Keyboard navigation: set cursor on the first/last item of the new page.
         if (selectPosition) {
-            const items = this._getDisplayItems();
+            const items = this.getDisplayItems();
             if (items.length > 0) {
                 const file = selectPosition === 'last' ? items[items.length - 1] : items[0];
                 const idx = selectPosition === 'last' ? items.length - 1 : 0;
-                this._anchorIdx = idx;
+                this.anchorIdx = idx;
                 // Only shift-extend carries the previous page's selection over.
                 // Plain navigation moves a cursor, so crossing a page boundary
                 // must leave exactly one row selected — otherwise it reports a
@@ -875,15 +875,15 @@ const FileList = {
                 if (!extend) this.selectedItems.clear();
                 this.selectedItems.set(itemKey(file), file);
                 this.render();
-                this._fireSelectionChange();
+                this.fireSelectionChange();
             }
         }
     },
 
-    _renderPagingBar() {
+    renderPagingBar() {
         if (this.totalFiles <= PAGE_SIZE) return null;
 
-        const totalPages = this._totalPages();
+        const totalPages = this.totalPages();
         const bar = document.createElement('div');
         bar.className = 'paging-bar';
 
@@ -893,7 +893,7 @@ const FileList = {
         prevBtn.disabled = this.currentPage === 0;
         prevBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this._goToPage(this.currentPage - 1);
+            this.goToPage(this.currentPage - 1);
         });
 
         const nextBtn = document.createElement('button');
@@ -902,7 +902,7 @@ const FileList = {
         nextBtn.disabled = this.currentPage >= totalPages - 1;
         nextBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this._goToPage(this.currentPage + 1);
+            this.goToPage(this.currentPage + 1);
         });
 
         const info = document.createElement('span');
@@ -921,7 +921,7 @@ const FileList = {
         return bar;
     },
 
-    _buildGalleryBadges(cell, file) {
+    buildGalleryBadges(cell, file) {
         const marks = Triage.getMarks(file.id);
         const hasDups = file.type !== 'folder' && file.dups > 0 && file.size > 0;
         let badges = cell.querySelector('.gallery-badges');
@@ -954,26 +954,26 @@ const FileList = {
     },
 
     render() {
-        if (this._viewMode === 'gallery') {
+        if (this.viewMode === 'gallery') {
             // If the gallery grid already exists with the right items,
             // just update selection classes instead of rebuilding the DOM
             const grid = this.el.querySelector('.file-gallery');
-            if (grid && grid.childElementCount > 0 && !this._galleryDirty) {
-                const items = this._getDisplayItems();
+            if (grid && grid.childElementCount > 0 && !this.galleryDirty) {
+                const items = this.getDisplayItems();
                 grid.querySelectorAll('.gallery-item').forEach((cell, idx) => {
                     const key = cell.dataset.key;
                     cell.classList.toggle('selected', key != null && this.selectedItems.has(key));
                     const file = items[idx];
-                    if (file && file.type !== 'folder') this._buildGalleryBadges(cell, file);
+                    if (file && file.type !== 'folder') this.buildGalleryBadges(cell, file);
                 });
-                this._scrollSelectedIntoView();
+                this.scrollSelectedIntoView();
                 return;
             }
-            this._galleryDirty = false;
-            this._renderGallery();
+            this.galleryDirty = false;
+            this.renderGallery();
             return;
         }
-        const items = this._getDisplayItems();
+        const items = this.getDisplayItems();
 
         const table = document.createElement('table');
         table.className = 'file-table';
@@ -1002,9 +1002,9 @@ const FileList = {
         headerCheckbox.addEventListener('click', async (e) => {
             e.stopPropagation();
             if (selCount >= totalItems && totalItems > 0) {
-                this._deselectAll();
+                this.deselectAll();
             } else {
-                await this._selectAll();
+                await this.selectAll();
             }
         });
         thCheck.appendChild(headerCheckbox);
@@ -1030,7 +1030,7 @@ const FileList = {
                     : '<svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 7L1 2h6z" fill="currentColor"/></svg>';
                 th.appendChild(arrow);
             }
-            th.addEventListener('click', () => this._toggleSort(col.key));
+            th.addEventListener('click', () => this.toggleSort(col.key));
             headerRow.appendChild(th);
         });
         thead.appendChild(headerRow);
@@ -1039,7 +1039,7 @@ const FileList = {
         const tbody = document.createElement('tbody');
         items.forEach((file, idx) => {
             const tr = document.createElement('tr');
-            const selected = this._isSelected(file);
+            const selected = this.isSelected(file);
             if (selected) tr.classList.add('selected');
             if (file.pendingOp) tr.classList.add('pending-op');
             else if (file.stale) tr.classList.add('stale');
@@ -1054,20 +1054,20 @@ const FileList = {
             cb.checked = selected;
             cb.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._toggleItem(file, idx);
-                this._fireSelectionChange();
+                this.toggleItem(file, idx);
+                this.fireSelectionChange();
                 // Update row highlight + header checkbox without full re-render
-                const nowSelected = this._isSelected(file);
+                const nowSelected = this.isSelected(file);
                 tr.classList.toggle('selected', nowSelected);
                 cb.checked = nowSelected;
-                this._updateHeaderCheckbox();
+                this.updateHeaderCheckbox();
             });
             tdCheck.appendChild(cb);
             tr.appendChild(tdCheck);
 
             let dupHtml = '';
-            if (this._dupGroupMode) {
-                if (file.id === this._dupGroupSourceId) {
+            if (this.dupGroupMode) {
+                if (file.id === this.dupGroupSourceId) {
                     dupHtml = '<span class="dup-indicator dup-selected">selected</span>';
                 } else {
                     dupHtml = `<span class="dup-indicator" data-dup-file-id="${file.id}">duplicate</span>`;
@@ -1084,7 +1084,7 @@ const FileList = {
             const pendingHtml = file.pendingOp
                 ? `<span class="pending-indicator">pending ${file.pendingOp}</span>`
                 : '';
-            const locLabel = this._favouritesMode
+            const locLabel = this.favouritesMode
                 ? file.location
                 : (file.locationId && Tree.getLocationLabel(file.locationId)) || file.location;
             const locHtml = locLabel
@@ -1117,11 +1117,11 @@ const FileList = {
             if (dupEl) {
                 dupEl.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    if (this._dupGroupMode) {
+                    if (this.dupGroupMode) {
                         // Already in dup group view — change selected and show detail
-                        this._dupGroupSourceId = file.id;
-                        this._selectOnly(file, idx);
-                        this._fireSelectionChange();
+                        this.dupGroupSourceId = file.id;
+                        this.selectOnly(file, idx);
+                        this.fireSelectionChange();
                         this.render();
                     } else {
                         this.showDuplicateGroup(file.hashStrong || file.hashFast, file.id);
@@ -1134,23 +1134,23 @@ const FileList = {
                 // Don't handle if checkbox was clicked (already handled)
                 if (e.target.tagName === 'INPUT') return;
 
-                if (e.shiftKey && this._anchorIdx !== null) {
+                if (e.shiftKey && this.anchorIdx !== null) {
                     // Range select
                     this.selectedItems.clear();
-                    this._selectRange(this._anchorIdx, idx);
-                    this._fireSelectionChange();
+                    this.selectRange(this.anchorIdx, idx);
+                    this.fireSelectionChange();
                     this.render();
                 } else if (e.ctrlKey || e.metaKey) {
                     // Toggle item
-                    this._toggleItem(file, idx);
-                    this._fireSelectionChange();
+                    this.toggleItem(file, idx);
+                    this.fireSelectionChange();
                     this.render();
                 } else {
                     // Single select
-                    this._selectOnly(file, idx);
-                    if (this._dupGroupMode) this._dupGroupSourceId = file.id;
+                    this.selectOnly(file, idx);
+                    if (this.dupGroupMode) this.dupGroupSourceId = file.id;
                     this.render();
-                    this._fireSelectionChange();
+                    this.fireSelectionChange();
                 }
             });
 
@@ -1160,7 +1160,7 @@ const FileList = {
                 });
             }
 
-            this._makeDraggable(tr, file, idx);
+            this.makeDraggable(tr, file, idx);
             tbody.appendChild(tr);
         });
 
@@ -1171,15 +1171,15 @@ const FileList = {
         // Paging bar sits outside the scroll container, fixed at bottom of panel
         const existing = this.el.parentElement.querySelector('.paging-bar');
         if (existing) existing.remove();
-        const pagingBar = this._renderPagingBar();
+        const pagingBar = this.renderPagingBar();
         if (pagingBar) this.el.parentElement.appendChild(pagingBar);
 
-        this._scrollSelectedIntoView();
+        this.scrollSelectedIntoView();
     },
 
-    _renderGallery() {
-        _galleryLoader.reset();
-        const items = this._getDisplayItems();
+    renderGallery() {
+        galleryLoader.reset();
+        const items = this.getDisplayItems();
         const grid = document.createElement('div');
         grid.className = 'file-gallery';
 
@@ -1187,7 +1187,7 @@ const FileList = {
             const cell = document.createElement('div');
             cell.className = 'gallery-item';
             cell.dataset.key = itemKey(file);
-            if (this._isSelected(file)) cell.classList.add('selected');
+            if (this.isSelected(file)) cell.classList.add('selected');
             if (file.stale) cell.classList.add('stale');
             if (file.pendingOp) cell.classList.add('pending-op');
 
@@ -1208,7 +1208,7 @@ const FileList = {
                 let src = `/api/files/${file.id}/content`;
                 if (token) src += `?token=${encodeURIComponent(token)}`;
                 img.alt = file.name;
-                _galleryLoader.enqueue(img, src);
+                galleryLoader.enqueue(img, src);
                 cell.appendChild(img);
 
                 const label = document.createElement('div');
@@ -1225,27 +1225,27 @@ const FileList = {
                 cell.appendChild(label);
             }
 
-            this._buildGalleryBadges(cell, file);
+            this.buildGalleryBadges(cell, file);
 
             cell.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (e.ctrlKey || e.metaKey) {
-                    this._toggleItem(file, idx);
-                    this._fireSelectionChange();
+                    this.toggleItem(file, idx);
+                    this.fireSelectionChange();
                     this.render();
-                } else if (e.shiftKey && this._anchorIdx !== null) {
+                } else if (e.shiftKey && this.anchorIdx !== null) {
                     this.selectedItems.clear();
-                    this._selectRange(this._anchorIdx, idx);
-                    this._fireSelectionChange();
+                    this.selectRange(this.anchorIdx, idx);
+                    this.fireSelectionChange();
                     this.render();
                 } else {
-                    this._selectOnly(file, idx);
+                    this.selectOnly(file, idx);
                     this.render();
-                    this._fireSelectionChange();
+                    this.fireSelectionChange();
                 }
             });
 
-            this._makeDraggable(cell, file, idx);
+            this.makeDraggable(cell, file, idx);
             grid.appendChild(cell);
         });
 
@@ -1254,19 +1254,19 @@ const FileList = {
 
         const existing = this.el.parentElement.querySelector('.paging-bar');
         if (existing) existing.remove();
-        const pagingBar = this._renderPagingBar();
+        const pagingBar = this.renderPagingBar();
         if (pagingBar) this.el.parentElement.appendChild(pagingBar);
 
-        this._scrollSelectedIntoView();
+        this.scrollSelectedIntoView();
     },
 
-    _makeDraggable(el, file, idx) {
+    makeDraggable(el, file, idx) {
         el.draggable = true;
         el.addEventListener('dragstart', (e) => {
             // If the dragged item isn't selected, select it first
-            if (!this._isSelected(file)) {
-                this._selectOnly(file, idx);
-                this._fireSelectionChange();
+            if (!this.isSelected(file)) {
+                this.selectOnly(file, idx);
+                this.fireSelectionChange();
             }
             const ids = [];
             const folderIds = [];
