@@ -44,6 +44,8 @@ Requires a separate [embedding service](https://github.com/zen-logic/file-hunter
 
 ## Document semantic search
 
+Optional document search powered by [Docling](https://github.com/docling-project/docling). Connect to an [embedding service](https://github.com/zen-logic/file-hunter-embedding) in Settings to enable.
+
 Search within document content using natural language queries. Supported formats: PDF, DOCX, PPTX, XLSX, ODT, HTML, and plain text (TXT, MD, CSV, JSON, etc.). Hybrid scoring combines vector similarity with keyword boosting for precision. Composite query syntax supported. Embed individual files from the detail panel. Dedicated content search panel with threshold control in the toolbar.
 
 ## Location filtering
