@@ -1270,12 +1270,12 @@ Search.init({
             contentSearchSlider.value = params.semanticThreshold;
         }
         // Restore location filter
-        await _simLocLoad();
-        _csLocSelected.clear();
+        await _loadLocations();
+        _csLoc.reset();
         if (params.semanticLocations && Array.isArray(params.semanticLocations)) {
-            for (const id of params.semanticLocations) _csLocSelected.add(id);
+            _csLoc.setIds(params.semanticLocations);
+            _csLoc.render();
         }
-        _csLocRender();
         document.getElementById('content-search-go').click();
     },
     async onSearch(values) {
@@ -1367,103 +1367,109 @@ let similarityVisible = false;
 let _similarityUrl = '';
 
 // ── Similarity location filter ──
-const _simLocDropdown = document.getElementById('similarity-locations');
-const _simLocToggle = _simLocDropdown.querySelector('.multiselect-dropdown-toggle');
-const _simLocMenu = _simLocDropdown.querySelector('.multiselect-dropdown-menu');
-let _simLocations = [];  // [{id, label}]
-let _simLocSelected = new Set();  // selected location IDs (ints)
-let _simLocLoaded = false;
+// ── Location multiselect ──
+// Shared data (loaded once, used by all location selectors)
+let _locItems = [];     // [{id, label}]
+let _locLoaded = false;
 
-_simLocToggle.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _simLocDropdown.classList.toggle('open');
-});
-document.addEventListener('click', (e) => {
-    if (!_simLocDropdown.contains(e.target)) {
-        _simLocDropdown.classList.remove('open');
-    }
-});
+function createLocationSelect(elementId) {
+    const dropdown = document.getElementById(elementId);
+    const toggle = dropdown.querySelector('.multiselect-dropdown-toggle');
+    const menu = dropdown.querySelector('.multiselect-dropdown-menu');
+    const selected = new Set();
 
-function _simLocUpdateLabel() {
-    if (_simLocSelected.size === 0 || _simLocSelected.size === _simLocations.length) {
-        _simLocToggle.textContent = 'All locations';
-    } else if (_simLocSelected.size === 1) {
-        const loc = _simLocations.find(l => _simLocSelected.has(l.id));
-        _simLocToggle.textContent = loc ? loc.label : '1 location';
-    } else {
-        _simLocToggle.textContent = `${_simLocSelected.size} locations`;
-    }
-}
-
-function _simLocRender() {
-    _simLocMenu.innerHTML = '';
-
-    // Select all / none controls
-    const controls = document.createElement('div');
-    controls.className = 'multiselect-controls';
-    const allBtn = document.createElement('button');
-    allBtn.className = 'btn btn-sm';
-    allBtn.textContent = 'All';
-    allBtn.addEventListener('click', (e) => {
+    toggle.addEventListener('click', (e) => {
         e.stopPropagation();
-        _simLocations.forEach(l => _simLocSelected.add(l.id));
-        _simLocMenu.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
-        _simLocUpdateLabel();
+        dropdown.classList.toggle('open');
     });
-    const noneBtn = document.createElement('button');
-    noneBtn.className = 'btn btn-sm';
-    noneBtn.textContent = 'None';
-    noneBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        _simLocSelected.clear();
-        _simLocMenu.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-        _simLocUpdateLabel();
+    document.addEventListener('click', (e) => {
+        if (!dropdown.contains(e.target)) dropdown.classList.remove('open');
     });
-    controls.appendChild(allBtn);
-    controls.appendChild(noneBtn);
-    _simLocMenu.appendChild(controls);
 
-    for (const loc of _simLocations) {
-        const item = document.createElement('label');
-        item.className = 'multiselect-dropdown-item';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = _simLocSelected.has(loc.id);
-        cb.addEventListener('change', () => {
-            if (cb.checked) _simLocSelected.add(loc.id);
-            else _simLocSelected.delete(loc.id);
-            _simLocUpdateLabel();
+    function updateLabel() {
+        if (selected.size === 0 || selected.size === _locItems.length) {
+            toggle.textContent = 'All locations';
+        } else if (selected.size === 1) {
+            const loc = _locItems.find(l => selected.has(l.id));
+            toggle.textContent = loc ? loc.label : '1 location';
+        } else {
+            toggle.textContent = `${selected.size} locations`;
+        }
+    }
+
+    function render() {
+        menu.innerHTML = '';
+
+        const controls = document.createElement('div');
+        controls.className = 'multiselect-controls';
+        const allBtn = document.createElement('button');
+        allBtn.className = 'btn btn-sm';
+        allBtn.textContent = 'All';
+        allBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            _locItems.forEach(l => selected.add(l.id));
+            menu.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+            updateLabel();
         });
-        const span = document.createElement('span');
-        span.textContent = loc.label;
-        item.appendChild(cb);
-        item.appendChild(span);
-        _simLocMenu.appendChild(item);
+        const noneBtn = document.createElement('button');
+        noneBtn.className = 'btn btn-sm';
+        noneBtn.textContent = 'None';
+        noneBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selected.clear();
+            menu.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+            updateLabel();
+        });
+        controls.appendChild(allBtn);
+        controls.appendChild(noneBtn);
+        menu.appendChild(controls);
+
+        for (const loc of _locItems) {
+            const item = document.createElement('label');
+            item.className = 'multiselect-dropdown-item';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = selected.has(loc.id);
+            cb.addEventListener('change', () => {
+                if (cb.checked) selected.add(loc.id);
+                else selected.delete(loc.id);
+                updateLabel();
+            });
+            const span = document.createElement('span');
+            span.textContent = loc.label;
+            item.appendChild(cb);
+            item.appendChild(span);
+            menu.appendChild(item);
+        }
+        updateLabel();
     }
-    _simLocUpdateLabel();
+
+    return {
+        render,
+        reset() { selected.clear(); render(); },
+        getIds() {
+            if (selected.size === 0 || selected.size === _locItems.length) return null;
+            return [...selected];
+        },
+        setIds(ids) { selected.clear(); for (const id of ids) selected.add(id); },
+        selected,
+    };
 }
 
-async function _simLocLoad() {
-    if (_simLocLoaded) return;
+const _simLoc = createLocationSelect('similarity-locations');
+const _csLoc = createLocationSelect('content-search-locations');
+
+async function _loadLocations() {
+    if (_locLoaded) return;
     const res = await API.get('/api/locations');
     if (!res.ok) return;
-    _simLocations = res.data.map(l => ({
+    _locItems = res.data.map(l => ({
         id: parseInt(l.id.replace('loc-', ''), 10),
         label: l.label,
     }));
-    _simLocLoaded = true;
-    _simLocRender();
-}
-
-function _simLocReset() {
-    _simLocSelected.clear();
-    _simLocRender();
-}
-
-function _simLocGetIds() {
-    // Empty or all selected = no filter
-    if (_simLocSelected.size === 0 || _simLocSelected.size === _simLocations.length) return null;
-    return [..._simLocSelected];
+    _locLoaded = true;
+    _simLoc.render();
+    _csLoc.render();
 }
 
 function updateSimilarityButton(settings) {
@@ -1516,7 +1522,7 @@ similarityBtn.addEventListener('click', () => {
         contentSearchVisible = false;
         contentSearchPanel.classList.add('hidden');
         contentSearchBtn.classList.remove('btn-active');
-        _simLocLoad();
+        _loadLocations();
         document.getElementById('similarity-text').focus();
     }
 });
@@ -1587,7 +1593,7 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
         payload.scopeType = _similarityScopeNode.type;
         payload.scopeId = _similarityScopeNode.id;
     } else {
-        const locIds = _simLocGetIds();
+        const locIds = _simLoc.getIds();
         if (locIds) payload.location_ids = locIds;
     }
 
@@ -1610,7 +1616,7 @@ document.getElementById('similarity-clear').addEventListener('click', () => {
     _similarityUploadData = null;
     similarityUploadFile.value = '';
     similarityUploadName.textContent = '';
-    _simLocReset();
+    _simLoc.reset();
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {
@@ -1630,64 +1636,7 @@ const contentSearchSlider = document.getElementById('content-search-slider');
 const contentSearchThreshold = document.getElementById('content-search-threshold');
 let contentSearchVisible = false;
 
-// Content search location filter — shares location data with similarity
-const _csLocDropdown = document.getElementById('content-search-locations');
-const _csLocToggle = _csLocDropdown.querySelector('.multiselect-dropdown-toggle');
-const _csLocMenu = _csLocDropdown.querySelector('.multiselect-dropdown-menu');
-let _csLocSelected = new Set();
 
-_csLocToggle.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _csLocDropdown.classList.toggle('open');
-});
-document.addEventListener('click', (e) => {
-    if (!_csLocDropdown.contains(e.target)) {
-        _csLocDropdown.classList.remove('open');
-    }
-});
-
-function _csLocUpdateLabel() {
-    if (_csLocSelected.size === 0 || _csLocSelected.size === _simLocations.length) {
-        _csLocToggle.textContent = 'All locations';
-    } else if (_csLocSelected.size === 1) {
-        const loc = _simLocations.find(l => _csLocSelected.has(l.id));
-        _csLocToggle.textContent = loc ? loc.label : '1 location';
-    } else {
-        _csLocToggle.textContent = `${_csLocSelected.size} locations`;
-    }
-}
-
-function _csLocRender() {
-    _csLocMenu.innerHTML = '';
-    for (const loc of _simLocations) {
-        const item = document.createElement('label');
-        item.className = 'multiselect-dropdown-item';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = _csLocSelected.has(loc.id);
-        cb.addEventListener('change', () => {
-            if (cb.checked) _csLocSelected.add(loc.id);
-            else _csLocSelected.delete(loc.id);
-            _csLocUpdateLabel();
-        });
-        const span = document.createElement('span');
-        span.textContent = loc.label;
-        item.appendChild(cb);
-        item.appendChild(span);
-        _csLocMenu.appendChild(item);
-    }
-    _csLocUpdateLabel();
-}
-
-function _csLocReset() {
-    _csLocSelected.clear();
-    _csLocRender();
-}
-
-function _csLocGetIds() {
-    if (_csLocSelected.size === 0 || _csLocSelected.size === _simLocations.length) return null;
-    return [..._csLocSelected];
-}
 
 contentSearchBtn.addEventListener('click', () => {
     contentSearchVisible = !contentSearchVisible;
@@ -1698,7 +1647,7 @@ contentSearchBtn.addEventListener('click', () => {
         similarityVisible = false;
         similarityPanel.classList.add('hidden');
         similarityBtn.classList.remove('btn-active');
-        _simLocLoad().then(() => _csLocRender());
+        _loadLocations();
         document.getElementById('content-search-text').focus();
     }
 });
@@ -1720,7 +1669,7 @@ document.getElementById('content-search-go').addEventListener('click', async () 
     const params = new URLSearchParams();
     params.set('semantic', text);
     params.set('semanticThreshold', threshold);
-    const csLocIds = _csLocGetIds();
+    const csLocIds = _csLoc.getIds();
     if (csLocIds) params.set('semanticLocations', csLocIds.join(','));
     params.set('page', '0');
     FileList.showLoading();
@@ -1743,7 +1692,7 @@ document.getElementById('content-search-clear').addEventListener('click', () => 
     document.getElementById('content-search-text').value = '';
     contentSearchSlider.value = 0.3;
     contentSearchThreshold.value = 0.3;
-    _csLocReset();
+    _csLoc.reset();
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {
@@ -1759,7 +1708,7 @@ document.getElementById('content-search-save').addEventListener('click', async (
         semantic: text,
         semanticThreshold: contentSearchThreshold.value,
     };
-    const savedLocIds = _csLocGetIds();
+    const savedLocIds = _csLoc.getIds();
     if (savedLocIds) values.semanticLocations = savedLocIds;
     const name = await PromptModal.open({
         title: 'Save Search',
