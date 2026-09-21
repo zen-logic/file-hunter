@@ -25,8 +25,12 @@ const DeleteFileModal = {
         });
 
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
+            if (this.overlayEl.classList.contains('hidden')) return;
+            if (e.key === 'Escape') {
                 this.close();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                this._doConfirm();
             }
         });
     },

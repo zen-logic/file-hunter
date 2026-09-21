@@ -21,8 +21,12 @@ const ConfirmModal = {
         });
 
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
+            if (this.overlayEl.classList.contains('hidden')) return;
+            if (e.key === 'Escape') {
                 this._finish(false);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                this._finish(true);
             }
         });
     },

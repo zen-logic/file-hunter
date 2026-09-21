@@ -89,15 +89,27 @@ const SlideshowTriage = {
             this._movSubmit.textContent = this._movCopy.checked ? 'Copy' : 'Move';
         });
 
-        // Escape key for all dialogs (consolidate handled by unified component)
+        // Keyboard shortcuts for all dialogs (consolidate handled by unified component)
         document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape') return;
-            if (!this._delOverlay.classList.contains('hidden')) {
-                this._closeDelete();
-            } else if (!this._tagOverlay.classList.contains('hidden')) {
-                this._closeTag();
-            } else if (!this._movOverlay.classList.contains('hidden')) {
-                this._closeMove();
+            if (e.key === 'Escape') {
+                if (!this._delOverlay.classList.contains('hidden')) {
+                    this._closeDelete();
+                } else if (!this._tagOverlay.classList.contains('hidden')) {
+                    this._closeTag();
+                } else if (!this._movOverlay.classList.contains('hidden')) {
+                    this._closeMove();
+                }
+            } else if (e.key === 'Enter') {
+                if (!this._tagOverlay.classList.contains('hidden')) {
+                    e.preventDefault();
+                    this._doTag();
+                } else if (!this._delOverlay.classList.contains('hidden')) {
+                    e.preventDefault();
+                    this._doDelete();
+                } else if (!this._movOverlay.classList.contains('hidden')) {
+                    e.preventDefault();
+                    this._doMove();
+                }
             }
         });
     },
