@@ -1397,6 +1397,32 @@ function _simLocUpdateLabel() {
 
 function _simLocRender() {
     _simLocMenu.innerHTML = '';
+
+    // Select all / none controls
+    const controls = document.createElement('div');
+    controls.className = 'multiselect-controls';
+    const allBtn = document.createElement('button');
+    allBtn.className = 'btn btn-sm';
+    allBtn.textContent = 'All';
+    allBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _simLocations.forEach(l => _simLocSelected.add(l.id));
+        _simLocMenu.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+        _simLocUpdateLabel();
+    });
+    const noneBtn = document.createElement('button');
+    noneBtn.className = 'btn btn-sm';
+    noneBtn.textContent = 'None';
+    noneBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _simLocSelected.clear();
+        _simLocMenu.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+        _simLocUpdateLabel();
+    });
+    controls.appendChild(allBtn);
+    controls.appendChild(noneBtn);
+    _simLocMenu.appendChild(controls);
+
     for (const loc of _simLocations) {
         const item = document.createElement('label');
         item.className = 'multiselect-dropdown-item';
@@ -1517,6 +1543,7 @@ similarityThreshold.addEventListener('input', () => {
 });
 
 let _similarityScopeNode = null;
+const _simLocRow = document.getElementById('similarity-locations-row');
 function _updateSimilarityScope(node) {
     const scopeEl = document.getElementById('similarity-scope');
     const nameEl = document.getElementById('similarity-scope-name');
@@ -1529,8 +1556,12 @@ function _updateSimilarityScope(node) {
         _similarityScopeNode = null;
         scopeEl.classList.add('hidden');
         checkEl.checked = false;
+        _simLocRow.classList.remove('hidden');
     }
 }
+document.getElementById('similarity-scope-check').addEventListener('change', (e) => {
+    _simLocRow.classList.toggle('hidden', e.target.checked);
+});
 
 document.getElementById('similarity-go').addEventListener('click', async () => {
     const useImage = document.getElementById('similarity-use-image').checked;
@@ -1551,12 +1582,14 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     if (text) payload.text = text;
     if (useImage && selectedFile) payload.file_id = selectedFile.id;
     if (hasUpload) payload.image_data = _similarityUploadData;
-    if (document.getElementById('similarity-scope-check').checked && _similarityScopeNode) {
+    const scopeChecked = document.getElementById('similarity-scope-check').checked && _similarityScopeNode;
+    if (scopeChecked) {
         payload.scopeType = _similarityScopeNode.type;
         payload.scopeId = _similarityScopeNode.id;
+    } else {
+        const locIds = _simLocGetIds();
+        if (locIds) payload.location_ids = locIds;
     }
-    const locIds = _simLocGetIds();
-    if (locIds) payload.location_ids = locIds;
 
     FileList.showLoading();
     const res = await API.post('/api/search/similarity', payload);
