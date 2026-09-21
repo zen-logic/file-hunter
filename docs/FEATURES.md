@@ -34,13 +34,13 @@ Images, video, audio, PDFs, CSV tables, text files, and a hex viewer all render 
 
 ## Similarity search
 
-Optional image similarity search powered by CLIP embeddings. Connect to an embedding service in Settings to enable.
+Optional image similarity search powered by CLIP embeddings. Connect to an [embedding service](https://github.com/zen-logic/file-hunter-embedding) in Settings to enable.
 
 Scan any location or folder to index images. Image and document scans are separate options in the scan dialogue. Search by text features (e.g. "red socks", "blue jacket"), by similarity to a selected file, or by uploading a reference image from your desktop. Text and image queries can be combined. Adjustable similarity threshold.
 
 Text queries support composite syntax for vector arithmetic: `(red socks) - shoes` embeds each phrase separately and combines the vectors before searching.
 
-Requires a separate embedding service. ChromaDB is installed automatically when the feature is first enabled. No impact on installations that do not use this feature.
+Requires a separate [embedding service](https://github.com/zen-logic/file-hunter-embedding). ChromaDB is installed automatically when the feature is first enabled. No impact on installations that do not use this feature.
 
 ## Document semantic search
 
