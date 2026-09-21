@@ -273,7 +273,7 @@ body::after {
     top: 100%;
     left: 0;
     z-index: 100;
-    min-width: 100%;
+    min-width: max(100%, 20rem);
     max-height: 14rem;
     overflow-y: auto;
     background: var(--color-surface);
@@ -1274,6 +1274,39 @@ body::after {
     border: 1px solid var(--color-border-subtle);
     border-radius: 3px;
     background: var(--color-bg);
+}
+
+.md-preview {
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    overflow-wrap: break-word;
+}
+.md-preview h1, .md-preview h2, .md-preview h3,
+.md-preview h4, .md-preview h5, .md-preview h6 {
+    margin: 0.8em 0 0.4em;
+}
+.md-preview h1:first-child, .md-preview h2:first-child, .md-preview h3:first-child { margin-top: 0; }
+.md-preview p { margin: 0.4em 0; }
+.md-preview pre { background: var(--color-bg); padding: 0.5rem; border-radius: 3px; overflow-x: auto; }
+.md-preview code { font-size: 0.9em; }
+.md-preview blockquote { border-left: 3px solid var(--color-border); padding-left: 0.8rem; margin: 0.4em 0; color: var(--color-text-muted); }
+.md-preview ul, .md-preview ol { padding-left: 1.5rem; margin: 0.4em 0; }
+.md-preview img { max-width: 100%; }
+.md-preview table { border-collapse: collapse; margin: 0.4em 0; }
+.md-preview th, .md-preview td { border: 1px solid var(--color-border); padding: 0.3rem 0.5rem; font-size: var(--font-size-sm); }
+
+.detail-preview .md-preview {
+    max-height: 16rem;
+    overflow: auto;
+    padding: 0.5rem;
+}
+
+.preview-modal-content .md-preview {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    padding: 1rem;
+    align-self: stretch;
 }
 
 .preview-modal-content .csv-preview {

@@ -359,6 +359,15 @@ const Detail = {
                 const el = document.getElementById('modal-csv-preview');
                 if (el) el.textContent = '(Preview not available)';
             });
+        } else if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'md') {
+            m.content.innerHTML = `<div class="md-preview selectable">Loading...</div>`;
+            fetch(url, { headers: _authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
+                const el = m.content.querySelector('.md-preview');
+                if (el) el.innerHTML = marked.parse(text);
+            }).catch(() => {
+                const el = m.content.querySelector('.md-preview');
+                if (el) el.textContent = '(Preview not available)';
+            });
         } else if (type === 'text') {
             m.content.innerHTML = `<pre>Loading...</pre>`;
             fetch(url, { headers: _authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
@@ -946,6 +955,21 @@ const Detail = {
             </div>
             ${previewHtml}
             <div class="detail-section">
+                <h3>Tags</h3>
+                <div class="tag-list" id="detail-tags">
+                    ${tags.map(t => `<span class="tag">${t} <span class="tag-remove" data-tag="${t}">&times;</span></span>`).join('')}
+                </div>
+                <div class="tag-add-row">
+                    <input type="text" class="tag-input" id="detail-tag-input" placeholder="Add tag...">
+                    <button class="btn btn-sm" id="detail-tag-add">+</button>
+                </div>
+            </div>
+            <div class="detail-section">
+                <h3>Description</h3>
+                <textarea class="detail-description-edit" id="detail-desc"
+                    placeholder="Add a description...">${detail.description || ''}</textarea>
+            </div>
+            <div class="detail-section">
                 <h3>Metadata</h3>
                 <div class="detail-field">
                     <span class="label">Type</span>
@@ -989,21 +1013,6 @@ const Detail = {
                 ${detail.id && !detail.stale && !hasPendingOp && detail.online !== false ? `<button class="btn btn-sm" id="detail-rehash" style="margin-top:0.4rem">Re-hash</button>` : ''}
                 ${detail.id && !detail.verified && !detail.stale && !hasPendingOp ? `<button class="btn btn-sm" id="detail-verify" style="margin-top:0.4rem">Verify (SHA-256)${detail.locationOnline === false ? ' \u2014 queued' : ''}</button>` : ''}
             </div>
-            <div class="detail-section">
-                <h3>Description</h3>
-                <textarea class="detail-description-edit" id="detail-desc"
-                    placeholder="Add a description...">${detail.description || ''}</textarea>
-            </div>
-            <div class="detail-section">
-                <h3>Tags</h3>
-                <div class="tag-list" id="detail-tags">
-                    ${tags.map(t => `<span class="tag">${t} <span class="tag-remove" data-tag="${t}">&times;</span></span>`).join('')}
-                </div>
-                <div class="tag-add-row">
-                    <input type="text" class="tag-input" id="detail-tag-input" placeholder="Add tag...">
-                    <button class="btn btn-sm" id="detail-tag-add">+</button>
-                </div>
-            </div>
         `;
 
         const dupTotal = detail.dupTotal || dups.length;
@@ -1033,6 +1042,8 @@ const Detail = {
         this._wireShowInFolder(detail);
         if ((detail.typeLow || '').toLowerCase() === 'csv') {
             this._loadCsvPreview(detail);
+        } else if ((detail.typeLow || '').toLowerCase() === 'md') {
+            this._loadMarkdownPreview(detail);
         } else {
             this._loadTextPreview(detail);
         }
@@ -1120,6 +1131,9 @@ const Detail = {
         if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'csv') {
             return `<div class="detail-preview">${zoom}<div id="detail-csv-preview" class="csv-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
+        if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'md') {
+            return `<div class="detail-preview">${zoom}<div id="detail-md-preview" class="md-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn}</div>`;
+        }
         if (type === 'text') {
             return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
@@ -1143,6 +1157,22 @@ const Detail = {
             }
         } catch {
             pre.textContent = '(Preview not available)';
+        }
+    },
+
+    async _loadMarkdownPreview(detail) {
+        const el = document.getElementById('detail-md-preview');
+        if (!el || !detail.id) return;
+        try {
+            const resp = await fetch(`/api/files/${detail.id}/content`, { headers: _authHeaders() });
+            if (!resp.ok) {
+                el.textContent = '(Preview not available)';
+                return;
+            }
+            const text = await resp.text();
+            el.innerHTML = marked.parse(text);
+        } catch {
+            el.textContent = '(Preview not available)';
         }
     },
 
