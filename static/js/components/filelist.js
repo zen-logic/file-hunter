@@ -927,9 +927,44 @@ const FileList = {
             // just update selection classes instead of rebuilding the DOM
             const grid = this.el.querySelector('.file-gallery');
             if (grid && grid.childElementCount > 0 && !this._galleryDirty) {
-                grid.querySelectorAll('.gallery-item').forEach(cell => {
+                const items = this._getDisplayItems();
+                grid.querySelectorAll('.gallery-item').forEach((cell, idx) => {
                     const key = cell.dataset.key;
                     cell.classList.toggle('selected', key != null && this.selectedItems.has(key));
+
+                    // Update triage badges
+                    const file = items[idx];
+                    if (!file || file.type === 'folder') return;
+                    const marks = Triage.getMarks(file.id);
+                    const hasDups = file.dups > 0 && file.size > 0;
+                    let badges = cell.querySelector('.gallery-badges');
+                    if (marks.length > 0 || hasDups) {
+                        if (!badges) {
+                            badges = document.createElement('div');
+                            badges.className = 'gallery-badges';
+                            cell.appendChild(badges);
+                        }
+                        // Rebuild badge contents
+                        badges.innerHTML = '';
+                        if (hasDups) {
+                            const dup = document.createElement('span');
+                            dup.className = 'dup-indicator';
+                            dup.textContent = `${file.dups} dup${file.dups > 1 ? 's' : ''}`;
+                            dup.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                this.showDuplicateGroup(file.hashStrong || file.hashFast, file.id);
+                            });
+                            badges.appendChild(dup);
+                        }
+                        marks.forEach(op => {
+                            const badge = document.createElement('span');
+                            badge.className = `triage-mark triage-mark-${op}`;
+                            badge.textContent = op[0].toUpperCase();
+                            badges.appendChild(badge);
+                        });
+                    } else if (badges) {
+                        badges.remove();
+                    }
                 });
                 this._scrollSelectedIntoView();
                 return;
