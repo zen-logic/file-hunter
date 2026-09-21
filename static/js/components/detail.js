@@ -816,8 +816,9 @@ const Detail = {
             scansHtml = s.recentScans.map(scan => {
                 const ago = _timeAgo(scan.completedAt || scan.startedAt);
                 const suffix = scan.status && scan.status !== 'completed' ? ` (${scan.status})` : '';
+                const label = scan.agent ? `${scan.location} [${scan.agent}]` : scan.location;
                 return `<div class="detail-field">
-                    <span class="label">${scan.location}</span>
+                    <span class="label">${label}</span>
                     <span class="value">${ago}${suffix}</span>
                 </div>`;
             }).join('');

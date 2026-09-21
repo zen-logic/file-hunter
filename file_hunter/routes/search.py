@@ -353,11 +353,12 @@ async def similarity_search(request: Request):
         return json_error("Embedding service URL not configured.", 400)
 
     text_emb = None
+    negative_embs = []
     image_emb = None
 
     # Text embedding (supports composite syntax: (red socks) - shoes)
     if text:
-        text_emb = await embed_text_query(embed_url, text)
+        text_emb, negative_embs = await embed_text_query(embed_url, text)
 
     # Image embedding — use stored embedding from ChromaDB
     if file_id:
@@ -436,9 +437,10 @@ async def similarity_search(request: Request):
     if not candidates:
         return json_ok({"items": [], "total": 0, "folders": []})
 
-    # Score each candidate against both query embeddings
+    # Score each candidate against query embeddings, penalise negatives
     text_vec = np.array(text_emb, dtype=np.float32) if text_emb is not None else None
     image_vec = np.array(image_emb, dtype=np.float32) if image_emb is not None else None
+    neg_vecs = [np.array(n, dtype=np.float32) for n in negative_embs]
     combined = text_vec is not None and image_vec is not None
 
     scored = []
@@ -452,8 +454,18 @@ async def similarity_search(request: Request):
         else:
             score = float(np.dot(image_vec, db_emb))
 
-        if score >= threshold:
-            scored.append((doc_id, score))
+        if score < threshold:
+            continue
+
+        # Negative terms demote matching candidates in the ranking
+        # but don't filter them out — threshold applies to the
+        # positive score only
+        for neg_vec in neg_vecs:
+            neg_sim = float(np.dot(neg_vec, db_emb))
+            if neg_sim > 0:
+                score *= (1.0 - neg_sim)
+
+        scored.append((doc_id, score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
 

@@ -218,8 +218,18 @@ def parse_composite_query(query):
     return terms if len(terms) > 1 else None
 
 
-async def embed_text_query(embed_url: str, query: str) -> list[float] | None:
-    """Embed a text query, handling composite syntax with vector arithmetic."""
+async def embed_text_query(embed_url: str, query: str):
+    """Embed a text query, handling composite syntax.
+
+    Returns (positive_emb, negative_embs) where:
+    - positive_emb is the query vector (additive terms combined)
+    - negative_embs is a list of vectors for subtractive terms
+
+    For plain queries, negative_embs is empty.
+    Returns (None, []) on failure.
+    """
+    import numpy as np
+
     composite = parse_composite_query(query)
 
     if not composite:
@@ -229,15 +239,15 @@ async def embed_text_query(embed_url: str, query: str) -> list[float] | None:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(url, json={"text": query})
             if resp.status_code == 200:
-                return resp.json().get("embedding")
+                return resp.json().get("embedding"), []
         except Exception as e:
             logger.warning("Text embedding failed: %s", e)
-        return None
+        return None, []
 
-    # Composite query — embed each term, combine with arithmetic
-    import numpy as np
+    # Composite query — separate positive and negative terms
     url = f"{embed_url.rstrip('/')}/api/embed/text"
-    combined = None
+    positive = None
+    negatives = []
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             for sign, weight, phrase in composite:
@@ -246,20 +256,24 @@ async def embed_text_query(embed_url: str, query: str) -> list[float] | None:
                     logger.warning("Embedding failed for phrase: %s", phrase)
                     continue
                 emb = np.array(resp.json().get("embedding"), dtype=np.float32)
-                weighted = emb * sign * weight
-                combined = weighted if combined is None else combined + weighted
+                if sign > 0:
+                    weighted = emb * weight
+                    positive = weighted if positive is None else positive + weighted
+                else:
+                    negatives.append(emb * weight)
     except Exception as e:
         logger.warning("Composite text embedding failed: %s", e)
-        return None
+        return None, []
 
-    if combined is None:
-        return None
+    if positive is None:
+        return None, []
 
-    # Re-normalise
-    norm = np.linalg.norm(combined)
+    # Re-normalise the positive vector
+    norm = np.linalg.norm(positive)
     if norm > 0:
-        combined = combined / norm
-    return combined.tolist()
+        positive = positive / norm
+
+    return positive.tolist(), [n.tolist() for n in negatives]
 
 
 async def fetch_document_embeddings(

@@ -130,10 +130,12 @@ async def _refresh_dashboard(db):
 
     # Recent scans from catalog (not counter data)
     recent_scans_rows = await db.execute_fetchall(
-        """SELECT s.id, l.name as location_name, s.status, s.started_at,
+        """SELECT s.id, l.name as location_name, a.name as agent_name,
+                  s.status, s.started_at,
                   s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
            FROM scans s
            JOIN locations l ON l.id = s.location_id
+           LEFT JOIN agents a ON a.id = l.agent_id
            WHERE l.name NOT LIKE '__deleting_%'
            ORDER BY s.started_at DESC
            LIMIT 5"""
@@ -157,6 +159,7 @@ async def _refresh_dashboard(db):
         {
             "id": r["id"],
             "location": r["location_name"],
+            "agent": r["agent_name"],
             "status": r["status"],
             "startedAt": r["started_at"],
             "completedAt": r["completed_at"],
@@ -288,10 +291,12 @@ async def get_stats(db):
         )
 
     recent_scans_rows = await db.execute_fetchall(
-        """SELECT s.id, l.name as location_name, s.status, s.started_at,
+        """SELECT s.id, l.name as location_name, a.name as agent_name,
+                  s.status, s.started_at,
                   s.completed_at, s.files_found, s.files_hashed, s.duplicates_found
            FROM scans s
            JOIN locations l ON l.id = s.location_id
+           LEFT JOIN agents a ON a.id = l.agent_id
            WHERE l.name NOT LIKE '__deleting_%'
            ORDER BY s.started_at DESC
            LIMIT 5"""
@@ -311,6 +316,7 @@ async def get_stats(db):
         {
             "id": r["id"],
             "location": r["location_name"],
+            "agent": r["agent_name"],
             "status": r["status"],
             "startedAt": r["started_at"],
             "completedAt": r["completed_at"],
