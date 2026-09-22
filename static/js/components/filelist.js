@@ -1182,6 +1182,8 @@ const FileList = {
         const items = this.getDisplayItems();
         const grid = document.createElement('div');
         grid.className = 'file-gallery';
+        const loc = this.currentFolder ? Tree.getLocation(this.currentFolder) : null;
+        const locationOnline = !loc || loc.online !== false;
 
         items.forEach((file, idx) => {
             const cell = document.createElement('div');
@@ -1203,13 +1205,18 @@ const FileList = {
                     if (this.onFolderOpen) this.onFolderOpen(file);
                 });
             } else if (file.typeHigh === 'image') {
-                const img = document.createElement('img');
-                const token = localStorage.getItem('fh-token');
-                let src = `/api/files/${file.id}/content`;
-                if (token) src += `?token=${encodeURIComponent(token)}`;
-                img.alt = file.name;
-                galleryLoader.enqueue(img, src);
-                cell.appendChild(img);
+                if (locationOnline) {
+                    const img = document.createElement('img');
+                    const token = localStorage.getItem('fh-token');
+                    let src = `/api/files/${file.id}/content`;
+                    if (token) src += `?token=${encodeURIComponent(token)}`;
+                    img.alt = file.name;
+                    galleryLoader.enqueue(img, src);
+                    cell.appendChild(img);
+                } else {
+                    cell.classList.add('gallery-folder');
+                    cell.innerHTML = icons.image || icons.file;
+                }
 
                 const label = document.createElement('div');
                 label.className = 'gallery-name';

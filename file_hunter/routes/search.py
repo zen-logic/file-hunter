@@ -163,6 +163,8 @@ async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: flo
             logger.info("  result %d: file_id=%s distance=%.4f  %s",
                          rank + 1, fid, best[fid], _names.get(fid, "???"))
         return file_ids if file_ids else None
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        raise ConnectionError(f"Embedding service unavailable: {e}") from e
     except Exception as e:
         logger.warning("Semantic search failed: %s", e)
         return None
@@ -181,7 +183,10 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
         sem_threshold = float(request.query_params.get("semanticThreshold", "0.3"))
         sem_loc_raw = request.query_params.get("semanticLocations", "").strip()
         sem_location_ids = [int(x) for x in sem_loc_raw.split(",") if x.strip()] if sem_loc_raw else None
-        sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold, location_ids=sem_location_ids)
+        try:
+            sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold, location_ids=sem_location_ids)
+        except ConnectionError:
+            return json_error("Embedding service unavailable.", 503)
         if not sem_ids:
             return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
         placeholders = ",".join("?" for _ in sem_ids)
@@ -358,7 +363,10 @@ async def similarity_search(request: Request):
 
     # Text embedding (supports composite syntax: (red socks) - shoes)
     if text:
-        text_emb, negative_embs = await embed_text_query(embed_url, text)
+        try:
+            text_emb, negative_embs = await embed_text_query(embed_url, text)
+        except ConnectionError:
+            return json_error("Embedding service unavailable.", 503)
 
     # Image embedding — use stored embedding from ChromaDB
     if file_id:
@@ -381,13 +389,18 @@ async def similarity_search(request: Request):
                     row[0]["full_path"], row[0]["location_id"]
                 )
                 if image_bytes:
-                    image_emb = await fetch_embedding(embed_url, image_bytes)
+                    try:
+                        image_emb = await fetch_embedding(embed_url, image_bytes)
+                    except ConnectionError:
+                        return json_error("Embedding service unavailable.", 503)
 
     # Uploaded image — decode base64 and embed
     if image_data and image_emb is None:
         try:
             image_bytes = base64.b64decode(image_data)
             image_emb = await fetch_embedding(embed_url, image_bytes)
+        except ConnectionError:
+            return json_error("Embedding service unavailable.", 503)
         except Exception as e:
             logger.warning("Uploaded image embedding failed: %s", e)
 

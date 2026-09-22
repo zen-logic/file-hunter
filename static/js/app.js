@@ -1833,6 +1833,13 @@ WS.on('location_children', async (msg) => {
 
 WS.on('scan_completed', async (msg) => {
     let logText;
+    if (msg.error) {
+        logText = `Scan failed: <b>${msg.location}</b> — ${msg.error}`;
+        Toast.error(`Scan failed: ${msg.location} — ${msg.error}`);
+        Activity.completed('scan-' + msg.locationId, { log: logText });
+        Tree.clearScanningLocation(msg.locationId);
+        return;
+    }
     if (msg.quickScan) {
         const parts = [];
         if (msg.newFiles) parts.push(`${msg.newFiles} new`);

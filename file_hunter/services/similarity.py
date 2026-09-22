@@ -147,7 +147,11 @@ def update_embedding_location(file_id: int, new_location_id: int):
 
 
 async def fetch_embedding(embed_url: str, image_bytes: bytes, path: str = "") -> list[float] | None:
-    """Send image bytes to the embedding service, return the vector."""
+    """Send image bytes to the embedding service, return the vector.
+
+    Returns None for unembeddable content (bad image, unsupported format).
+    Raises ConnectionError when the embedding service is unreachable.
+    """
     url = f"{embed_url.rstrip('/')}/api/embed/image"
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -162,6 +166,8 @@ async def fetch_embedding(embed_url: str, image_bytes: bytes, path: str = "") ->
             return None
         data = resp.json()
         return data.get("embedding")
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        raise ConnectionError(f"Embedding service unavailable: {e}") from e
     except Exception as e:
         logger.warning("Embedding service error for %s: %s", path, e)
         return None
@@ -240,6 +246,8 @@ async def embed_text_query(embed_url: str, query: str):
                 resp = await client.post(url, json={"text": query})
             if resp.status_code == 200:
                 return resp.json().get("embedding"), []
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            raise ConnectionError(f"Embedding service unavailable: {e}") from e
         except Exception as e:
             logger.warning("Text embedding failed: %s", e)
         return None, []
@@ -261,6 +269,8 @@ async def embed_text_query(embed_url: str, query: str):
                     positive = weighted if positive is None else positive + weighted
                 else:
                     negatives.append(emb * weight)
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        raise ConnectionError(f"Embedding service unavailable: {e}") from e
     except Exception as e:
         logger.warning("Composite text embedding failed: %s", e)
         return None, []
@@ -279,7 +289,11 @@ async def embed_text_query(embed_url: str, query: str):
 async def fetch_document_embeddings(
     embed_url: str, file_bytes: bytes, filename: str,
 ) -> list[dict] | None:
-    """Send document bytes to the embedding service, return chunks with embeddings."""
+    """Send document bytes to the embedding service, return chunks with embeddings.
+
+    Returns None for unextractable content (unsupported format, empty document).
+    Raises ConnectionError when the embedding service is unreachable.
+    """
     url = f"{embed_url.rstrip('/')}/api/embed/document"
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -293,6 +307,8 @@ async def fetch_document_embeddings(
             return None
         data = resp.json()
         return data.get("chunks")
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        raise ConnectionError(f"Embedding service unavailable: {e}") from e
     except Exception as e:
         logger.warning("Document embedding error: %s", e)
         return None
@@ -325,7 +341,16 @@ async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
         })
         return
 
-    chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
+    try:
+        chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
+    except ConnectionError:
+        await broadcast({
+            "type": "embed_completed",
+            "fileId": file_id,
+            "filename": filename,
+            "error": "Embedding service unavailable",
+        })
+        return
     if chunks is None or len(chunks) == 0:
         await broadcast({
             "type": "embed_completed",
@@ -529,7 +554,18 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             done += 1
             continue
 
-        embedding = await fetch_embedding(embed_url, file_bytes, full_path)
+        try:
+            embedding = await fetch_embedding(embed_url, file_bytes, full_path)
+        except ConnectionError:
+            logger.warning("Embedding service unavailable — aborting scan")
+            _flush_img_batch()
+            await broadcast({
+                "type": "scan_completed",
+                "locationId": location_id,
+                "location": scan_label,
+                "error": "Embedding service unavailable",
+            })
+            return
         if embedding is None:
             errors += 1
             done += 1
@@ -568,7 +604,17 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             done += 1
             continue
 
-        chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
+        try:
+            chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
+        except ConnectionError:
+            logger.warning("Embedding service unavailable — aborting scan")
+            await broadcast({
+                "type": "scan_completed",
+                "locationId": location_id,
+                "location": scan_label,
+                "error": "Embedding service unavailable",
+            })
+            return
         if chunks is None or len(chunks) == 0:
             errors += 1
             done += 1
