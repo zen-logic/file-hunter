@@ -177,13 +177,13 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
             enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
             embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
         if enabled != "1" or not embed_url:
-            return json_ok({"items": [], "total": 0, "folders": []})
+            return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
         sem_threshold = float(request.query_params.get("semanticThreshold", "0.3"))
         sem_loc_raw = request.query_params.get("semanticLocations", "").strip()
         sem_location_ids = [int(x) for x in sem_loc_raw.split(",") if x.strip()] if sem_loc_raw else None
         sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold, location_ids=sem_location_ids)
         if not sem_ids:
-            return json_ok({"items": [], "total": 0, "folders": []})
+            return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
         placeholders = ",".join("?" for _ in sem_ids)
         async with read_db() as db:
             rows = await db.execute_fetchall(
@@ -202,7 +202,7 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
                 item = file_map[fid]
                 item["type"] = "file"
                 items.append(item)
-        return json_ok({"items": items, "total": len(items), "folders": []})
+        return json_ok({"items": items, "total": len(items), "folders": [], "page": 0})
 
     # Fast path: hash-only search (dup badge click)
     hash_val = request.query_params.get("hash")
@@ -397,7 +397,7 @@ async def similarity_search(request: Request):
     collection = get_collection()
     n_results = min(100, collection.count() or 100)
     if n_results == 0:
-        return json_ok({"items": [], "total": 0, "folders": []})
+        return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
 
     # Build ChromaDB where filter for location scoping
     where_filter = None
@@ -435,7 +435,7 @@ async def similarity_search(request: Request):
                 candidates[doc_id] = np.array(results["embeddings"][0][i], dtype=np.float32)
 
     if not candidates:
-        return json_ok({"items": [], "total": 0, "folders": []})
+        return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
 
     # Score each candidate against query embeddings, penalise negatives
     text_vec = np.array(text_emb, dtype=np.float32) if text_emb is not None else None
@@ -470,7 +470,7 @@ async def similarity_search(request: Request):
     scored.sort(key=lambda x: x[1], reverse=True)
 
     if not scored:
-        return json_ok({"items": [], "total": 0, "folders": []})
+        return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
 
     matched_ids = [int(doc_id) for doc_id, _ in scored]
 
@@ -504,7 +504,7 @@ async def similarity_search(request: Request):
             cte_params + matched_ids + clause_params,
         )
 
-    # Preserve score ranking order
+    # Preserve score ranking order, cap results
     file_map = {r["id"]: dict(r) for r in rows}
     items = []
     for fid in matched_ids:
@@ -512,5 +512,6 @@ async def similarity_search(request: Request):
             item = file_map[fid]
             item["type"] = "file"
             items.append(item)
+    items = items[:100]
 
-    return json_ok({"items": items, "total": len(items), "folders": []})
+    return json_ok({"items": items, "total": len(items), "folders": [], "page": 0})

@@ -21,6 +21,8 @@
     --color-text-placeholder: #333333;
 
     --color-selected: #1a1a1a;
+    --color-hover-border: #cc9944;
+    --color-selected-border: #ffffff;
 
     --color-primary: #ffffff;
     --color-primary-hover: #cccccc;

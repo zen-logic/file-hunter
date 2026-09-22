@@ -35,6 +35,8 @@
 
     /* ── Selection / focus ── */
     --color-selected: #2a3a5e;
+    --color-hover-border: #cc8833;
+    --color-selected-border: #5b8def;
 
     /* ── Primary action ── */
     --color-primary: #5b8def;

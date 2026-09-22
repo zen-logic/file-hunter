@@ -21,6 +21,8 @@
     --color-text-placeholder: #404068;
 
     --color-selected: #2a1838;
+    --color-hover-border: #44ccaa;
+    --color-selected-border: #ff2d95;
 
     /* Primary — hot pink */
     --color-primary: #ff2d95;

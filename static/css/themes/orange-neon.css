@@ -22,6 +22,8 @@
 
     --color-selected: #993f00;
     --color-selected-contrast: #000000;
+    --color-hover-border: #3388dd;
+    --color-selected-border: #ff6a00;
 
     /* Primary — vivid orange */
     --color-primary: #ff6a00;
