@@ -317,6 +317,7 @@ async def get_file_detail(db, file_id: int):
                   f.folder_id, f.file_type_high, f.file_type_low, f.file_size,
                   f.description, f.created_date, f.modified_date,
                   f.date_cataloged, f.date_last_seen, f.stale, f.hidden, f.pending_op,
+                  f.embedded,
                   l.name as location_name, l.root_path as location_root_path
            FROM files f
            JOIN locations l ON l.id = f.location_id
@@ -509,6 +510,7 @@ async def get_file_detail(db, file_id: int):
         "transcodeStatus": transcode_status,
         "canRawConvert": can_raw_convert,
         "rawConvertStatus": raw_convert_status,
+        "embedded": bool(f.get("embedded")),
     }
 
 

@@ -146,6 +146,27 @@ def update_embedding_location(file_id: int, new_location_id: int):
         logger.warning("Failed to update document embedding location: %s", e)
 
 
+async def mark_embedded(file_id: int, embedded: bool):
+    """Set or clear the embedded flag on a single file."""
+    from file_hunter.db import execute_write
+    async def do_update(db, fid, val):
+        await db.execute("UPDATE files SET embedded = ? WHERE id = ?", (val, fid))
+        await db.commit()
+    await execute_write(do_update, file_id, 1 if embedded else 0)
+
+
+async def mark_embedded_batch(file_ids: list[int], embedded: bool):
+    """Set or clear the embedded flag on a batch of files."""
+    if not file_ids:
+        return
+    from file_hunter.db import execute_write
+    async def do_update(db, ids, val):
+        placeholders = ",".join("?" for _ in ids)
+        await db.execute(f"UPDATE files SET embedded = ? WHERE id IN ({placeholders})", [val] + ids)
+        await db.commit()
+    await execute_write(do_update, file_ids, 1 if embedded else 0)
+
+
 async def fetch_embedding(embed_url: str, image_bytes: bytes, path: str = "") -> list[float] | None:
     """Send image bytes to the embedding service, return the vector.
 
@@ -315,7 +336,7 @@ async def fetch_document_embeddings(
 
 
 async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
-    """Embed a single document/text file — runs as a queued operation."""
+    """Embed a single file — image or document — runs as a queued operation."""
     from file_hunter.services.content_proxy import fetch_agent_bytes
     from file_hunter.ws.scan import broadcast
 
@@ -324,6 +345,7 @@ async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
     full_path = params["path"]
     location_id = params["location_id"]
     embed_url = params["embed_url"]
+    embed_type = params.get("type", "document")
 
     await broadcast({
         "type": "embed_started",
@@ -341,52 +363,89 @@ async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
         })
         return
 
-    try:
-        chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
-    except ConnectionError:
+    if embed_type == "image":
+        try:
+            embedding = await fetch_embedding(embed_url, file_bytes, full_path)
+        except ConnectionError:
+            await broadcast({
+                "type": "embed_completed",
+                "fileId": file_id,
+                "filename": filename,
+                "error": "Embedding service unavailable",
+            })
+            return
+        if embedding is None:
+            await broadcast({
+                "type": "embed_completed",
+                "fileId": file_id,
+                "filename": filename,
+                "error": "Could not generate image embedding",
+            })
+            return
+
+        collection = get_collection()
+        collection.upsert(
+            ids=[str(file_id)],
+            embeddings=[embedding],
+            documents=[full_path],
+            metadatas=[{"file_id": file_id, "location_id": location_id}],
+        )
+        await mark_embedded(file_id, True)
+        logger.info("Embedded image %s", filename)
         await broadcast({
             "type": "embed_completed",
             "fileId": file_id,
             "filename": filename,
-            "error": "Embedding service unavailable",
+            "chunks": 1,
         })
-        return
-    if chunks is None or len(chunks) == 0:
+    else:
+        try:
+            chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
+        except ConnectionError:
+            await broadcast({
+                "type": "embed_completed",
+                "fileId": file_id,
+                "filename": filename,
+                "error": "Embedding service unavailable",
+            })
+            return
+        if chunks is None or len(chunks) == 0:
+            await broadcast({
+                "type": "embed_completed",
+                "fileId": file_id,
+                "filename": filename,
+                "error": "No content could be extracted",
+            })
+            return
+
+        collection = get_document_collection()
+        chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
+        embeddings = [c["embedding"] for c in chunks]
+        documents = [c["text"] for c in chunks]
+        metadatas = [
+            {
+                "file_id": file_id,
+                "location_id": location_id,
+                "chunk_index": i,
+                "meta": c.get("meta", ""),
+            }
+            for i, c in enumerate(chunks)
+        ]
+        collection.upsert(
+            ids=chunk_ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
+        await mark_embedded(file_id, True)
+
+        logger.info("Embedded %s: %d chunks", filename, len(chunks))
         await broadcast({
             "type": "embed_completed",
             "fileId": file_id,
             "filename": filename,
-            "error": "No content could be extracted",
+            "chunks": len(chunks),
         })
-        return
-
-    collection = get_document_collection()
-    chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
-    embeddings = [c["embedding"] for c in chunks]
-    documents = [c["text"] for c in chunks]
-    metadatas = [
-        {
-            "file_id": file_id,
-            "location_id": location_id,
-            "chunk_index": i,
-            "meta": c.get("meta", ""),
-        }
-        for i, c in enumerate(chunks)
-    ]
-    collection.upsert(
-        ids=chunk_ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas,
-    )
-
-    logger.info("Embedded %s: %d chunks", filename, len(chunks))
-    await broadcast({
-        "type": "embed_completed",
-        "fileId": file_id,
-        "filename": filename,
-        "chunks": len(chunks),
-    })
 
 
 async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
@@ -435,14 +494,14 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             if scan_path == root_path:
                 rows = await db.execute_fetchall(
                     f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low, file_size FROM files "
-                    f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0",
+                    f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0 AND embedded = 0",
                     [location_id] + type_params,
                 )
             else:
                 prefix = scan_path.rstrip("/") + "/"
                 rows = await db.execute_fetchall(
                     f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low, file_size FROM files "
-                    f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0 "
+                    f"WHERE location_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0 AND embedded = 0 "
                     f"AND (full_path = ? OR full_path LIKE ?)",
                     [location_id] + type_params + [scan_path, prefix + "%"],
                 )
@@ -451,28 +510,28 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             if folder_id:
                 rows = await db.execute_fetchall(
                     f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low, file_size FROM files "
-                    f"WHERE folder_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0",
+                    f"WHERE folder_id = ? AND file_type_high IN ({type_placeholders}) AND stale = 0 AND embedded = 0",
                     [folder_id] + type_params,
                 )
             else:
                 rows = await db.execute_fetchall(
                     f"SELECT id, full_path, filename, location_id, file_type_high, file_type_low, file_size FROM files "
                     f"WHERE location_id = ? AND folder_id IS NULL "
-                    f"AND file_type_high IN ({type_placeholders}) AND stale = 0",
+                    f"AND file_type_high IN ({type_placeholders}) AND stale = 0 AND embedded = 0",
                     [location_id] + type_params,
                 )
 
-    image_rows = [r for r in rows if r["file_type_high"] == "image"
-                  and (r["file_type_low"] or "") in _EMBEDDABLE_IMAGE_SUBTYPES
-                  and (r["file_size"] or 0) >= _MIN_IMAGE_SIZE]
-    doc_rows = [r for r in rows if r["file_type_high"] in ("document", "text")]
-    total = len(rows)
+    images_to_process = [r for r in rows if r["file_type_high"] == "image"
+                         and (r["file_type_low"] or "") in _EMBEDDABLE_IMAGE_SUBTYPES
+                         and (r["file_size"] or 0) >= _MIN_IMAGE_SIZE]
+    docs_to_process = [r for r in rows if r["file_type_high"] in ("document", "text")]
+    to_process_count = len(images_to_process) + len(docs_to_process)
     logger.info(
         "Similarity scan: %d files (%d images, %d documents) in %s",
-        total, len(image_rows), len(doc_rows), location_name,
+        to_process_count, len(images_to_process), len(docs_to_process), location_name,
     )
 
-    if total == 0:
+    if to_process_count == 0:
         await broadcast({
             "type": "scan_completed",
             "locationId": location_id,
@@ -484,50 +543,19 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     img_collection = get_collection()
     doc_collection = get_document_collection()
 
-    # Check which files are already indexed
-    def _get_existing(collection, file_ids):
-        existing = set()
-        for i in range(0, len(file_ids), 500):
-            batch = file_ids[i : i + 500]
-            try:
-                result = collection.get(ids=batch)
-                existing.update(result["ids"])
-            except Exception:
-                pass
-        return existing
-
-    img_ids = [str(r["id"]) for r in image_rows]
-    img_existing = _get_existing(img_collection, img_ids) if img_ids else set()
-    # For documents, chunk IDs are "fileId_chunkN" — check by file ID prefix
-    doc_ids = [str(r["id"]) for r in doc_rows]
-    doc_existing = set()
-    for fid in doc_ids:
-        try:
-            result = doc_collection.get(where={"file_id": int(fid)}, limit=1)
-            if result["ids"]:
-                doc_existing.add(fid)
-        except Exception:
-            pass
-
-    images_to_process = [r for r in image_rows if str(r["id"]) not in img_existing]
-    docs_to_process = [r for r in doc_rows if str(r["id"]) not in doc_existing]
-    to_process_count = len(images_to_process) + len(docs_to_process)
-    skipped = total - to_process_count
-    if skipped:
-        logger.info("Similarity scan: %d already indexed, %d to process", skipped, to_process_count)
-
     done = 0
     errors = 0
     _BATCH_SIZE = 100
 
     # Process images — accumulate and upsert in batches
     batch_ids = []
+    batch_file_ids = []
     batch_embeddings = []
     batch_documents = []
     batch_metadatas = []
 
-    def _flush_img_batch():
-        nonlocal batch_ids, batch_embeddings, batch_documents, batch_metadatas
+    async def _flush_img_batch():
+        nonlocal batch_ids, batch_file_ids, batch_embeddings, batch_documents, batch_metadatas
         if not batch_ids:
             return
         try:
@@ -537,9 +565,11 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
                 documents=batch_documents,
                 metadatas=batch_metadatas,
             )
+            await mark_embedded_batch(batch_file_ids, True)
         except Exception as e:
             logger.warning("ChromaDB batch upsert failed (%d images): %s", len(batch_ids), e)
         batch_ids = []
+        batch_file_ids = []
         batch_embeddings = []
         batch_documents = []
         batch_metadatas = []
@@ -558,7 +588,7 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             embedding = await fetch_embedding(embed_url, file_bytes, full_path)
         except ConnectionError:
             logger.warning("Embedding service unavailable — aborting scan")
-            _flush_img_batch()
+            await _flush_img_batch()
             await broadcast({
                 "type": "scan_completed",
                 "locationId": location_id,
@@ -572,12 +602,13 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             continue
 
         batch_ids.append(str(file_id))
+        batch_file_ids.append(file_id)
         batch_embeddings.append(embedding)
         batch_documents.append(full_path)
         batch_metadatas.append({"file_id": file_id, "location_id": location_id})
 
         if len(batch_ids) >= _BATCH_SIZE:
-            _flush_img_batch()
+            await _flush_img_batch()
 
         done += 1
         if done % 10 == 0 or done == to_process_count:
@@ -586,11 +617,11 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
                 "locationId": location_id,
                 "location": scan_label,
                 "phase": "cataloging",
-                "catalogDone": done + skipped,
-                "catalogTotal": total,
+                "catalogDone": done,
+                "catalogTotal": to_process_count,
             })
 
-    _flush_img_batch()
+    await _flush_img_batch()
 
     # Process documents — already batched per file (multiple chunks per upsert)
     for row in docs_to_process:
@@ -639,6 +670,7 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
                 documents=documents,
                 metadatas=metadatas,
             )
+            await mark_embedded(file_id, True)
         except Exception as e:
             logger.warning("ChromaDB upsert failed for document %d: %s", file_id, e)
             errors += 1
@@ -650,17 +682,17 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
                 "locationId": location_id,
                 "location": scan_label,
                 "phase": "cataloging",
-                "catalogDone": done + skipped,
-                "catalogTotal": total,
+                "catalogDone": done,
+                "catalogTotal": to_process_count,
             })
 
     logger.info(
-        "Similarity scan complete: %d indexed, %d skipped, %d errors",
-        done - errors, skipped, errors,
+        "Similarity scan complete: %d indexed, %d errors",
+        done - errors, errors,
     )
     await broadcast({
         "type": "scan_completed",
         "locationId": location_id,
         "location": scan_label,
-        "filesFound": done - errors + skipped,
+        "filesFound": done - errors,
     })

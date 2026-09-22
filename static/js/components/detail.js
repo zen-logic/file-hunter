@@ -940,9 +940,10 @@ const Detail = {
         const rawConvertLabel = detail.rawConvertStatus === 'converting' ? 'Converting…' : detail.rawConvertStatus === 'queued' ? 'Queued' : 'Convert to JPEG';
         const rawConvertDisabled = detail.rawConvertStatus ? ' disabled' : '';
         const rawConvertBtn = detail.canRawConvert && detail.online && !hasPendingOp ? `<button class="btn btn-sm" id="detail-rawconvert" style="margin-top:0.4rem"${rawConvertDisabled}>${rawConvertLabel}</button>` : '';
-        const embeddableTypes = ['document', 'text'];
-        const embedBtn = this.similarityEnabled && detail.id && detail.online && !detail.stale && !hasPendingOp && embeddableTypes.includes((detail.typeHigh || '').toLowerCase())
-            ? `<button class="btn btn-sm" id="detail-embed" style="margin-top:0.4rem">Embed</button>` : '';
+        const embeddableTypes = ['document', 'text', 'image'];
+        const isEmbeddable = this.similarityEnabled && detail.id && detail.online && !detail.stale && !hasPendingOp && embeddableTypes.includes((detail.typeHigh || '').toLowerCase());
+        const embedBtn = isEmbeddable
+            ? `<button class="btn btn-sm" id="detail-embed" style="margin-top:0.4rem">${detail.embedded ? 'Remove Embedding' : 'Embed'}</button>` : '';
         const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn || rawConvertBtn || embedBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}${rawConvertBtn}${embedBtn}<span id="detail-file-slideshow-slot"></span>${ignoreFileBtn}${deleteFileBtn}</div>` : '';
 
         let html = `

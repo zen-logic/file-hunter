@@ -52,6 +52,7 @@ from file_hunter.routes.files import (
     file_transcode,
     file_raw_convert,
     file_embed,
+    file_unembed,
     delete_embeddings,
 )
 from file_hunter.routes.search import (
@@ -329,6 +330,7 @@ app = Starlette(
         Route("/api/files/{id:int}/transcode", file_transcode, methods=["POST"]),
         Route("/api/files/{id:int}/rawconvert", file_raw_convert, methods=["POST"]),
         Route("/api/files/{id:int}/embed", file_embed, methods=["POST"]),
+        Route("/api/files/{id:int}/unembed", file_unembed, methods=["POST"]),
         Route("/api/embeddings/delete", delete_embeddings, methods=["POST"]),
         Route("/api/files/{id:int}", file_delete, methods=["DELETE"]),
         Route("/api/folders", create_new_folder, methods=["POST"]),

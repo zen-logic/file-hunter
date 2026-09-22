@@ -293,9 +293,19 @@ function wireEmbedBtn() {
     const btn = document.getElementById('detail-embed');
     if (btn && selectedFile) {
         btn.addEventListener('click', async () => {
-            const res = await API.post(`/api/files/${selectedFile.id}/embed`);
-            if (!res.ok) {
-                Toast.error(res.error || 'Embedding failed to start.');
+            if (Detail.lastDetail && Detail.lastDetail.embedded) {
+                const res = await API.post(`/api/files/${selectedFile.id}/unembed`);
+                if (res.ok) {
+                    Detail.lastDetail.embedded = false;
+                    btn.textContent = 'Embed';
+                } else {
+                    Toast.error(res.error || 'Failed to remove embedding.');
+                }
+            } else {
+                const res = await API.post(`/api/files/${selectedFile.id}/embed`);
+                if (!res.ok) {
+                    Toast.error(res.error || 'Embedding failed to start.');
+                }
             }
         });
     }
@@ -2441,6 +2451,12 @@ WS.on('embed_completed', (msg) => {
     } else {
         ActivityLog.add(`Embedded: <b>${msg.filename}</b> (${msg.chunks} chunks)`);
         Toast.success(`Embedded: ${msg.filename} (${msg.chunks} chunks)`);
+        // Update embed button if this file is currently selected
+        if (Detail.lastDetail && Detail.lastDetail.id === msg.fileId) {
+            Detail.lastDetail.embedded = true;
+            const btn = document.getElementById('detail-embed');
+            if (btn) btn.textContent = 'Remove Embedding';
+        }
     }
 });
 

@@ -1048,7 +1048,7 @@ async def file_raw_convert(request: Request):
 
 
 async def file_embed(request: Request):
-    """POST /api/files/{id}/embed — queue embedding for a single document/text file."""
+    """POST /api/files/{id}/embed — queue embedding for a single file (image or document)."""
     from file_hunter.services.similarity import is_chromadb_available
     from file_hunter.services.agent_ops import _get_agent_id
     from file_hunter.services.queue_manager import enqueue
@@ -1065,7 +1065,7 @@ async def file_embed(request: Request):
             return json_error("Embedding service URL not configured.", 400)
 
         row = await db.execute_fetchall(
-            "SELECT filename, full_path, location_id, file_type_high FROM files WHERE id = ?",
+            "SELECT filename, full_path, location_id, file_type_high, file_type_low FROM files WHERE id = ?",
             (file_id,),
         )
     if not row:
@@ -1073,7 +1073,11 @@ async def file_embed(request: Request):
 
     f = row[0]
     type_high = (f["file_type_high"] or "").lower()
-    if type_high not in ("document", "text"):
+    if type_high == "image":
+        embed_type = "image"
+    elif type_high in ("document", "text"):
+        embed_type = "document"
+    else:
         return json_error("File type not supported for embedding.", 400)
 
     agent_id = await _get_agent_id(f["location_id"])
@@ -1083,9 +1087,24 @@ async def file_embed(request: Request):
         "path": f["full_path"],
         "location_id": f["location_id"],
         "embed_url": embed_url,
+        "type": embed_type,
     })
     return json_ok({"started": True, "op_id": op_id})
 
+
+async def file_unembed(request: Request):
+    """POST /api/files/{id}/unembed — remove embedding for a single file."""
+    from file_hunter.services.similarity import (
+        is_chromadb_available, remove_embeddings, mark_embedded,
+    )
+
+    if not is_chromadb_available():
+        return json_error("Similarity search is not available.", 400)
+
+    file_id = int(request.path_params["id"])
+    remove_embeddings([file_id])
+    await mark_embedded(file_id, False)
+    return json_ok({"removed": True})
 
 
 async def delete_embeddings(request: Request):
@@ -1141,12 +1160,14 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
 
     def _delete():
         deleted = 0
+        affected = []
         if embed_type == "image":
             img_coll = get_collection()
             if location_id:
                 try:
                     result = img_coll.get(where={"location_id": int(location_id)}, include=[])
                     if result["ids"]:
+                        affected = [int(x) for x in result["ids"]]
                         for i in range(0, len(result["ids"]), 500):
                             img_coll.delete(ids=result["ids"][i : i + 500])
                         deleted = len(result["ids"])
@@ -1159,6 +1180,7 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
                     try:
                         result = img_coll.get(ids=batch, include=[])
                         if result["ids"]:
+                            affected.extend(int(x) for x in result["ids"])
                             img_coll.delete(ids=result["ids"])
                             deleted += len(result["ids"])
                     except Exception:
@@ -1170,6 +1192,7 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
                     result = doc_coll.get(where={"location_id": int(location_id)}, include=["metadatas"])
                     if result["ids"]:
                         doc_fids = {m["file_id"] for m in result["metadatas"]}
+                        affected = list(doc_fids)
                         for i in range(0, len(result["ids"]), 500):
                             doc_coll.delete(ids=result["ids"][i : i + 500])
                         deleted = len(doc_fids)
@@ -1183,15 +1206,19 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
                         result = doc_coll.get(where={"file_id": {"$in": batch}}, include=[])
                         if result["ids"]:
                             for cid in result["ids"]:
-                                doc_fids.add(cid.split("_chunk")[0])
+                                doc_fids.add(int(cid.split("_chunk")[0]))
                             doc_coll.delete(ids=result["ids"])
                     except Exception:
                         pass
+                affected = list(doc_fids)
                 deleted = len(doc_fids)
-        return deleted
+        return deleted, affected
 
     try:
-        deleted = await asyncio.to_thread(_delete)
+        deleted, affected_ids = await asyncio.to_thread(_delete)
+        if affected_ids:
+            from file_hunter.services.similarity import mark_embedded_batch
+            await mark_embedded_batch(affected_ids, False)
         logger.info("Deleted %d %s embeddings for %s",
                     deleted, embed_type, scope_label)
         await broadcast({
