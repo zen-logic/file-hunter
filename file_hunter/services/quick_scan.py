@@ -31,7 +31,7 @@ from file_hunter.services.dup_counts import (
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 from file_hunter_core.classify import classify_file
-from file_hunter_core.paths import norm_inode
+from file_hunter_core.paths import norm_inode, safe_timestamp
 
 logger = logging.getLogger("file_hunter")
 
@@ -185,7 +185,7 @@ async def run_quick_scan(
                 (folder_id,),
             )
             cat_files = await db.execute_fetchall(
-                "SELECT id, filename, rel_path, file_size, file_type_high, hidden, stale FROM files WHERE folder_id = ?",
+                "SELECT id, filename, rel_path, file_size, modified_date, file_type_high, hidden, stale FROM files WHERE folder_id = ?",
                 (folder_id,),
             )
         else:
@@ -194,7 +194,7 @@ async def run_quick_scan(
                 (location_id,),
             )
             cat_files = await db.execute_fetchall(
-                "SELECT id, filename, rel_path, file_size, file_type_high, hidden, stale FROM files WHERE location_id = ? AND folder_id IS NULL",
+                "SELECT id, filename, rel_path, file_size, modified_date, file_type_high, hidden, stale FROM files WHERE location_id = ? AND folder_id IS NULL",
                 (location_id,),
             )
 
@@ -216,9 +216,16 @@ async def run_quick_scan(
         n for n in cat_file_names
         if n in disk_files and cat_file_names[n]["stale"]
     )
+    has_changed_files = any(
+        n for n in disk_files
+        if n in cat_file_names and not cat_file_names[n]["stale"]
+        and (disk_files[n]["size"] != cat_file_names[n]["file_size"]
+             or safe_timestamp(disk_files[n]["mtime"], n) != cat_file_names[n]["modified_date"])
+    )
     has_changes = (
         has_new_folders or has_missing_folders
         or has_new_files or has_missing_files or has_recovered
+        or has_changed_files
     )
 
     if silent and not has_changes:
@@ -243,10 +250,12 @@ async def run_quick_scan(
 
         new_folders = 0
         new_files = 0
+        changed_files = 0
         stale_folders = 0
         stale_files = 0
         recovered_files = 0
         new_file_ids = []
+        changed_file_ids = []
         recovered_file_ids = []
         stats_added = []  # (folder_id, file_size, file_type_high, is_hidden)
         stats_removed = []  # (folder_id, file_size, file_type_high, is_hidden)
@@ -343,8 +352,8 @@ async def run_quick_scan(
                             type_high,
                             type_low,
                             info["size"],
-                            now_iso,
-                            now_iso,
+                            safe_timestamp(info["ctime"], rel) if info.get("ctime") else now_iso,
+                            safe_timestamp(info["mtime"], rel) if info.get("mtime") else now_iso,
                             now_iso,
                             now_iso,
                             is_hidden,
@@ -357,11 +366,15 @@ async def run_quick_scan(
                     stats_added.append((folder_id, info["size"], type_high, is_hidden))
                 else:
                     cat = cat_file_names[name]
+                    rel = os.path.join(parent_rel, name) if parent_rel else name
                     # Recover stale files that are back
                     if cat["stale"]:
+                        mtime_iso = safe_timestamp(info["mtime"], rel) if info.get("mtime") else now_iso
+                        ctime_iso = safe_timestamp(info["ctime"], rel) if info.get("ctime") else now_iso
                         await db.execute(
-                            "UPDATE files SET stale = 0, file_size = ?, date_last_seen = ? WHERE id = ?",
-                            (info["size"], now_iso, cat["id"]),
+                            "UPDATE files SET stale = 0, file_size = ?, "
+                            "created_date = ?, modified_date = ?, date_last_seen = ? WHERE id = ?",
+                            (info["size"], ctime_iso, mtime_iso, now_iso, cat["id"]),
                         )
                         recovered_files += 1
                         recovered_file_ids.append(cat["id"])
@@ -373,6 +386,25 @@ async def run_quick_scan(
                                 cat["hidden"],
                             )
                         )
+                    else:
+                        # Detect changed files — size or mtime differs
+                        disk_mtime = safe_timestamp(info["mtime"], rel) if info.get("mtime") else None
+                        if (info["size"] != cat["file_size"]
+                                or (disk_mtime and disk_mtime != cat["modified_date"])):
+                            await db.execute(
+                                "UPDATE files SET file_size = ?, modified_date = ?, "
+                                "date_last_seen = ? WHERE id = ?",
+                                (info["size"], disk_mtime or now_iso, now_iso, cat["id"]),
+                            )
+                            changed_files += 1
+                            changed_file_ids.append(cat["id"])
+                            # Stats delta: remove old size, add new size
+                            stats_removed.append(
+                                (folder_id, cat["file_size"] or 0, cat["file_type_high"], cat["hidden"])
+                            )
+                            stats_added.append(
+                                (folder_id, info["size"], cat["file_type_high"], cat["hidden"])
+                            )
                     # Reclassify if the type map has changed
                     type_high, type_low = classify_file(name)
                     if type_high != cat["file_type_high"]:
@@ -428,8 +460,15 @@ async def run_quick_scan(
         )
         new_file_ids.extend(recovery_ids)
 
-        # Dup processing for new + recovered files
-        affected_ids = new_file_ids + recovered_file_ids
+        # Re-hash changed files
+        if changed_file_ids:
+            activity_update(act_name, progress=f"hashing {len(changed_file_ids)} changed files")
+            await _hash_new_files_partial(
+                changed_file_ids, location_id, agent_id, root_path
+            )
+
+        # Dup processing for new + changed + recovered files
+        affected_ids = new_file_ids + changed_file_ids + recovered_file_ids
         if affected_ids:
             await post_ingest_dup_processing(
                 location_id,
@@ -456,10 +495,11 @@ async def run_quick_scan(
 
         logger.info(
             "Quick scan complete: %s — %d new folders, %d new files, "
-            "%d stale folders, %d stale files, %d recovered",
+            "%d changed, %d stale folders, %d stale files, %d recovered",
             label,
             new_folders,
             new_files,
+            changed_files,
             stale_folders,
             stale_files,
             recovered_files,
@@ -473,6 +513,7 @@ async def run_quick_scan(
                 "quickScan": True,
                 "newFolders": new_folders,
                 "newFiles": new_files,
+                "changedFiles": changed_files,
                 "staleFolders": stale_folders,
                 "staleFiles": stale_files,
                 "recoveredFiles": recovered_files,
@@ -482,6 +523,7 @@ async def run_quick_scan(
         return {
             "new_folders": new_folders,
             "new_files": new_files,
+            "changed_files": changed_files,
             "stale_folders": stale_folders,
             "stale_files": stale_files,
             "recovered_files": recovered_files,

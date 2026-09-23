@@ -572,6 +572,19 @@ function startApp(user) {
         if (e.target.id === 'settings-modal') Settings.close();
     });
 
+    // Scan warnings dialog
+    const scanWarningsModal = document.getElementById('scan-warnings-modal');
+    const closeScanWarnings = () => scanWarningsModal.classList.add('hidden');
+    document.getElementById('scan-warnings-close').addEventListener('click', closeScanWarnings);
+    scanWarningsModal.addEventListener('click', (e) => {
+        if (e.target === scanWarningsModal) closeScanWarnings();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !scanWarningsModal.classList.contains('hidden')) {
+            closeScanWarnings();
+        }
+    });
+
     // Apply server name to title + check similarity availability
     API.get('/api/settings').then(res => {
         if (res.ok && res.data.serverName) {
@@ -1853,6 +1866,7 @@ WS.on('scan_completed', async (msg) => {
     if (msg.quickScan) {
         const parts = [];
         if (msg.newFiles) parts.push(`${msg.newFiles} new`);
+        if (msg.changedFiles) parts.push(`${msg.changedFiles} changed`);
         if (msg.staleFiles) parts.push(`${msg.staleFiles} stale`);
         if (msg.newFolders) parts.push(`${msg.newFolders} new folders`);
         if (msg.recoveredFiles) parts.push(`${msg.recoveredFiles} recovered`);
@@ -1872,6 +1886,19 @@ WS.on('scan_completed', async (msg) => {
     if (selectedNode) await FileList.refreshFolder();
     await StatusBar.loadStats();
     await Detail.refreshStats();
+
+    // Show warnings dialog if the scan reported any
+    const warnings = msg.warnings || [];
+    if (warnings.length > 0) {
+        const overlay = document.getElementById('scan-warnings-modal');
+        const summary = document.getElementById('scan-warnings-summary');
+        const list = document.getElementById('scan-warnings-list');
+        summary.textContent = `${msg.location} — ${warnings.length} warning${warnings.length === 1 ? '' : 's'}`;
+        list.innerHTML = warnings.map(w =>
+            `<div class="scan-warning-line">${w.path}<br><span class="settings-hint">${w.message}</span></div>`
+        ).join('');
+        overlay.classList.remove('hidden');
+    }
 });
 
 WS.on('scan_finalizing', (msg) => {

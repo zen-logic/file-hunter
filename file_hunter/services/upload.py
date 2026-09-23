@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
+from file_hunter_core.paths import safe_timestamp
 from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import hashes_writer, read_hashes
 from file_hunter.helpers import post_op_stats
@@ -104,13 +105,9 @@ async def run_upload(
             # otherwise fall back to the on-disk mtime
             original_mtime = sf.get("mtime")
             if original_mtime:
-                modified = datetime.fromtimestamp(
-                    original_mtime, tz=timezone.utc
-                ).isoformat(timespec="seconds")
+                modified = safe_timestamp(original_mtime, sf["filename"])
             elif st:
-                modified = datetime.fromtimestamp(
-                    st["mtime"], tz=timezone.utc
-                ).isoformat(timespec="seconds")
+                modified = safe_timestamp(st["mtime"], sf["filename"])
             else:
                 modified = now_iso
             created = modified

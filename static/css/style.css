@@ -2699,6 +2699,22 @@ select.modal-input {
     border-top: 1px solid var(--color-border);
 }
 
+.scan-warnings-list {
+    margin-top: 0.75rem;
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+}
+
+.scan-warning-line {
+    padding: 0.25rem 0;
+    word-break: break-all;
+}
+
+.scan-warning-line + .scan-warning-line {
+    border-top: 1px solid var(--color-border);
+}
+
 .import-progress-bar {
     height: 6px;
     background: var(--color-progress-track);

@@ -355,7 +355,7 @@ async def _handle_transcode_complete(agent_id: int, msg: dict):
     from file_hunter.core import classify_file
     from file_hunter.helpers import post_op_stats
     from file_hunter.stats_db import update_stats_for_files
-    from file_hunter_core.paths import norm_inode
+    from file_hunter_core.paths import norm_inode, safe_timestamp
 
     output_path = msg.get("output", "")
     filename = msg.get("filename", "")
@@ -399,8 +399,8 @@ async def _handle_transcode_complete(agent_id: int, msg: dict):
 
     file_type_high, file_type_low = classify_file(filename)
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    mtime_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(timespec="seconds") if mtime else now_iso
-    ctime_iso = datetime.fromtimestamp(ctime, tz=timezone.utc).isoformat(timespec="seconds") if ctime else now_iso
+    mtime_iso = safe_timestamp(mtime, rel_path) if mtime else now_iso
+    ctime_iso = safe_timestamp(ctime, rel_path) if ctime else now_iso
 
     async def _insert(conn):
         cursor = await conn.execute(
@@ -489,7 +489,7 @@ async def _handle_rawconvert_complete(agent_id: int, msg: dict):
     from file_hunter.core import classify_file
     from file_hunter.helpers import post_op_stats
     from file_hunter.stats_db import update_stats_for_files
-    from file_hunter_core.paths import norm_inode
+    from file_hunter_core.paths import norm_inode, safe_timestamp
 
     output_path = msg.get("output", "")
     filename = msg.get("filename", "")
@@ -532,8 +532,8 @@ async def _handle_rawconvert_complete(agent_id: int, msg: dict):
 
     file_type_high, file_type_low = classify_file(filename)
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    mtime_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(timespec="seconds") if mtime else now_iso
-    ctime_iso = datetime.fromtimestamp(ctime, tz=timezone.utc).isoformat(timespec="seconds") if ctime else now_iso
+    mtime_iso = safe_timestamp(mtime, rel_path) if mtime else now_iso
+    ctime_iso = safe_timestamp(ctime, rel_path) if ctime else now_iso
 
     async def _insert(conn):
         cursor = await conn.execute(

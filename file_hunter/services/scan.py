@@ -199,6 +199,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
     files_new = 0
     candidates_total = 0
     stale_count = 0
+    scan_warnings: list[dict] = []
 
     try:
         if is_rescan:
@@ -211,7 +212,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             )
 
             # --- Phase 1: stream metadata only into temp DB ---
-            files_found, dirs_found = await _stream_to_temp_db(
+            files_found, dirs_found, scan_warnings = await _stream_to_temp_db(
                 tmp_path,
                 agent_id,
                 root_path,
@@ -287,7 +288,7 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             )
 
             # --- Phase 1: stream metadata + hashes into temp DB ---
-            files_found, dirs_found = await _stream_to_temp_db(
+            files_found, dirs_found, scan_warnings = await _stream_to_temp_db(
                 tmp_path,
                 agent_id,
                 root_path,
@@ -408,19 +409,20 @@ async def run_scan(op_id: int, agent_id: int, params: dict):
             final_dup_count = (loc_stats[0]["duplicate_count"] or 0) if loc_stats else 0
             final_total_size = (loc_stats[0]["total_size"] or 0) if loc_stats else 0
 
-        await broadcast(
-            {
-                "type": "scan_completed",
-                "locationId": location_id,
-                "location": location_name,
-                "filesFound": files_found,
-                "filesHashed": candidates_total,
-                "filesNew": files_new,
-                "staleFiles": stale_count,
-                "duplicatesFound": final_dup_count,
-                "totalSize": final_total_size,
-            }
-        )
+        completed_msg = {
+            "type": "scan_completed",
+            "locationId": location_id,
+            "location": location_name,
+            "filesFound": files_found,
+            "filesHashed": candidates_total,
+            "filesNew": files_new,
+            "staleFiles": stale_count,
+            "duplicatesFound": final_dup_count,
+            "totalSize": final_total_size,
+        }
+        if scan_warnings:
+            completed_msg["warnings"] = scan_warnings
+        await broadcast(completed_msg)
 
         # Success — clean up temp DB
         try:
@@ -545,7 +547,8 @@ async def _stream_to_temp_db(
             Used by rescan path (hashing is done separately in _diff_and_update).
 
     Returns:
-        tuple[int, int]: (total_files, total_dirs) captured in the temp DB.
+        tuple[int, int, list[dict]]: (total_files, total_dirs, warnings)
+        captured in the temp DB.
 
     Side effects:
         - File I/O: creates a SQLite DB at tmp_path with ``files`` and ``dirs`` tables.
@@ -589,6 +592,7 @@ async def _stream_to_temp_db(
     hash_phase = False
     hashes_total = 0
     hash_batch: list[tuple] = []
+    warnings: list[dict] = []
 
     async for record in stream_tree(
         agent_id, root_path, prefix=prefix, metadata_only=metadata_only
@@ -654,6 +658,13 @@ async def _stream_to_temp_db(
                 tmp_db.commit()
                 hash_batch.clear()
 
+        elif rtype == "warning":
+            warnings.append({"path": record["path"], "message": record["message"]})
+            await broadcast({
+                "type": "activity",
+                "message": f"Warning: {record['path']} — {record['message']}",
+            })
+
         elif rtype == "error":
             raise RuntimeError(f"Agent error during scan: {record['message']}")
 
@@ -716,7 +727,7 @@ async def _stream_to_temp_db(
     tmp_db.commit()
     tmp_db.close()
 
-    return total_files, total_dirs
+    return total_files, total_dirs, warnings
 
 
 async def _bulk_ingest(
