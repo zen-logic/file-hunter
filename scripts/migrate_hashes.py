@@ -13,9 +13,12 @@ Defaults:
 """
 
 import argparse
+import os
 import sqlite3
 import sys
 import time
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def migrate(catalog_path: str, hashes_path: str):
@@ -195,13 +198,13 @@ def main():
     )
     parser.add_argument(
         "--catalog",
-        default="data/file_hunter.db",
-        help="Path to catalog DB (default: data/file_hunter.db)",
+        default=os.path.join(_ROOT, "data", "file_hunter.db"),
+        help="Path to catalog DB",
     )
     parser.add_argument(
         "--hashes",
-        default="data/hashes.db",
-        help="Path to hashes DB (default: data/hashes.db)",
+        default=os.path.join(_ROOT, "data", "hashes.db"),
+        help="Path to hashes DB",
     )
     args = parser.parse_args()
 

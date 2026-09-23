@@ -7,9 +7,12 @@ Usage:
 
 import argparse
 import json
+import os
 import sqlite3
 import time
 from collections import Counter, defaultdict
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def recalculate(data_path: str, location_ids: list[int]):
@@ -225,7 +228,7 @@ def recalculate(data_path: str, location_ids: list[int]):
 def main():
     parser = argparse.ArgumentParser(description="Recalculate location stats")
     parser.add_argument("--locations", required=True, help="Comma-separated location IDs")
-    parser.add_argument("--data", default="data", help="Path to data directory")
+    parser.add_argument("--data", default=os.path.join(_ROOT, "data"), help="Path to data directory")
     args = parser.parse_args()
 
     location_ids = [int(x.strip()) for x in args.locations.split(",")]

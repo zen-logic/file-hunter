@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """One-time backport: set embedded=1 for files already in ChromaDB."""
 
+import os
 import sqlite3
 import chromadb
 
-cat = sqlite3.connect("data/file_hunter.db")
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+cat = sqlite3.connect(os.path.join(_ROOT, "data", "file_hunter.db"))
 cat.execute("PRAGMA journal_mode=WAL")
-client = chromadb.PersistentClient(path="data/similarity")
+client = chromadb.PersistentClient(path=os.path.join(_ROOT, "data", "similarity"))
 
 file_ids = set()
 
