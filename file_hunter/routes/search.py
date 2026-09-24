@@ -1,11 +1,11 @@
 import json
 import logging
+import os
 
 from starlette.requests import Request
 from file_hunter.db import read_db, execute_write
 from file_hunter.core import json_ok, json_error
-
-logger = logging.getLogger("file_hunter")
+from file_hunter.helpers import resolve_target
 from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
 from file_hunter.services.search import (
     search_files,
@@ -13,6 +13,8 @@ from file_hunter.services.search import (
     search_by_hash,
     parse_conditions_from_params,
 )
+
+logger = logging.getLogger("file_hunter")
 
 
 async def search(request: Request):
@@ -348,12 +350,12 @@ async def similarity_search(request: Request):
     image_data = body.get("image_data")  # base64-encoded uploaded image
     threshold = body.get("threshold", 0.3)
     location_ids = body.get("location_ids")  # list of ints, or None for all
-    scope_type = body.get("scopeType")
-    scope_id_raw = body.get("scopeId", "")
-    scope_id = scope_id_raw.split("-", 1)[-1] if isinstance(scope_id_raw, str) and "-" in scope_id_raw else scope_id_raw
+    # "Search within" — only sent when the checkbox is ticked
+    scope_id = body.get("scopeId") if body.get("scopeType") else None
 
     async with read_db() as db:
         embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
+        scope = await resolve_target(db, scope_id) if scope_id else None
     if not embed_url:
         return json_error("Embedding service URL not configured.", 400)
 
@@ -412,9 +414,16 @@ async def similarity_search(request: Request):
     if n_results == 0:
         return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
 
-    # Build ChromaDB where filter for location scoping
+    # Build ChromaDB filters. "Search within" scopes to the location, and for
+    # a folder to paths under it (an image's document is its full path);
+    # otherwise the location dropdown applies.
     where_filter = None
-    if location_ids and len(location_ids) == 1:
+    where_document = None
+    if scope:
+        where_filter = {"location_id": scope["location_id"]}
+        if scope["folder_id"]:
+            where_document = {"$contains": os.path.join(scope["abs_path"], "")}
+    elif location_ids and len(location_ids) == 1:
         where_filter = {"location_id": location_ids[0]}
     elif location_ids and len(location_ids) > 1:
         where_filter = {"location_id": {"$in": location_ids}}
@@ -424,6 +433,8 @@ async def similarity_search(request: Request):
     query_kwargs = {}
     if where_filter:
         query_kwargs["where"] = where_filter
+    if where_document:
+        query_kwargs["where_document"] = where_document
 
     if text_emb is not None:
         results = collection.query(
@@ -487,34 +498,17 @@ async def similarity_search(request: Request):
 
     matched_ids = [int(doc_id) for doc_id, _ in scored]
 
-    # Fetch file details from catalogue, with optional scope filter
+    # Fetch file details from catalogue
     placeholders = ",".join("?" for _ in matched_ids)
-    scope_prefix = ""
-    scope_clause = ""
-    cte_params = []
-    clause_params = []
-    if scope_type == "location" and scope_id:
-        scope_clause = " AND location_id = ?"
-        clause_params = [int(scope_id)]
-    elif scope_type == "folder" and scope_id:
-        scope_prefix = (
-            "WITH RECURSIVE descendants(id) AS ("
-            "  SELECT ? UNION ALL"
-            "  SELECT fo.id FROM folders fo JOIN descendants d ON fo.parent_id = d.id"
-            ") "
-        )
-        scope_clause = " AND folder_id IN (SELECT id FROM descendants)"
-        cte_params = [int(scope_id)]
-
     async with read_db() as db:
         rows = await db.execute_fetchall(
-            f"""{scope_prefix}SELECT id, filename AS name, file_type_high AS typeHigh,
+            f"""SELECT id, filename AS name, file_type_high AS typeHigh,
                        file_type_low AS typeLow, file_size AS size,
                        modified_date AS date, dup_count AS dups,
                        stale, location_id AS locationId,
                        full_path, hidden
-                FROM files WHERE id IN ({placeholders}){scope_clause}""",
-            cte_params + matched_ids + clause_params,
+                FROM files WHERE id IN ({placeholders})""",
+            matched_ids,
         )
 
     # Preserve score ranking order, cap results
