@@ -924,14 +924,21 @@ const FileList = {
     buildGalleryBadges(cell, file) {
         const marks = Triage.getMarks(file.id);
         const hasDups = file.type !== 'folder' && file.dups > 0 && file.size > 0;
+        const isFav = file.type === 'folder' && file.favourite;
         let badges = cell.querySelector('.gallery-badges');
-        if (marks.length > 0 || hasDups) {
+        if (marks.length > 0 || hasDups || isFav) {
             if (!badges) {
                 badges = document.createElement('div');
                 badges.className = 'gallery-badges';
                 cell.appendChild(badges);
             }
             badges.innerHTML = '';
+            if (isFav) {
+                const fav = document.createElement('span');
+                fav.className = 'triage-mark gallery-fav-mark';
+                fav.innerHTML = icons.heart;
+                badges.appendChild(fav);
+            }
             if (hasDups) {
                 const dup = document.createElement('span');
                 dup.className = 'dup-indicator';

@@ -1143,6 +1143,21 @@ body::after {
     background: var(--color-status-ok);
 }
 
+.gallery-fav-mark {
+    background: var(--color-primary);
+}
+
+/* Same specificity as .gallery-item.gallery-folder svg and later, so this
+   wins on size and colour. 0.9em at -0.1em puts the drawn heart on the
+   baseline at cap height, inside the letter badges' line box. */
+.gallery-item .gallery-fav-mark svg {
+    display: inline-block;
+    width: 0.9em;
+    height: 0.9em;
+    vertical-align: -0.1em;
+    color: inherit;
+}
+
 .detail-pending-banner {
     background: var(--color-pending-bg);
     color: var(--color-pending-text);
