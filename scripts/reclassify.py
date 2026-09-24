@@ -5,13 +5,26 @@ Run this after upgrading File Hunter if new file types have been added.
 Safe to run while the server is running (uses its own connection with WAL).
 
 Usage:
-    ./reclassify
-    ./reclassify --db /path/to/file_hunter.db
+    python scripts/reclassify.py
+    python scripts/reclassify.py --db /path/to/file_hunter.db
 """
 
 import argparse
 import asyncio
+import os
 import sys
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+
+
+def _default_db() -> str:
+    """The catalogue the server uses: config.json "database", relative to the
+    install root."""
+    from file_hunter.config import load_config
+
+    db_path = load_config().get("database", "file_hunter.db")
+    return db_path if os.path.isabs(db_path) else os.path.join(_ROOT, db_path)
 
 
 async def main(db_path: str):
@@ -24,7 +37,7 @@ async def main(db_path: str):
     try:
         from file_hunter_core.classify import _EXT_MAP
     except ImportError:
-        print("Error: file_hunter_core not found. Run from the file-hunter directory.")
+        print("Error: file_hunter_core not found.")
         sys.exit(1)
 
     conn = await aiosqlite.connect(db_path)
@@ -74,9 +87,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--db",
-        default="file_hunter.db",
-        help="Path to database (default: file_hunter.db)",
+        default=None,
+        help="Path to database (default: the server's, from config.json)",
     )
     args = parser.parse_args()
 
-    asyncio.run(main(args.db))
+    asyncio.run(main(args.db or _default_db()))
