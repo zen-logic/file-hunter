@@ -583,7 +583,13 @@ const FileList = {
         this.el.innerHTML = '<div class="detail-loading"><div class="detail-spinner"></div><span>Searching\u2026</span></div>';
     },
 
+    /** Similarity results arrive ranked with no search params - their order is the result. */
+    isSortable() {
+        return !(this.searchMode && !this.searchParams);
+    },
+
     toggleSort(key) {
+        if (!this.isSortable()) return;
         if (this.sortKey === key) {
             this.sortDir *= -1;
         } else {
@@ -984,6 +990,8 @@ const FileList = {
 
         const table = document.createElement('table');
         table.className = 'file-table';
+        const sortable = this.isSortable();
+        if (!sortable) table.classList.add('unsortable');
 
         // Build header with sort indicators
         const thead = document.createElement('thead');
@@ -1028,6 +1036,10 @@ const FileList = {
             if (col.width) th.style.width = col.width;
 
             th.textContent = col.label;
+            if (!sortable) {
+                headerRow.appendChild(th);
+                return;
+            }
             if (this.sortKey === col.key) {
                 th.classList.add('sort-active');
                 const arrow = document.createElement('span');

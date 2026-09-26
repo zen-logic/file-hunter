@@ -1623,7 +1623,8 @@ document.getElementById('similarity-go').addEventListener('click', async () => {
     FileList.showLoading();
     const res = await API.post('/api/search/similarity', payload);
     if (res.ok) {
-        FileList.showSearchResults(res.data, {});
+        // No search params: similarity results are ranked and complete, never refetched or sorted
+        FileList.showSearchResults(res.data, null);
         Detail.renderSearchResults(res.data, {});
     } else {
         FileList.renderEmpty();

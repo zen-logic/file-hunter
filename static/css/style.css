@@ -833,6 +833,14 @@ body::after {
     color: var(--color-text-dim);
 }
 
+.file-table.unsortable th {
+    cursor: default;
+}
+
+.file-table.unsortable th:hover {
+    color: var(--color-text-muted);
+}
+
 .file-table th.sort-active {
     color: var(--color-text);
 }
