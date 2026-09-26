@@ -80,7 +80,7 @@ async function refreshDetailPanel() {
             wireIgnoreFileBtn();
             wireTranscodeBtn();
             wireRawConvertBtn();
-            wireEmbedBtn();
+            wireEmbeddingBtns();
             wireFileSlideshowBtn(selectedFile);
         }
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
@@ -289,7 +289,7 @@ function wireRawConvertBtn() {
     }
 }
 
-function wireEmbedBtn() {
+function wireEmbeddingBtns() {
     const btn = document.getElementById('detail-embed');
     if (btn && selectedFile) {
         btn.addEventListener('click', async () => {
@@ -306,6 +306,15 @@ function wireEmbedBtn() {
                 if (!res.ok) {
                     Toast.error(res.error || 'Embedding failed to start.');
                 }
+            }
+        });
+    }
+    const extractBtn = document.getElementById('detail-extract');
+    if (extractBtn && selectedFile) {
+        extractBtn.addEventListener('click', async () => {
+            const res = await API.post(`/api/files/${selectedFile.id}/extract`);
+            if (!res.ok) {
+                Toast.error(res.error || 'Extraction failed to start.');
             }
         });
     }
@@ -547,7 +556,7 @@ function startApp(user) {
             wireIgnoreFileBtn();
             wireTranscodeBtn();
             wireRawConvertBtn();
-            wireEmbedBtn();
+            wireEmbeddingBtns();
             if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
         },
     });
@@ -1099,7 +1108,7 @@ FileList.init(async (file) => {
         wireIgnoreFileBtn();
         wireTranscodeBtn();
         wireRawConvertBtn();
-        wireEmbedBtn();
+        wireEmbeddingBtns();
         wireFileSlideshowBtn(file);
     }
     if (result) {
@@ -1262,7 +1271,7 @@ Detail.init({
         wireIgnoreFileBtn();
         wireTranscodeBtn();
         wireRawConvertBtn();
-        wireEmbedBtn();
+        wireEmbeddingBtns();
         if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
     },
 });
@@ -2486,6 +2495,28 @@ WS.on('embed_completed', (msg) => {
             if (btn) btn.textContent = 'Remove Embedding';
         }
     }
+});
+
+WS.on('extract_started', (msg) => {
+    ActivityLog.add(`Extracting to markdown: <b>${msg.filename}</b>`);
+});
+
+WS.on('extract_completed', async (msg) => {
+    if (msg.error) {
+        ActivityLog.add(`Extraction failed: <b>${msg.filename}</b> — ${msg.error}`);
+        Toast.error(`Extraction failed: ${msg.filename}. ${msg.error}`);
+        return;
+    }
+    ActivityLog.add(`Extracted: <b>${msg.filename}</b> to <b>${msg.newFilename}</b>`);
+    Toast.success(`Extracted: ${msg.newFilename}`);
+    const viewingFolder = FileList.currentFolder === `fld-${msg.folderId}`
+        || FileList.currentFolder === `loc-${msg.locationId}`;
+    if (viewingFolder) {
+        if (msg.newFileId) FileList.pendingFocusFile = msg.newFileId;
+        await FileList.refreshFolder();
+        await refreshDetailPanel();
+    }
+    await StatusBar.loadStats();
 });
 
 WS.on('embed_delete_completed', (msg) => {

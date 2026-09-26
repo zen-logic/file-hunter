@@ -444,7 +444,7 @@ async def _reap_finished():
 
 # Op types that write to a shared resource (ChromaDB) and must not run
 # concurrently with each other, regardless of which agent they belong to.
-_SERIALISE_GROUP = {"similarity_scan", "embed_file"}
+_SERIALISE_GROUP = {"similarity_scan", "embed_file", "extract_markdown"}
 
 # Op types that run independently on the agent and can proceed even when
 # the agent is busy with another operation (e.g. a long-running scan).
@@ -655,6 +655,12 @@ async def _handle_embed_file(op_id: int, agent_id: int | None, params: dict):
     await run_embed_file(op_id, agent_id, params)
 
 
+async def _handle_extract_markdown(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.similarity import run_extract_markdown
+
+    await run_extract_markdown(op_id, agent_id, params)
+
+
 async def _handle_raw_convert(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.rawconvert import run_raw_convert
 
@@ -675,6 +681,7 @@ _HANDLERS = {
     "transcode": _handle_transcode,
     "similarity_scan": _handle_similarity_scan,
     "embed_file": _handle_embed_file,
+    "extract_markdown": _handle_extract_markdown,
     "raw_convert": _handle_raw_convert,
 }
 

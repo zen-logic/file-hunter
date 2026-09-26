@@ -448,6 +448,101 @@ async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
         })
 
 
+async def fetch_markdown(embed_url: str, file_bytes: bytes, filename: str) -> str:
+    """Convert a document to markdown with the embedding service.
+
+    Raises RuntimeError with a message fit to show the user.
+    """
+    url = f"{embed_url.rstrip('/')}/api/extract/markdown"
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            resp = await client.post(url, content=file_bytes, headers={"X-Filename": filename})
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        raise RuntimeError("The embedding service is not running or can't be reached.")
+    except httpx.TimeoutException:
+        raise RuntimeError("The embedding service took too long (over 10 minutes) to convert this document.")
+    except httpx.HTTPError as e:
+        logger.warning("Markdown extraction request failed: %s", e)
+        raise RuntimeError("The embedding service connection failed during extraction.")
+
+    if resp.status_code == 404:
+        raise RuntimeError("The embedding service is too old to extract documents. Update it and try again.")
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("error", "")
+        except ValueError:
+            detail = resp.text[:200]
+        logger.warning("Markdown extraction returned %d: %s", resp.status_code, detail)
+        if resp.status_code == 422 and detail:
+            raise RuntimeError(detail)  # service's own user-facing message
+        raise RuntimeError("The embedding service could not convert this document.")
+    return resp.json().get("markdown", "")
+
+
+async def run_extract_markdown(op_id: int, agent_id: int | None, params: dict):
+    """Extract a document to markdown beside the source file — runs as a queued operation.
+
+    Every outcome ends in an extract_completed broadcast, with an error the
+    user can act on if it failed.
+    """
+    from file_hunter.ws.scan import broadcast
+
+    file_id = params["file_id"]
+    filename = params["filename"]
+
+    await broadcast({"type": "extract_started", "fileId": file_id, "filename": filename})
+    try:
+        result = await _extract_markdown(params)
+    except Exception:
+        logger.exception("Markdown extraction failed for %s", filename)
+        result = {"error": "Something went wrong. The server log has the details."}
+    await broadcast({"type": "extract_completed", "fileId": file_id, "filename": filename, **result})
+
+
+async def _extract_markdown(params: dict) -> dict:
+    """Do the extraction. Returns the completion fields, or {"error": message}."""
+    from file_hunter.db import read_db
+    from file_hunter.services import fs
+    from file_hunter.services.content_proxy import fetch_agent_bytes
+    from file_hunter.services.op_result_log import add_to_catalog
+
+    file_id = params["file_id"]
+    filename = params["filename"]
+    full_path = params["path"]
+    location_id = params["location_id"]
+
+    file_bytes = await fetch_agent_bytes(full_path, location_id)
+    if file_bytes is None:
+        return {"error": "The file could not be read. Its location may be offline."}
+
+    try:
+        markdown = await fetch_markdown(params["embed_url"], file_bytes, filename)
+    except RuntimeError as e:
+        return {"error": str(e)}
+    if not markdown.strip():
+        return {"error": "No text was found in this document. It may be a scanned image."}
+
+    try:
+        dest = await fs.unique_dest_path(os.path.splitext(full_path)[0] + ".md", location_id)
+        await fs.file_write_text(dest, markdown, location_id)
+    except Exception as e:
+        logger.warning("Could not write markdown for %s: %s", full_path, e)
+        return {"error": "The markdown file could not be saved. The location may be offline or read-only."}
+
+    async with read_db() as db:
+        rows = await db.execute_fetchall("SELECT folder_id FROM files WHERE id = ?", (file_id,))
+    folder_id = rows[0]["folder_id"] if rows else None
+    new_file_id = await add_to_catalog(dest, location_id, folder_id)
+
+    logger.info("Extracted %s to %s", filename, dest)
+    return {
+        "newFileId": new_file_id,
+        "newFilename": os.path.basename(dest),
+        "folderId": folder_id,
+        "locationId": location_id,
+    }
+
+
 async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     """Walk catalogued images and documents and index their embeddings."""
     from file_hunter.db import read_db

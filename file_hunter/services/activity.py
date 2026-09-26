@@ -25,6 +25,7 @@ _OP_LABELS = {
     "transcode": "Converting:",
     "similarity_scan": "Embedding:",
     "embed_file": "Embedding:",
+    "extract_markdown": "Extracting:",
 }
 
 

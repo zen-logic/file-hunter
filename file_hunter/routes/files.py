@@ -1092,6 +1092,45 @@ async def file_embed(request: Request):
     return json_ok({"started": True, "op_id": op_id})
 
 
+async def file_extract(request: Request):
+    """POST /api/files/{id}/extract — queue a document to markdown extraction."""
+    from file_hunter.services.similarity import is_chromadb_available
+    from file_hunter.services.agent_ops import _get_agent_id
+    from file_hunter.services.queue_manager import enqueue
+    from file_hunter.services import settings as settings_svc
+
+    if not is_chromadb_available():
+        return json_error("Similarity search is not available.", 400)
+
+    file_id = int(request.path_params["id"])
+
+    async with read_db() as db:
+        embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
+        if not embed_url:
+            return json_error("Embedding service URL not configured.", 400)
+
+        row = await db.execute_fetchall(
+            "SELECT filename, full_path, location_id, file_type_high FROM files WHERE id = ?",
+            (file_id,),
+        )
+    if not row:
+        return json_error("File not found.", 404)
+
+    f = row[0]
+    if (f["file_type_high"] or "").lower() != "document":
+        return json_error("Only documents can be extracted.", 400)
+
+    agent_id = await _get_agent_id(f["location_id"])
+    op_id = await enqueue("extract_markdown", agent_id, {
+        "file_id": file_id,
+        "filename": f["filename"],
+        "path": f["full_path"],
+        "location_id": f["location_id"],
+        "embed_url": embed_url,
+    })
+    return json_ok({"started": True, "op_id": op_id})
+
+
 async def file_unembed(request: Request):
     """POST /api/files/{id}/unembed — remove embedding for a single file."""
     from file_hunter.services.similarity import (

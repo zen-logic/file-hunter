@@ -66,8 +66,13 @@ async def append_row(
     await fs.file_write_text(csv_path, line, dest_loc_id, append=True)
 
 
-async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None):
-    """Insert the CSV file as a record in the catalog."""
+async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None) -> int | None:
+    """Insert a file the server has written as a record in the catalog.
+
+    Returns the new file id, or None if it was not inserted.
+    """
+    from file_hunter.core import classify_file
+
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     filename = os.path.basename(csv_path)
     st = await fs.file_stat(csv_path, location_id)
@@ -82,21 +87,24 @@ async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None)
         return
     root_path = loc_rows[0]["root_path"]
     rel_path = os.path.relpath(csv_path, root_path)
+    type_high, type_low = classify_file(filename)
 
     async with db_writer() as wdb:
-        await wdb.execute(
+        cursor = await wdb.execute(
             """INSERT OR IGNORE INTO files
                (filename, full_path, rel_path, location_id, folder_id,
                 file_type_high, file_type_low, file_size,
                 description,
                 created_date, modified_date, date_cataloged, date_last_seen)
-               VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?, '', ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)""",
             (
                 filename,
                 csv_path,
                 rel_path,
                 location_id,
                 folder_id,
+                type_high,
+                type_low,
                 file_size,
                 now_iso,
                 now_iso,
@@ -105,4 +113,8 @@ async def add_to_catalog(csv_path: str, location_id: int, folder_id: int | None)
             ),
         )
 
-    await update_stats_for_files(location_id, added=[(folder_id, file_size, "text", 0)])
+        file_id = cursor.lastrowid if cursor.rowcount else None
+
+    if file_id:
+        await update_stats_for_files(location_id, added=[(folder_id, file_size, type_high, 0)])
+    return file_id

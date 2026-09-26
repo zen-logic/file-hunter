@@ -30,7 +30,7 @@ Interactive visualisation of disk usage for any location or folder. Drill into s
 
 ## Previews
 
-Images, video, audio, PDFs, CSV tables, text files, and a hex viewer all render inline in the detail panel. Full-screen zoom on any preview. Image dimensions shown below the preview.
+Images, video, audio, PDFs, CSV tables, rendered markdown, text files, and a hex viewer all render inline in the detail panel. Markdown can also be viewed as raw text. Full-screen zoom on any preview. Image dimensions shown below the preview.
 
 ## Similarity search
 
@@ -46,7 +46,7 @@ Requires a separate [embedding service](https://github.com/zen-logic/file-hunter
 
 Optional document search powered by [Docling](https://github.com/docling-project/docling). Connect to an [embedding service](https://github.com/zen-logic/file-hunter-embedding) in Settings to enable.
 
-Search within document content using natural language queries. Supported formats: PDF, DOCX, PPTX, XLSX, ODT, HTML, and plain text (TXT, MD, CSV, JSON, etc.). Hybrid scoring combines vector similarity with keyword boosting for precision. Composite query syntax supported. Embed individual files from the detail panel. Dedicated content search panel with threshold control in the toolbar.
+Search within document content using natural language queries. Supported formats: PDF, DOCX, XLSX, PPTX, ODT, ODS, and DOC, XLS, PPT when LibreOffice is installed on the embedding service machine. Text files (TXT, MD, CSV, JSON, XML, HTML, LOG) are indexed as plain text. Hybrid scoring combines vector similarity with keyword boosting for precision. Composite query syntax supported. Embed individual files from the detail panel. Extract any document to a markdown file alongside it from the detail panel; the new file is catalogued automatically. Dedicated content search panel with threshold control in the toolbar.
 
 ## Location filtering
 

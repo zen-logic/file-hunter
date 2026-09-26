@@ -333,9 +333,11 @@ const Detail = {
         });
     },
 
-    openPreviewModal(detail) {
+    openPreviewModal(detail, { asText = false } = {}) {
         const m = this.previewModal;
-        const type = (detail.typeHigh || '').toLowerCase();
+        // asText: raw text in a <pre>, whatever the type (e.g. markdown source)
+        const type = asText ? 'text' : (detail.typeHigh || '').toLowerCase();
+        const typeLow = asText ? '' : (detail.typeLow || '').toLowerCase();
         const url = authUrl(`/api/files/${detail.id}/content`);
         m.title.textContent = detail.name;
         m.fileId = detail.id;
@@ -347,9 +349,9 @@ const Detail = {
             m.content.innerHTML = `<video src="${url}" controls autoplay></video>`;
         } else if (type === 'audio') {
             m.content.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
-        } else if (type === 'document' && (detail.typeLow || '').toLowerCase() === 'pdf') {
+        } else if (type === 'document' && typeLow === 'pdf') {
             m.content.innerHTML = `<iframe src="${url}" title="${detail.name}"></iframe>`;
-        } else if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'csv') {
+        } else if (type === 'text' && typeLow === 'csv') {
             m.content.innerHTML = `<div id="modal-csv-preview" class="csv-preview selectable">Loading...</div>`;
             fetch(url, { headers: authHeaders() }).then(r => r.ok ? r.text() : null).then(text => {
                 const el = document.getElementById('modal-csv-preview');
@@ -359,7 +361,7 @@ const Detail = {
                 const el = document.getElementById('modal-csv-preview');
                 if (el) el.textContent = '(Preview not available)';
             });
-        } else if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'md') {
+        } else if (type === 'text' && typeLow === 'md') {
             m.content.innerHTML = `<div class="md-preview selectable">Loading...</div>`;
             fetch(url, { headers: authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
                 const el = m.content.querySelector('.md-preview');
@@ -944,7 +946,9 @@ const Detail = {
         const isEmbeddable = this.similarityEnabled && detail.id && detail.online && !detail.stale && !hasPendingOp && embeddableTypes.includes((detail.typeHigh || '').toLowerCase());
         const embedBtn = isEmbeddable
             ? `<button class="btn btn-sm" id="detail-embed" style="margin-top:0.4rem">${detail.embedded ? 'Remove Embedding' : 'Embed'}</button>` : '';
-        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn || rawConvertBtn || embedBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}${rawConvertBtn}${embedBtn}<span id="detail-file-slideshow-slot"></span>${ignoreFileBtn}${deleteFileBtn}</div>` : '';
+        const extractBtn = isEmbeddable && (detail.typeHigh || '').toLowerCase() === 'document'
+            ? `<button class="btn btn-sm" id="detail-extract" style="margin-top:0.4rem">Extract to Markdown</button>` : '';
+        const btnRow = (downloadBtn || showInFolderBtn || renameFileBtn || moveFileBtn || deleteFileBtn || ignoreFileBtn || transcodeBtn || rawConvertBtn || embedBtn || extractBtn) ? `<div style="display:flex;gap:0.4rem;flex-wrap:wrap">${downloadBtn}${showInFolderBtn}${renameFileBtn}${moveFileBtn}${transcodeBtn}${rawConvertBtn}${embedBtn}${extractBtn}<span id="detail-file-slideshow-slot"></span>${ignoreFileBtn}${deleteFileBtn}</div>` : '';
 
         let html = `
             <div class="detail-section">
@@ -1051,7 +1055,7 @@ const Detail = {
         }
         this.wirePreviewZoom(detail);
         const textPreviewBtn = document.getElementById('detail-preview-text');
-        if (textPreviewBtn) textPreviewBtn.addEventListener('click', () => this.openPreviewModal(detail));
+        if (textPreviewBtn) textPreviewBtn.addEventListener('click', () => this.openPreviewModal(detail, { asText: true }));
         const hexPreviewBtn = document.getElementById('detail-preview-hex');
         if (hexPreviewBtn) hexPreviewBtn.addEventListener('click', () => this.openHexPreview(detail));
         this.checkIgnored(detail, gen);
@@ -1118,6 +1122,7 @@ const Detail = {
         const zoom = `<button class="preview-zoom-btn" id="preview-zoom-btn" title="Enlarge">${zoomIcon}</button>`;
 
         const hexBtn = `<button class="btn btn-sm" id="detail-preview-hex">Preview as Hex</button>`;
+        const textBtn = `<button class="btn btn-sm" id="detail-preview-text">Preview as text</button>`;
         if (type === 'image') {
             return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"><div class="detail-dimensions" id="detail-img-dims"></div></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
@@ -1134,12 +1139,12 @@ const Detail = {
             return `<div class="detail-preview">${zoom}<div id="detail-csv-preview" class="csv-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
         if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'md') {
-            return `<div class="detail-preview">${zoom}<div id="detail-md-preview" class="md-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<div id="detail-md-preview" class="md-preview selectable">Loading...</div></div><div class="detail-preview-btns">${textBtn} ${hexBtn}</div>`;
         }
         if (type === 'text') {
             return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div><div class="detail-preview-btns">${hexBtn}</div>`;
         }
-        return `<div class="detail-preview"><button class="btn btn-sm" id="detail-preview-text">Preview as text</button> ${hexBtn}</div>`;
+        return `<div class="detail-preview">${textBtn} ${hexBtn}</div>`;
     },
 
     async loadTextPreview(detail) {
