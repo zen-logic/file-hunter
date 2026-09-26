@@ -75,13 +75,13 @@ const Settings = {
                 </div>
             </div>
             <div class="settings-section">
-                <h3 class="settings-section-title">Similarity Search</h3>
+                <h3 class="settings-section-title">Embedding Service</h3>
                 <div class="settings-row">
                     <label class="modal-label">
                         <input type="checkbox" id="settings-similarity-enabled" ${settings.similaritySearchEnabled === '1' ? 'checked' : ''}>
-                        Enable similarity search
+                        Enable embedding service
                     </label>
-                    <span class="settings-hint">Connect to an embedding service for image similarity search</span>
+                    <span class="settings-hint">Connect to an embedding service for image similarity search, document content search and Extract to Markdown</span>
                 </div>
                 <div class="settings-row" id="settings-similarity-url-row" ${settings.similaritySearchEnabled === '1' ? '' : 'style="display:none"'}>
                     <label class="modal-label" for="settings-similarity-url">Embedding Service URL</label>
