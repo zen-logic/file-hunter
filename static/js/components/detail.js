@@ -4,6 +4,7 @@ import Tree from './tree.js';
 import Toast from './toast.js';
 import Triage from './triage.js';
 import icons from '../icons.js';
+import { copyText } from '../clipboard.js';
 
 function isScanning(locId) {
     return Tree.scanningLocations.has('loc-' + locId);
@@ -1058,6 +1059,10 @@ const Detail = {
         if (textPreviewBtn) textPreviewBtn.addEventListener('click', () => this.openPreviewModal(detail, { asText: true }));
         const hexPreviewBtn = document.getElementById('detail-preview-hex');
         if (hexPreviewBtn) hexPreviewBtn.addEventListener('click', () => this.openHexPreview(detail));
+        const copyUrlBtn = document.getElementById('detail-preview-copy');
+        if (copyUrlBtn) copyUrlBtn.addEventListener('click', () => {
+            copyText(location.origin + authUrl(`/api/files/${detail.id}/content`), copyUrlBtn);
+        });
         this.checkIgnored(detail, gen);
 
         const cancelPendingBtn = document.getElementById('detail-cancel-pending');
@@ -1122,29 +1127,30 @@ const Detail = {
         const zoom = `<button class="preview-zoom-btn" id="preview-zoom-btn" title="Enlarge">${zoomIcon}</button>`;
 
         const hexBtn = `<button class="btn btn-sm" id="detail-preview-hex">Preview as Hex</button>`;
+        const copyBtn = `<button class="btn btn-sm" id="detail-preview-copy">Copy URL</button>`;
         const textBtn = `<button class="btn btn-sm" id="detail-preview-text">Preview as text</button>`;
         if (type === 'image') {
-            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"><div class="detail-dimensions" id="detail-img-dims"></div></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"><div class="detail-dimensions" id="detail-img-dims"></div></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'video') {
-            return `<div class="detail-preview">${zoom}<video src="${url}" controls></video></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<video src="${url}" controls></video></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'audio') {
-            return `<div class="detail-preview">${zoom}<audio src="${url}" controls></audio></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<audio src="${url}" controls></audio></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'document' && (detail.typeLow || '').toLowerCase() === 'pdf') {
-            return `<div class="detail-preview detail-preview-pdf">${zoom}<iframe src="${url}" title="${detail.name}"></iframe></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview detail-preview-pdf">${zoom}<iframe src="${url}" title="${detail.name}"></iframe></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'csv') {
-            return `<div class="detail-preview">${zoom}<div id="detail-csv-preview" class="csv-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<div id="detail-csv-preview" class="csv-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'md') {
-            return `<div class="detail-preview">${zoom}<div id="detail-md-preview" class="md-preview selectable">Loading...</div></div><div class="detail-preview-btns">${textBtn} ${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<div id="detail-md-preview" class="md-preview selectable">Loading...</div></div><div class="detail-preview-btns">${textBtn} ${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'text') {
-            return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div><div class="detail-preview-btns">${hexBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<pre id="detail-text-preview">Loading...</pre></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
-        return `<div class="detail-preview">${textBtn} ${hexBtn}</div>`;
+        return `<div class="detail-preview">${textBtn} ${hexBtn} ${copyBtn}</div>`;
     },
 
     async loadTextPreview(detail) {

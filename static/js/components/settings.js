@@ -5,6 +5,7 @@ import ThemeEditor from './theme-editor.js';
 import Toast from './toast.js';
 import Update from './update.js';
 import RepairCatalog from './repaircatalog.js';
+import { copyText } from '../clipboard.js';
 
 const Settings = {
     currentUser: null,
@@ -466,17 +467,7 @@ const Settings = {
         }
 
         tbody.querySelectorAll('.settings-copy-token').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const text = btn.dataset.token;
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(text).then(() => {
-                        btn.textContent = 'Copied';
-                        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-                    }).catch(() => this.fallbackCopy(text, btn));
-                } else {
-                    this.fallbackCopy(text, btn);
-                }
-            });
+            btn.addEventListener('click', () => copyText(btn.dataset.token, btn));
         });
 
         tbody.querySelectorAll('.settings-regen-app').forEach(btn => {
@@ -555,19 +546,6 @@ const Settings = {
                 errEl.classList.remove('hidden');
             }
         });
-    },
-
-    fallbackCopy(text, btn) {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        btn.textContent = 'Copied';
-        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
     },
 
     esc(s) {

@@ -30,7 +30,7 @@ Interactive visualisation of disk usage for any location or folder. Drill into s
 
 ## Previews
 
-Images, video, audio, PDFs, CSV tables, rendered markdown, text files, and a hex viewer all render inline in the detail panel. Markdown can also be viewed as raw text. Full-screen zoom on any preview. Image dimensions shown below the preview.
+Images, video, audio, PDFs, CSV tables, rendered markdown, text files, and a hex viewer all render inline in the detail panel. Markdown can also be viewed as raw text. "Copy URL" copies a direct link to the file for use in other applications, including your login so it opens without signing in again. Full-screen zoom on any preview. Image dimensions shown below the preview.
 
 ## Similarity search
 
