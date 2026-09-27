@@ -59,6 +59,34 @@ async def search(request: Request):
 
 _CONTENT_RESULT_LIMIT = 200
 
+# ChromaDB 1.5 fails with "too many SQL variables" above ~16,380 ids in one
+# $in (each id costs two SQLite variables), fewer when combined with $and
+_CHROMA_IN_BATCH = 10_000
+
+
+def _chroma_query(collection, embedding, n_results: int, include: list[str],
+                  where: dict | None = None, file_ids: list[int] | None = None) -> dict:
+    """collection.query for one embedding, in ChromaDB's result shape.
+
+    file_ids ("Search within") may be any length: they are sent in batches
+    and the results merged by distance. The best n_results of every batch
+    contain the best n_results overall, so the merge is exact.
+    """
+    include = list(dict.fromkeys([*include, "distances"]))
+    if file_ids is None:
+        kwargs = {"where": where} if where else {}
+        return collection.query(query_embeddings=[embedding], n_results=n_results, include=include, **kwargs)
+    keys = ["ids", *include]
+    rows = []
+    for start in range(0, len(file_ids), _CHROMA_IN_BATCH):
+        batch = file_ids[start:start + _CHROMA_IN_BATCH]
+        r = collection.query(query_embeddings=[embedding], n_results=n_results, include=include,
+                             where={"file_id": {"$in": batch}})
+        rows.extend({k: r[k][0][i] for k in keys} for i in range(len(r["ids"][0])))
+    rows.sort(key=lambda row: row["distances"])
+    rows = rows[:n_results]
+    return {k: [[row[k] for row in rows]] for k in keys}
+
 
 async def _scope_embedded_ids(location_id: int | None, folder_id: int | None, types: tuple[str, ...]) -> list[int]:
     """Ids of embedded files of the given types inside a location or folder
@@ -170,20 +198,17 @@ async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: flo
         if not query_emb:
             return None
 
-        query_kwargs = {}
-        if file_ids is not None:
-            # "Search within": ChromaDB ranks only the scope's documents
-            query_kwargs["where"] = {"file_id": {"$in": file_ids}}
-        elif location_ids and len(location_ids) == 1:
-            query_kwargs["where"] = {"location_id": location_ids[0]}
+        # file_ids ("Search within") ranks only the scope's documents
+        where = None
+        if location_ids and len(location_ids) == 1:
+            where = {"location_id": location_ids[0]}
         elif location_ids and len(location_ids) > 1:
-            query_kwargs["where"] = {"location_id": {"$in": location_ids}}
+            where = {"location_id": {"$in": location_ids}}
 
-        results = doc_coll.query(
-            query_embeddings=[query_emb],
-            n_results=min(200, doc_count),
-            include=["distances", "metadatas", "documents"],
-            **query_kwargs,
+        results = _chroma_query(
+            doc_coll, query_emb, min(200, doc_count),
+            ["distances", "metadatas", "documents"],
+            where=None if file_ids is not None else where, file_ids=file_ids,
         )
         max_distance = 1.0 - threshold
         # Split query into terms for keyword boosting
@@ -519,11 +544,11 @@ async def similarity_search(request: Request):
     # embedded images from the catalogue (subfolders included); a location
     # filters on location_id; otherwise the location dropdown applies.
     where_filter = None
+    scope_ids = None
     if scope and scope["folder_id"]:
         scope_ids = await _scope_embedded_ids(None, scope["folder_id"], ("image",))
         if not scope_ids:
             return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
-        where_filter = {"file_id": {"$in": scope_ids}}
     elif scope:
         where_filter = {"location_id": scope["location_id"]}
     elif location_ids and len(location_ids) == 1:
@@ -533,28 +558,17 @@ async def similarity_search(request: Request):
 
     # Collect candidates from each modality
     candidates = {}  # doc_id -> stored embedding
-    query_kwargs = {}
-    if where_filter:
-        query_kwargs["where"] = where_filter
 
     if text_emb is not None:
-        results = collection.query(
-            query_embeddings=[text_emb],
-            n_results=n_results,
-            include=["embeddings"],
-            **query_kwargs,
-        )
+        results = _chroma_query(collection, text_emb, n_results, ["embeddings"],
+                                where=where_filter, file_ids=scope_ids)
         for i, doc_id in enumerate(results["ids"][0]):
             if doc_id not in candidates:
                 candidates[doc_id] = np.array(results["embeddings"][0][i], dtype=np.float32)
 
     if image_emb is not None:
-        results = collection.query(
-            query_embeddings=[image_emb],
-            n_results=n_results,
-            include=["embeddings"],
-            **query_kwargs,
-        )
+        results = _chroma_query(collection, image_emb, n_results, ["embeddings"],
+                                where=where_filter, file_ids=scope_ids)
         for i, doc_id in enumerate(results["ids"][0]):
             if doc_id not in candidates:
                 candidates[doc_id] = np.array(results["embeddings"][0][i], dtype=np.float32)
