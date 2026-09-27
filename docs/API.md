@@ -517,6 +517,47 @@ Queue video transcode on the agent.
 {"started": true, "op_id": 42}
 ```
 
+### POST /api/files/{id}/rawconvert
+
+Queue a camera raw to JPEG conversion on the agent. The JPEG is written beside the original and catalogued. Supported: NEF, CR2, CR3, ARW, ORF, RAF, DNG, RW2, PEF, SRW, NRW, RAW, MRW, DCR, KDC, ERF, 3FR, MEF, MOS, IIQ. The agent needs `dcraw`; returns 400 if the file isn't a raw format or the agent can't convert.
+
+```json
+// Response
+{"started": true, "op_id": 42}
+```
+
+Progress and result arrive over the WebSocket: `rawconvert_started`, then `rawconvert_complete` (`fileId` of the new JPEG, `filename`, `folderId`, `locationId`) or `rawconvert_error` (`error`).
+
+### POST /api/files/{id}/embed
+
+Queue embedding for one file, for similarity search (images) or content search (documents and text files). Requires the embedding service to be enabled in settings; returns 400 if it isn't, or if the file type can't be embedded.
+
+```json
+// Response
+{"started": true, "op_id": 42}
+```
+
+Result over the WebSocket: `embed_started`, then `embed_completed` with `fileId`, `filename` and `chunks` (1 for an image), or `error`.
+
+### POST /api/files/{id}/unembed
+
+Remove a file's embeddings, and for a document its full text search text.
+
+```json
+{"removed": true}
+```
+
+### POST /api/files/{id}/extract
+
+Queue conversion of a document to markdown (via the embedding service). The markdown is written beside the original as `<name>.md`, or `<name> (2).md` etc. if taken, and catalogued. Documents only (`typeHigh` = `document`); returns 400 otherwise, or if the embedding service isn't enabled. Runs one at a time with embedding scans.
+
+```json
+// Response
+{"started": true, "op_id": 42}
+```
+
+Result over the WebSocket: `extract_started`, then `extract_completed` with `fileId`, `filename` and on success `newFileId`, `newFilename`, `folderId`, `locationId`, or on failure `error` (a message fit to show a user).
+
 ---
 
 ## Tags
@@ -635,6 +676,20 @@ Toggle duplicate exclusion on a folder tree. First call returns counts for confi
 
 **Advanced mode**: `mode=advanced`, plus `c[0].field`, `c[0].op`, `c[0].value`, `c[0].exclude` pattern for conditions.
 
+**Content mode** (search inside embedded documents; requires the embedding service enabled in settings):
+
+| Param | Description |
+|-------|-------------|
+| `semantic` | The query. Its presence selects content mode. |
+| `semanticMode` | `semantic` (default, by meaning) or `text` (full text, exact words) |
+| `semanticThreshold` | Semantic mode only, 0 to 1, default 0.3. Higher returns fewer, closer matches. |
+| `semanticLocations` | Comma-separated location ids, e.g. `1,4`. Omit for all locations. |
+| `scopeType`, `scopeId` | "Search within": `location` + `loc-N` or `folder` + `fld-N` (subfolders included). Replaces `semanticLocations`. |
+
+Full text query syntax: every word must appear, `"quoted phrases"` match exactly, `word*` matches a prefix, `-word` or `- word` excludes. Case and accents are ignored; headings are searched too. Semantic mode supports composite syntax: `(legal action) + invoices - complaints`.
+
+Content mode returns up to 200 files, best match first, in one response: `page` is always 0 and `total` is the number of items. Semantic mode returns 503 if the embedding service can't be reached; full text mode doesn't use it.
+
 ```json
 {
   "items": [
@@ -647,6 +702,28 @@ Toggle duplicate exclusion on a folder tree. First call returns counts for confi
   "searchId": "s_abc123"
 }
 ```
+
+### POST /api/search/similarity
+
+Image similarity search. Requires the embedding service enabled in settings.
+
+```json
+// Request: at least one of text, file_id, image_data
+{
+  "text": "red socks",           // text features; composite syntax: "(red socks) - shoes"
+  "file_id": 123,                // images similar to this catalogued image
+  "image_data": "<base64>",      // an uploaded image, base64 without the data: prefix
+  "threshold": 0.3,              // 0 to 1, default 0.3
+  "location_ids": [1, 4],        // optional, omit for all locations
+  "scopeType": "folder",         // optional "Search within": location|folder
+  "scopeId": "fld-10"            // loc-N or fld-N; replaces location_ids
+}
+
+// Response: up to 100 images, closest match first
+{"items": [{"id": 123, "name": "photo.jpg", "typeHigh": "image", "locationId": 1, ...}], "total": 12, "folders": [], "page": 0}
+```
+
+Returns 400 if similarity search isn't available or no service URL is set, 503 if the embedding service can't be reached.
 
 ### GET /api/searches
 
@@ -679,6 +756,25 @@ Query params: `folder_id` or `searchId`, `mediaType` (image|video|audio), `sort`
 ```json
 {"ids": [1, 2, 3, 4, 5], "total": 5}
 ```
+
+---
+
+## Embeddings
+
+### POST /api/embeddings/delete
+
+Delete the image or document embeddings in a location or folder (subfolders included). Deleting document embeddings also removes their full text search text. Runs in the background.
+
+```json
+// Request: locationId or folderId (numeric ids)
+{"locationId": 1, "type": "document"}   // type: image|document
+{"folderId": 10, "type": "image"}
+
+// Response
+{"started": true}
+```
+
+Result over the WebSocket: `embed_delete_completed` with `embedType`, `deleted` (number of files) and `scope` (location or folder name), or `error`.
 
 ---
 
@@ -837,6 +933,23 @@ Start a quick scan (requires agent support).
 
 // Response
 {"message": "Quick scan started"}
+```
+
+### POST /api/scan/similarity
+
+Queue a similarity scan: embed the images and/or documents in a location or folder. Already-embedded files are skipped. Requires the embedding service enabled in settings.
+
+```json
+// Request
+{
+  "location_id": "loc-1",
+  "folder_id": "fld-10",     // optional
+  "recursive": true,         // optional, default true
+  "embed_types": "image"     // optional: image|document; omit for both
+}
+
+// Response
+{"message": "Similarity scan queued for 'Photos'", "queue_id": 42}
 ```
 
 ### GET /api/scan/capabilities?location_id=1
