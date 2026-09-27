@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 
 from starlette.requests import Request
 from file_hunter.db import read_db, execute_write
@@ -59,6 +58,20 @@ async def search(request: Request):
 
 
 _CONTENT_RESULT_LIMIT = 200
+
+
+async def _scope_embedded_ids(location_id: int | None, folder_id: int | None, types: tuple[str, ...]) -> list[int]:
+    """Ids of embedded files of the given types inside a location or folder
+    (subfolders included), from the catalogue. "Search within" hands these to
+    ChromaDB, so the scope is always current, whatever has moved."""
+    async with read_db() as db:
+        scope_frag, _, scope_params = await _build_scope_sql(db, location_id=location_id, folder_id=folder_id)
+        ph = ",".join("?" for _ in types)
+        rows = await db.execute_fetchall(
+            f"SELECT f.id FROM files f WHERE {scope_frag} AND f.embedded = 1 AND f.file_type_high IN ({ph})",
+            scope_params + list(types),
+        )
+    return [r["id"] for r in rows]
 
 
 def _fts_query(text: str) -> str:
@@ -254,13 +267,7 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
         else:
             scope_file_ids = None
             if scoped:
-                async with read_db() as db:
-                    rows = await db.execute_fetchall(
-                        f"""SELECT f.id FROM files f WHERE {scope_frag}
-                            AND f.embedded = 1 AND f.file_type_high IN ('document', 'text')""",
-                        scope_params,
-                    )
-                scope_file_ids = [r["id"] for r in rows]
+                scope_file_ids = await _scope_embedded_ids(location_id, folder_id, ("document", "text"))
                 if not scope_file_ids:
                     return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
             try:
@@ -508,15 +515,17 @@ async def similarity_search(request: Request):
     if n_results == 0:
         return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
 
-    # Build ChromaDB filters. "Search within" scopes to the location, and for
-    # a folder to paths under it (an image's document is its full path);
-    # otherwise the location dropdown applies.
+    # Build ChromaDB filters. "Search within" a folder passes the folder's
+    # embedded images from the catalogue (subfolders included); a location
+    # filters on location_id; otherwise the location dropdown applies.
     where_filter = None
-    where_document = None
-    if scope:
+    if scope and scope["folder_id"]:
+        scope_ids = await _scope_embedded_ids(None, scope["folder_id"], ("image",))
+        if not scope_ids:
+            return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
+        where_filter = {"file_id": {"$in": scope_ids}}
+    elif scope:
         where_filter = {"location_id": scope["location_id"]}
-        if scope["folder_id"]:
-            where_document = {"$contains": os.path.join(scope["abs_path"], "")}
     elif location_ids and len(location_ids) == 1:
         where_filter = {"location_id": location_ids[0]}
     elif location_ids and len(location_ids) > 1:
@@ -527,8 +536,6 @@ async def similarity_search(request: Request):
     query_kwargs = {}
     if where_filter:
         query_kwargs["where"] = where_filter
-    if where_document:
-        query_kwargs["where_document"] = where_document
 
     if text_emb is not None:
         results = collection.query(

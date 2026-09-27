@@ -34,27 +34,38 @@ Images, video, audio, PDFs, CSV tables, rendered markdown, text files, and a hex
 
 ## Similarity search
 
-Optional image similarity search powered by CLIP embeddings. Connect to an [embedding service](https://github.com/zen-logic/file-hunter-embedding) in Settings to enable.
+Optional image similarity search powered by CLIP embeddings. Enable the [embedding service](https://github.com/zen-logic/file-hunter-embedding) in Settings to use it.
 
-Scan any location or folder to index images. Image and document scans are separate options in the scan dialogue. Search by text features (e.g. "red socks", "blue jacket"), by similarity to a selected file, or by uploading a reference image from your desktop. Text and image queries can be combined. Adjustable similarity threshold. Results are listed in similarity order, closest match first.
+Scan any location or folder to index images. Image and document scans are separate options in the scan dialogue. Search by text features (e.g. "red socks", "blue jacket"), by similarity to a selected file, or by uploading a reference image from your desktop. Text and image queries can be combined. Adjustable similarity threshold. Results are listed in similarity order, closest match first. "Search within" limits the search to the location or folder selected in the tree, including its subfolders.
 
 Text queries support composite syntax for vector arithmetic: `(red socks) - shoes` embeds each phrase separately and combines the vectors before searching.
 
 Requires a separate [embedding service](https://github.com/zen-logic/file-hunter-embedding). ChromaDB is installed automatically when the feature is first enabled. No impact on installations that do not use this feature.
 
-## Document semantic search
+## Document search
 
-Optional document search powered by [Docling](https://github.com/docling-project/docling). Connect to an [embedding service](https://github.com/zen-logic/file-hunter-embedding) in Settings to enable.
+Optional search inside document content, powered by [Docling](https://github.com/docling-project/docling). Enable the [embedding service](https://github.com/zen-logic/file-hunter-embedding) in Settings to use it, then run a document scan on any location or folder, or embed individual files from the detail panel.
 
-Search within document content using natural language queries. Supported formats: PDF, DOCX, XLSX, PPTX, ODT, ODS, and DOC, XLS, PPT when LibreOffice is installed on the embedding service machine. Text files (TXT, MD, CSV, JSON, XML, HTML, LOG) are indexed as plain text. Hybrid scoring combines vector similarity with keyword boosting for precision. Composite query syntax supported. A Full text mode finds exact words instead of meaning: every word must appear, "quoted phrases" match exactly, word* matches prefixes and -word excludes. Case and accents are ignored, and headings are searchable too. "Search within" limits either mode to the selected location or folder, including its subfolders. Embed individual files from the detail panel. Extract any document to a markdown file alongside it from the detail panel; the new file is catalogued automatically. Dedicated content search panel with threshold control in the toolbar.
+Supported formats: PDF, DOCX, XLSX, PPTX, ODT, ODS, and DOC, XLS, PPT when LibreOffice is installed on the embedding service machine. Text files (TXT, MD, CSV, JSON, XML, HTML, LOG) are indexed as plain text.
+
+The content search panel in the toolbar has two modes:
+
+- **Semantic** finds documents by meaning, using natural language queries. Hybrid scoring combines vector similarity with keyword boosting for precision. Composite query syntax supported. Adjustable threshold.
+- **Full text** finds exact words. Every word must appear, `"quoted phrases"` match exactly, `word*` matches prefixes and `-word` excludes. Case and accents are ignored, and headings are searchable too. Results are ranked by relevance.
+
+"Search within" limits either mode to the location or folder selected in the tree, including its subfolders.
+
+## Extract to Markdown
+
+Convert any document (PDF, Word, Excel, PowerPoint, OpenDocument) to markdown from the detail panel. The full text, with headings and tables, is saved as a markdown file alongside the original and added to the catalogue. If the name is taken, the new file is numbered, e.g. `report (2).md`. Extractions run in the background, one at a time, so they don't compete with embedding scans. Available when the embedding service is enabled.
 
 ## Location filtering
 
-Both image similarity and document content search panels include a multi-select location dropdown. Scope searches to specific locations or search across all.
+Both image similarity and document content search panels include a multi-select location dropdown. Scope searches to specific locations or search across all. When "Search within" is ticked, it replaces the location dropdown.
 
 ## Embedding management
 
-Delete image or document embeddings per location or folder from the detail panel. Deletion runs as a background task with progress in the status bar. Embeddings are automatically cleaned up on file delete, folder delete, batch delete, reset stale, and cross-location moves.
+Delete image or document embeddings per location or folder from the detail panel. Deleting document embeddings also removes their text from full text search. Deletion runs as a background task with progress in the status bar. Embeddings and document text are removed automatically on file delete, folder delete, batch delete and reset stale, and follow their files on cross-location moves.
 
 ## Video transcoding
 
