@@ -564,6 +564,12 @@ const FileList = {
         try {
             res = await API.get('/api/favourites');
         } catch (_) {
+            res = null;
+        }
+        // The view moved on while favourites loaded (e.g. startup opening the
+        // folder in the URL hash) - don't draw over it
+        if (this.currentFolder || this.searchMode) return;
+        if (!res) {
             this.renderEmpty();
             return;
         }

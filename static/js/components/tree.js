@@ -66,7 +66,7 @@ const Tree = {
 
         Keyboard.registerPanel('tree', (e) => this.handleKey(e));
 
-        this.loadTree();
+        return this.loadTree();
     },
 
     getLocation(nodeId) {

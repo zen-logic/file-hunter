@@ -119,6 +119,10 @@ Mark entire folder trees to exclude from duplicate detection. Useful for system 
 
 Pin locations and folders to the top of the tree for quick access.
 
+## Links and history
+
+The address bar follows where you are: selecting a location or folder puts its catalogue path in the URL, e.g. `#/Local%20Agent/Photos/2024`. The browser's Back and Forward buttons move between the locations and folders you've visited, and opening a URL with a path goes straight to that folder, so folders can be bookmarked and shared. A link to a folder that has since been renamed, moved or deleted opens the dashboard.
+
 ## Themes
 
 Built-in themes from retro CRT terminals to clean corporate light modes. Create and edit custom themes in the theme editor.

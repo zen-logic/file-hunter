@@ -13,7 +13,10 @@ from file_hunter.db import read_db
 
 
 async def catalog_browse(request: Request):
+    """?resolve=1 returns only the tree node id of a location or folder path,
+    {"nodeId": "loc-N" | "fld-N"}, without listing its contents."""
     path = request.path_params.get("path", "").strip("/")
+    resolve = request.query_params.get("resolve") == "1"
 
     if not path:
         return await _list_agents()
@@ -47,6 +50,8 @@ async def catalog_browse(request: Request):
         rel_path = parts[2] if len(parts) > 2 else ""
 
         if not rel_path:
+            if resolve:
+                return json_ok({"nodeId": f"loc-{loc_id}"})
             return await _list_folder(db, loc_id, None, agent_name, loc_name)
 
         # Resolve rel_path — folder or file?
@@ -56,7 +61,11 @@ async def catalog_browse(request: Request):
             (loc_id, rel_path),
         )
         if folder:
+            if resolve:
+                return json_ok({"nodeId": f"fld-{folder[0]['id']}"})
             return await _list_folder(db, loc_id, folder[0]["id"], agent_name, loc_name)
+        if resolve:
+            return json_error("Not found.", 404)
 
         file = await db.execute_fetchall(
             "SELECT id, filename, rel_path, file_size, file_type_high, "

@@ -1004,8 +1004,60 @@ function wireSlideshowBtn() {
     }
 }
 
+// ── Location hash ──
+// The selected location or folder is the URL hash, as its catalogue path:
+// #/Local%20Agent/Photos/2024 (none for the dashboard). Browser Back/Forward
+// move between locations, and a URL with a hash opens that location or folder.
+function locationPath(nodeId) {
+    const path = Tree.findPath(Tree.treeData, nodeId);
+    if (!path || !path[0].agentName) return '';
+    const names = [path[0].agentName, path[0].locationName, ...path.slice(1).map(n => n.label)];
+    return '/' + names.map(encodeURIComponent).join('/');
+}
+
+function sameHash(a, b) {
+    try {
+        return decodeURIComponent(a) === decodeURIComponent(b);
+    } catch {
+        return a === b;
+    }
+}
+
+function setLocationHash(nodeId) {
+    const path = nodeId ? locationPath(nodeId) : '';
+    if (nodeId && !path) return;  // not in the loaded tree: leave the hash alone
+    if (sameHash(location.hash.slice(1), path)) return;
+    if (path) {
+        location.hash = path;
+    } else {
+        history.pushState(null, '', location.pathname + location.search);
+    }
+}
+
+function showDashboard() {
+    Tree.updateSelection(null);
+    Tree.onDeselect();
+}
+
+async function showLocationFromHash() {
+    const path = location.hash.slice(1);
+    const current = selectedNode ? locationPath(selectedNode.id) : '';
+    if (sameHash(path, current)) return;
+    if (!path.startsWith('/')) {
+        if (selectedNode) showDashboard();
+        return;
+    }
+    const res = await API.get(`/api/browse${path}?resolve=1`);
+    if (res.ok && res.data.nodeId) {
+        await Tree.navigateTo(res.data.nodeId);
+    } else if (selectedNode) {
+        showDashboard();  // renamed, moved or deleted since the link was made
+    }
+}
+
 Tree.init(async (node) => {
     selectedNode = node;
+    setLocationHash(node.id);
     selectedFile = null;
     selectedFileDups = [];
     scanBtn.disabled = false;
@@ -1057,6 +1109,7 @@ Tree.init(async (node) => {
     wireSlideshowBtn();
 }, () => {
     selectedNode = null;
+    setLocationHash(null);
     selectedFile = null;
     selectedFileDups = [];
     scanBtn.disabled = true;
@@ -1066,7 +1119,8 @@ Tree.init(async (node) => {
     updateSimilarityScope(null);
     FileList.renderFavourites();
     Detail.renderDashboard();
-});
+}).then(showLocationFromHash);
+window.addEventListener('hashchange', showLocationFromHash);
 
 document.getElementById('tree-header-label').addEventListener('click', () => {
     Search.close();
@@ -1130,6 +1184,7 @@ FileList.init(async (file) => {
     const node = await Tree.revealNode(folder.id);
     if (node) {
         selectedNode = node;
+        setLocationHash(node.id);
         scanBtn.disabled = false;
         Upload.updateState(node);
         Search.setScopeContext(node);
@@ -1593,8 +1648,7 @@ function updateSimilarityScope(node) {
         if (scopable) {
             document.getElementById(`${prefix}-scope-name`).textContent = scopable.label || scopable.name;
         } else {
-            document.getElementById(`${prefix}-scope-check`).checked = false;
-            locRow.classList.remove('hidden');
+            resetSearchScope(prefix, locRow);
         }
     }
 }
@@ -1602,6 +1656,11 @@ document.getElementById('similarity-scope-check').addEventListener('change', (e)
     simLocRow.classList.toggle('hidden', e.target.checked);
 });
 const csLocRow = document.getElementById('content-search-locations-row');
+/** Clear: untick "Search within" and bring the location dropdown back. */
+function resetSearchScope(prefix, locRow) {
+    document.getElementById(`${prefix}-scope-check`).checked = false;
+    locRow.classList.remove('hidden');
+}
 document.getElementById('content-search-scope-check').addEventListener('change', (e) => {
     csLocRow.classList.toggle('hidden', e.target.checked);
 });
@@ -1655,6 +1714,7 @@ document.getElementById('similarity-clear').addEventListener('click', () => {
     similarityUploadFile.value = '';
     similarityUploadName.textContent = '';
     simLoc.reset();
+    resetSearchScope('similarity', simLocRow);
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {
@@ -1755,6 +1815,7 @@ document.getElementById('content-search-clear').addEventListener('click', () => 
     contentSearchSlider.value = 0.3;
     contentSearchThreshold.value = 0.3;
     csLoc.reset();
+    resetSearchScope('content-search', csLocRow);
     if (selectedNode) {
         FileList.showFolder(selectedNode.id);
     } else {

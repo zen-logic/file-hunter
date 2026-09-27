@@ -98,9 +98,11 @@ async def get_shallow_tree(db):
     child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
 
     locations = await db.execute_fetchall(
-        "SELECT id, name, root_path, date_added, date_last_scanned, is_favourite "
-        "FROM locations WHERE name NOT LIKE '__deleting_%' "
-        "ORDER BY name COLLATE NOCASE"
+        "SELECT l.id, l.name, l.root_path, l.date_added, l.date_last_scanned, l.is_favourite, "
+        "a.name AS agent_name "
+        "FROM locations l LEFT JOIN agents a ON a.id = l.agent_id "
+        "WHERE l.name NOT LIKE '__deleting_%' "
+        "ORDER BY l.name COLLATE NOCASE"
     )
 
     # Root-level folders (parent_id IS NULL) with has_children flag
@@ -187,6 +189,9 @@ async def get_shallow_tree(db):
             "id": f"loc-{loc['id']}",
             "type": "location",
             "label": label,
+            # catalogue path segments (/agent/location/...), as used by the URL hash
+            "agentName": loc["agent_name"],
+            "locationName": loc["name"],
             "online": online,
             "totalSize": loc_sizes.get(loc["id"], 0),
             "diskStats": ds,

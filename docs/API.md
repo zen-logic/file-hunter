@@ -210,13 +210,15 @@ Returns the shallow location tree (locations with root-level folders).
 ```json
 [
   {
-    "id": "loc-1", "name": "Photos", "root_path": "/mnt/photos",
-    "file_count": 1234, "total_size": 5678901234,
-    "agent_id": 1, "agent_name": "Local Agent", "agent_online": true,
-    "is_favourite": false,
-    "scheduleEnabled": true, "scheduleDays": [1,3,5], "scheduleTime": "03:00",
+    "id": "loc-1", "type": "location",
+    "label": "Photos",                 // display label; may be "Photos [Agent]"
+    "agentName": "Local Agent",        // catalogue path segments, as in /api/browse
+    "locationName": "Photos",
+    "online": true, "totalSize": 5678901234, "diskStats": {...},
+    "agent": "local",                  // local|remote
+    "favourite": true, "lastScanned": "2026-09-27T10:00:00",  // only when set
     "children": [
-      {"id": "fld-10", "name": "2024", "file_count": 500, "has_children": true}
+      {"id": "fld-10", "type": "folder", "label": "2024", "hasChildren": true, "totalSize": 1234, "children": null}
     ]
   }
 ]
@@ -1019,6 +1021,14 @@ Hierarchical catalog discovery. Path segments: `{agent}/{location}/{path}`.
 ```
 
 ### GET /api/browse/{agent}/{location}/{path}
+
+With `?resolve=1`, returns only the tree node id of a location or folder path, without listing its contents; 404 if the path isn't a location or folder:
+
+```json
+{"nodeId": "fld-10"}
+```
+
+Without it:
 
 ```json
 {
