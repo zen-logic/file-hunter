@@ -19,8 +19,9 @@ const galleryLoader = {
         this.gen++;
     },
 
-    enqueue(img, src) {
-        this.queue.push({ img, src, gen: this.gen });
+    /** onFail runs if the image can't be loaded. */
+    enqueue(img, src, onFail) {
+        this.queue.push({ img, src, onFail, gen: this.gen });
         this.pump();
     },
 
@@ -34,11 +35,20 @@ const galleryLoader = {
                 this.pump();
             };
             entry.img.onload = done;
-            entry.img.onerror = done;
+            entry.img.onerror = () => {
+                done();
+                if (entry.onFail) entry.onFail();
+            };
             entry.img.src = entry.src;
         }
     },
 };
+
+/** Gallery tile for an image that can't be shown (offline or failed to load). */
+function galleryImageIcon(cell) {
+    cell.classList.add('gallery-folder');
+    cell.insertAdjacentHTML('afterbegin', icons.image || icons.file);
+}
 
 function formatSize(bytes) {
     if (bytes === null || bytes === undefined) return '';
@@ -1201,8 +1211,10 @@ const FileList = {
         const items = this.getDisplayItems();
         const grid = document.createElement('div');
         grid.className = 'file-gallery';
-        const loc = this.currentFolder ? Tree.getLocation(this.currentFolder) : null;
-        const locationOnline = !loc || loc.online !== false;
+        // Search results and favourites carry each file's locationId;
+        // a folder listing is all one location
+        const folderLoc = this.currentFolder ? Tree.getLocation(this.currentFolder) : null;
+        const folderOnline = !folderLoc || folderLoc.online !== false;
 
         items.forEach((file, idx) => {
             const cell = document.createElement('div');
@@ -1224,17 +1236,20 @@ const FileList = {
                     if (this.onFolderOpen) this.onFolderOpen(file);
                 });
             } else if (file.typeHigh === 'image') {
-                if (locationOnline) {
+                const online = file.locationId ? Tree.isLocationOnline(file.locationId) : folderOnline;
+                if (online) {
                     const img = document.createElement('img');
                     const token = localStorage.getItem('fh-token');
                     let src = `/api/files/${file.id}/content`;
                     if (token) src += `?token=${encodeURIComponent(token)}`;
                     img.alt = file.name;
-                    galleryLoader.enqueue(img, src);
+                    galleryLoader.enqueue(img, src, () => {
+                        img.remove();
+                        galleryImageIcon(cell);
+                    });
                     cell.appendChild(img);
                 } else {
-                    cell.classList.add('gallery-folder');
-                    cell.innerHTML = icons.image || icons.file;
+                    galleryImageIcon(cell);
                 }
 
                 const label = document.createElement('div');

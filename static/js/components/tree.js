@@ -23,11 +23,19 @@ const Tree = {
     filterText: '',
     treeData: [],
 
-    getLocationLabel(locationId) {
-        // locationId can be "loc-49" or just 49
+    /** Top-level location node. locationId can be "loc-49" or just 49. */
+    locationNode(locationId) {
         const id = String(locationId).startsWith('loc-') ? locationId : `loc-${locationId}`;
-        const node = this.treeData.find(n => n.id === id);
+        return this.treeData.find(n => n.id === id) || null;
+    },
+    getLocationLabel(locationId) {
+        const node = this.locationNode(locationId);
         return node ? node.label : null;
+    },
+    /** False only when the location is known to be offline. */
+    isLocationOnline(locationId) {
+        const node = this.locationNode(locationId);
+        return !node || node.online !== false;
     },
     expandedIds: new Set(),
     scanningLocations: new Set(),
