@@ -84,15 +84,18 @@ def get_document_collection():
     )
 
 
-def remove_embeddings(file_ids: list[int]):
-    """Remove embeddings for the given file IDs from both collections.
+async def remove_embeddings(file_ids: list[int]):
+    """Remove embeddings for the given file IDs from both collections, and
+    their document text from text.db.
 
     Safe to call when similarity search is not enabled — returns silently
     if chromadb is not available.
     """
-    if not is_chromadb_available():
-        return
     if not file_ids:
+        return
+    from file_hunter import text_db
+    await text_db.delete_files(file_ids)
+    if not is_chromadb_available():
         return
     try:
         img_coll = get_collection()
@@ -437,6 +440,8 @@ async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
             documents=documents,
             metadatas=metadatas,
         )
+        from file_hunter import text_db
+        await text_db.store_chunks(file_id, chunks)
         await mark_embedded(file_id, True)
 
         logger.info("Embedded %s: %d chunks", filename, len(chunks))
@@ -765,6 +770,8 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
                 documents=documents,
                 metadatas=metadatas,
             )
+            from file_hunter import text_db
+            await text_db.store_chunks(file_id, chunks)
             await mark_embedded(file_id, True)
         except Exception as e:
             logger.warning("ChromaDB upsert failed for document %d: %s", file_id, e)

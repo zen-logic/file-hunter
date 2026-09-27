@@ -143,6 +143,7 @@ from file_hunter.middleware import AuthMiddleware
 from file_hunter import extensions
 from file_hunter.hashes_db import init_hashes_db, close_hashes_db
 from file_hunter.stats_db import init_stats_db, close_stats_db
+from file_hunter.text_db import init_text_db, close_text_db
 from file_hunter.services.agents import ensure_local_agent
 from file_hunter.services.dup_counts import stop_writer as stop_dup_writer
 from file_hunter.services.dup_exclude import restore_pending as restore_dup_exclude
@@ -191,6 +192,9 @@ async def on_startup():
 
     await init_stats_db()
     _elapsed("stats db ready")
+
+    await init_text_db()
+    _elapsed("text db ready")
 
     # Local agent is created by preflight.py before the server starts.
     # If somehow missed (e.g. manual startup), create it now.
@@ -264,6 +268,7 @@ async def on_shutdown():
     await close_db()
     await close_hashes_db()
     await close_stats_db()
+    await close_text_db()
 
 
 @asynccontextmanager

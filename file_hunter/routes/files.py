@@ -1141,7 +1141,7 @@ async def file_unembed(request: Request):
         return json_error("Similarity search is not available.", 400)
 
     file_id = int(request.path_params["id"])
-    remove_embeddings([file_id])
+    await remove_embeddings([file_id])
     await mark_embedded(file_id, False)
     return json_ok({"removed": True})
 
@@ -1258,6 +1258,9 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
         if affected_ids:
             from file_hunter.services.similarity import mark_embedded_batch
             await mark_embedded_batch(affected_ids, False)
+            if embed_type != "image":
+                from file_hunter import text_db
+                await text_db.delete_files(affected_ids)
         logger.info("Deleted %d %s embeddings for %s",
                     deleted, embed_type, scope_label)
         await broadcast({

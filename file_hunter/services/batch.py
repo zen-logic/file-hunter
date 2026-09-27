@@ -191,7 +191,7 @@ async def batch_delete(
                     await db.execute(f"DELETE FROM files WHERE id IN ({bph})", batch)
 
             await remove_file_hashes(deleted_ids)
-            remove_embeddings(deleted_ids)
+            await remove_embeddings(deleted_ids)
 
         # Update stats once per location
         if removed_by_loc:

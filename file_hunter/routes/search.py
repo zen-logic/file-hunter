@@ -12,6 +12,7 @@ from file_hunter.services.search import (
     search_files_advanced,
     search_by_hash,
     parse_conditions_from_params,
+    _build_scope_sql,
 )
 
 logger = logging.getLogger("file_hunter")
@@ -57,7 +58,59 @@ async def search(request: Request):
             _act_unreg(act_name)
 
 
-async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: float = 0.3, location_ids: list[int] | None = None) -> list[int] | None:
+_CONTENT_RESULT_LIMIT = 200
+
+
+def _fts_query(text: str) -> str:
+    """Turn a user's search text into a safe FTS5 query.
+
+    "quoted phrases" stay phrases, a trailing * is a prefix match, a leading
+    - excludes a word or phrase, every other word must appear. Anything that
+    isn't a word is dropped, so user input can never be an FTS syntax error.
+    """
+    import re
+
+    include, exclude = [], []
+    negate_next = False  # a standalone "-", as in "(a) + b - c"
+    for neg, phrase, word in re.findall(r'(-?)(?:"([^"]*)"|(\S+))', text):
+        words = re.findall(r"\w+", phrase or word)
+        if not words:
+            negate_next = negate_next or (neg == "-" or word == "-")
+            continue
+        neg = neg or negate_next
+        negate_next = False
+        # a quoted phrase, or a word like x-ray / o'brien, matches as a phrase
+        term = '"' + " ".join(words) + '"'
+        if word.endswith("*"):
+            term += "*"
+        (exclude if neg else include).append(term)
+    if not include:
+        return ""  # FTS5 can't search for exclusions alone
+    return " ".join(include) + "".join(f" NOT {t}" for t in exclude)
+
+
+async def _text_file_ids(query: str) -> list[int] | None:
+    """Full-text search over document chunk text. File ids, best match first."""
+    from file_hunter.text_db import read_text
+
+    match = _fts_query(query)
+    if not match:
+        return None
+    async with read_text() as db:
+        rows = await db.execute_fetchall(
+            """WITH hits AS MATERIALIZED (
+                   SELECT rowid AS id, bm25(chunks_fts) AS score
+                   FROM chunks_fts WHERE chunks_fts MATCH ?)
+               SELECT c.file_id, MIN(h.score) AS best
+               FROM hits h JOIN chunks c ON c.id = h.id
+               GROUP BY c.file_id ORDER BY best""",
+            (match,),
+        )
+    logger.info("Text search: %r -> %s, %d files", query[:80], match, len(rows))
+    return [r["file_id"] for r in rows] or None
+
+
+async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: float = 0.3, location_ids: list[int] | None = None, file_ids: list[int] | None = None) -> list[int] | None:
     """Query document embeddings and return matching file IDs, or None if unavailable.
     Supports composite syntax: (legal action) + invoices - complaints
     """
@@ -105,7 +158,10 @@ async def _semantic_file_ids(semantic_query: str, embed_url: str, threshold: flo
             return None
 
         query_kwargs = {}
-        if location_ids and len(location_ids) == 1:
+        if file_ids is not None:
+            # "Search within": ChromaDB ranks only the scope's documents
+            query_kwargs["where"] = {"file_id": {"$in": file_ids}}
+        elif location_ids and len(location_ids) == 1:
             query_kwargs["where"] = {"location_id": location_ids[0]}
         elif location_ids and len(location_ids) > 1:
             query_kwargs["where"] = {"location_id": {"$in": location_ids}}
@@ -177,38 +233,76 @@ async def _do_search(request, page, sort, sort_dir, location_id, folder_id, focu
     semantic = request.query_params.get("semantic", "").strip()
     if semantic:
         from file_hunter.services import settings as settings_svc
+        text_mode = request.query_params.get("semanticMode") == "text"
         async with read_db() as db:
             enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
             embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
-        if enabled != "1" or not embed_url:
+        if enabled != "1" or (not embed_url and not text_mode):
             return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
         sem_threshold = float(request.query_params.get("semanticThreshold", "0.3"))
         sem_loc_raw = request.query_params.get("semanticLocations", "").strip()
         sem_location_ids = [int(x) for x in sem_loc_raw.split(",") if x.strip()] if sem_loc_raw else None
-        try:
-            sem_ids = await _semantic_file_ids(semantic, embed_url, threshold=sem_threshold, location_ids=sem_location_ids)
-        except ConnectionError:
-            return json_error("Embedding service unavailable.", 503)
+        # "Search within" a location or folder, resolved against the catalogue
+        scoped = bool(location_id or folder_id)
+        scope_frag, scope_params = "", []
+        if scoped:
+            sem_location_ids = None
+            async with read_db() as db:
+                scope_frag, _, scope_params = await _build_scope_sql(db, location_id=location_id, folder_id=folder_id)
+        if text_mode:
+            sem_ids = await _text_file_ids(semantic)
+        else:
+            scope_file_ids = None
+            if scoped:
+                async with read_db() as db:
+                    rows = await db.execute_fetchall(
+                        f"""SELECT f.id FROM files f WHERE {scope_frag}
+                            AND f.embedded = 1 AND f.file_type_high IN ('document', 'text')""",
+                        scope_params,
+                    )
+                scope_file_ids = [r["id"] for r in rows]
+                if not scope_file_ids:
+                    return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
+            try:
+                sem_ids = await _semantic_file_ids(
+                    semantic, embed_url, threshold=sem_threshold,
+                    location_ids=sem_location_ids, file_ids=scope_file_ids,
+                )
+            except ConnectionError:
+                return json_error("Embedding service unavailable.", 503)
         if not sem_ids:
             return json_ok({"items": [], "total": 0, "folders": [], "page": 0})
-        placeholders = ",".join("?" for _ in sem_ids)
+        # Location filter applies before the result cap, so a scoped search
+        # returns the best matches inside the scope
+        loc_sql, loc_params = "", []
+        if scoped:
+            loc_sql, loc_params = f" AND {scope_frag}", scope_params
+        elif sem_location_ids:
+            loc_sql = f" AND f.location_id IN ({','.join('?' for _ in sem_location_ids)})"
+            loc_params = sem_location_ids
+        file_map = {}
         async with read_db() as db:
-            rows = await db.execute_fetchall(
-                f"""SELECT id, filename AS name, file_type_high AS typeHigh,
-                           file_type_low AS typeLow, file_size AS size,
-                           modified_date AS date, dup_count AS dups,
-                           stale, location_id AS locationId,
-                           full_path, hidden
-                    FROM files WHERE id IN ({placeholders}) AND stale = 0""",
-                sem_ids,
-            )
-        file_map = {r["id"]: dict(r) for r in rows}
+            for start in range(0, len(sem_ids), 900):
+                batch = sem_ids[start:start + 900]
+                placeholders = ",".join("?" for _ in batch)
+                rows = await db.execute_fetchall(
+                    f"""SELECT id, filename AS name, file_type_high AS typeHigh,
+                               file_type_low AS typeLow, file_size AS size,
+                               modified_date AS date, dup_count AS dups,
+                               stale, location_id AS locationId,
+                               full_path, hidden
+                        FROM files f WHERE f.id IN ({placeholders}) AND f.stale = 0{loc_sql}""",
+                    batch + loc_params,
+                )
+                file_map.update((r["id"], dict(r)) for r in rows)
         items = []
         for fid in sem_ids:
             if fid in file_map:
                 item = file_map[fid]
                 item["type"] = "file"
                 items.append(item)
+                if len(items) == _CONTENT_RESULT_LIMIT:
+                    break
         return json_ok({"items": items, "total": len(items), "folders": [], "page": 0})
 
     # Fast path: hash-only search (dup badge click)

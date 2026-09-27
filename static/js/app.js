@@ -1297,6 +1297,7 @@ Search.init({
         similarityPanel.classList.add('hidden');
         similarityBtn.classList.remove('btn-active');
         document.getElementById('content-search-text').value = params.semantic || '';
+        setContentSearchMode(params.semanticMode || 'semantic');
         if (params.semanticThreshold) {
             contentSearchThreshold.value = params.semanticThreshold;
             contentSearchSlider.value = params.semanticThreshold;
@@ -1582,23 +1583,27 @@ similarityThreshold.addEventListener('input', () => {
 
 let similarityScopeNode = null;
 const simLocRow = document.getElementById('similarity-locations-row');
+/** "Search within" on the image similarity and content search panels:
+ *  offered when a location or folder is selected in the tree. */
 function updateSimilarityScope(node) {
-    const scopeEl = document.getElementById('similarity-scope');
-    const nameEl = document.getElementById('similarity-scope-name');
-    const checkEl = document.getElementById('similarity-scope-check');
-    if (node && (node.type === 'location' || node.type === 'folder')) {
-        similarityScopeNode = node;
-        nameEl.textContent = node.label || node.name;
-        scopeEl.classList.remove('hidden');
-    } else {
-        similarityScopeNode = null;
-        scopeEl.classList.add('hidden');
-        checkEl.checked = false;
-        simLocRow.classList.remove('hidden');
+    const scopable = node && (node.type === 'location' || node.type === 'folder') ? node : null;
+    similarityScopeNode = scopable;
+    for (const [prefix, locRow] of [['similarity', simLocRow], ['content-search', csLocRow]]) {
+        document.getElementById(`${prefix}-scope`).classList.toggle('hidden', !scopable);
+        if (scopable) {
+            document.getElementById(`${prefix}-scope-name`).textContent = scopable.label || scopable.name;
+        } else {
+            document.getElementById(`${prefix}-scope-check`).checked = false;
+            locRow.classList.remove('hidden');
+        }
     }
 }
 document.getElementById('similarity-scope-check').addEventListener('change', (e) => {
     simLocRow.classList.toggle('hidden', e.target.checked);
+});
+const csLocRow = document.getElementById('content-search-locations-row');
+document.getElementById('content-search-scope-check').addEventListener('change', (e) => {
+    csLocRow.classList.toggle('hidden', e.target.checked);
 });
 
 document.getElementById('similarity-go').addEventListener('click', async () => {
@@ -1692,6 +1697,20 @@ contentSearchThreshold.addEventListener('input', () => {
     contentSearchSlider.value = contentSearchThreshold.value;
 });
 
+// Full text mode has no threshold: hide the slider and its label
+const contentSearchMode = document.getElementById('content-search-mode');
+function setContentSearchMode(mode) {
+    contentSearchMode.value = mode;
+    const text = mode === 'text';
+    document.getElementById('content-search-threshold-label').classList.toggle('hidden', text);
+    contentSearchSlider.classList.toggle('hidden', text);
+    contentSearchThreshold.classList.toggle('hidden', text);
+    document.getElementById('content-search-text').placeholder = text
+        ? 'Exact words in document content, e.g. "unpaid invoices" -draft'
+        : 'Search within document content, e.g. (legal action) + invoices';
+}
+contentSearchMode.addEventListener('change', () => setContentSearchMode(contentSearchMode.value));
+
 document.getElementById('content-search-go').addEventListener('click', async () => {
     const text = document.getElementById('content-search-text').value.trim();
     const threshold = parseFloat(contentSearchThreshold.value);
@@ -1701,9 +1720,18 @@ document.getElementById('content-search-go').addEventListener('click', async () 
     }
     const params = new URLSearchParams();
     params.set('semantic', text);
-    params.set('semanticThreshold', threshold);
-    const csLocIds = csLoc.getIds();
-    if (csLocIds) params.set('semanticLocations', csLocIds.join(','));
+    if (contentSearchMode.value === 'text') {
+        params.set('semanticMode', 'text');
+    } else {
+        params.set('semanticThreshold', threshold);
+    }
+    if (document.getElementById('content-search-scope-check').checked && similarityScopeNode) {
+        params.set('scopeType', similarityScopeNode.type);
+        params.set('scopeId', similarityScopeNode.id);
+    } else {
+        const csLocIds = csLoc.getIds();
+        if (csLocIds) params.set('semanticLocations', csLocIds.join(','));
+    }
     params.set('page', '0');
     FileList.showLoading();
     Detail.el.innerHTML = '';
@@ -1723,6 +1751,7 @@ document.getElementById('content-search-go').addEventListener('click', async () 
 
 document.getElementById('content-search-clear').addEventListener('click', () => {
     document.getElementById('content-search-text').value = '';
+    setContentSearchMode('semantic');
     contentSearchSlider.value = 0.3;
     contentSearchThreshold.value = 0.3;
     csLoc.reset();
@@ -1739,6 +1768,7 @@ document.getElementById('content-search-save').addEventListener('click', async (
     const values = {
         mode: 'content',
         semantic: text,
+        semanticMode: contentSearchMode.value,
         semanticThreshold: contentSearchThreshold.value,
     };
     const savedLocIds = csLoc.getIds();
