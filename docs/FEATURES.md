@@ -30,7 +30,7 @@ Interactive visualisation of disk usage for any location or folder. Drill into s
 
 ## Previews
 
-Images, video, audio, PDFs, CSV tables, rendered markdown, text files, and a hex viewer all render inline in the detail panel. Markdown can also be viewed as raw text. "Copy URL" copies a direct link to the file for use in other applications, including your login so it opens without signing in again. Full-screen zoom on any preview. Image dimensions shown below the preview.
+Images, video, audio, PDFs, CSV tables, rendered markdown, text files, and a hex viewer all render inline in the detail panel. Markdown can also be viewed as raw text. "Copy URL" copies a direct link to the file for use in other applications, including your token so it opens without signing in again. Full-screen zoom on any preview. Image dimensions shown below the preview.
 
 ## Similarity search
 
@@ -97,7 +97,7 @@ Move, copy, rename, and delete files and folders. Create new folders. Upload via
 
 ## Batch operations
 
-Multi-select with checkboxes, Shift-click, or Ctrl/Cmd-click. Bulk delete, move, tag, consolidate, or download as ZIP.
+Multi-select with checkboxes, Shift-click, Ctrl/Cmd-click, or the keyboard: S selects or deselects the file you're on, in the file list, gallery, preview, slideshow, and playlist, and the arrow keys then move through the list without changing the selection. With nothing selected, S scans as before. Bulk delete, move, tag, consolidate, or download as ZIP. Clear Selection in the detail panel deselects everything.
 
 ## Tags and descriptions
 
@@ -129,7 +129,7 @@ Built-in themes from retro CRT terminals to clean corporate light modes. Create 
 
 ## Keyboard navigation
 
-Full keyboard support across all panels. Arrow keys, Tab to cycle panels, shortcuts for search, triage, scan, and file operations. Detail panel keys forward to the file list when input fields aren't active.
+Full keyboard support across all panels. Arrow keys, Tab to cycle panels, shortcuts for search, triage, scan, and file operations. Detail panel keys forward to the file list when input fields aren't active. Every shortcut is listed in [KEYBOARD_SHORTCUTS.md](KEYBOARD_SHORTCUTS.md).
 
 ## Multi-user authentication
 

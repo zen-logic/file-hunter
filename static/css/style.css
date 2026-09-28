@@ -860,7 +860,10 @@ body::after {
     text-overflow: ellipsis;
 }
 
-.file-table tr:hover {
+/* .cursor: the item the arrows are on while selecting with S. Same look as
+   hover; .selected comes later at equal specificity, so it wins. */
+.file-table tr:hover,
+.file-table tr.cursor {
     background: var(--color-surface-active);
     cursor: pointer;
 }
@@ -1000,7 +1003,8 @@ body::after {
     background: var(--color-surface);
 }
 
-.gallery-item:hover {
+.gallery-item:hover,
+.gallery-item.cursor {
     border-color: var(--color-hover-border);
 }
 
@@ -3295,6 +3299,10 @@ select.modal-input {
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);
     color: #fff;
+}
+
+.mark-pip.mark-selected {
+    background: var(--color-status-ok, #22c55e);
 }
 
 .mark-pip.mark-delete {

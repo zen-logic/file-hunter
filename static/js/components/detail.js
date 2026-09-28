@@ -73,6 +73,9 @@ const Detail = {
     onNavigateToFolder: null,
     onShowDuplicates: null,
     onPreviewNavigate: null,    // arrow keys while the preview is open
+    onSelectToggle: null,       // S in the preview/slideshow/playlist: toggle this file's selection
+    isFileSelected: null,       // for the badge
+    cursorPreviewGen: 0,
     onSlideshowClose: null,     // fileId of the last-shown item when slideshow/playlist closes
 
     init(opts) {
@@ -294,6 +297,24 @@ const Detail = {
                         this.toggleAutoplay();
                     }
                 }
+                else if (e.key === 's' || e.key === 'S') {
+                    const fileId = this.slideshowCurrentFileId();
+                    if (fileId && this.onSelectToggle) {
+                        e.preventDefault();
+                        const d = this.slideshowCache[fileId] || {};
+                        this.onSelectToggle({
+                            id: fileId,
+                            name: d.name || `File ${fileId}`,
+                            type: 'file',
+                            typeHigh: d.typeHigh,
+                            typeLow: d.typeLow,
+                            size: d.size,
+                            date: d.date,
+                            locationId: d.locationId,
+                        });
+                        this.updatePreviewBadge();
+                    }
+                }
                 else if ('dctmz'.includes(e.key)) {
                     const fileId = this.slideshowCurrentFileId();
                     if (fileId) {
@@ -315,6 +336,13 @@ const Detail = {
                 e.preventDefault();
                 if (this.onPreviewNavigate) {
                     this.onPreviewNavigate(e.key === 'ArrowDown' ? 1 : -1);
+                }
+            } else if (e.key === 's' || e.key === 'S') {
+                const m = this.previewModal;
+                if (m.fileId && this.onSelectToggle) {
+                    e.preventDefault();
+                    this.onSelectToggle({ id: m.fileId, name: m.fileName, type: 'file' });
+                    this.updatePreviewBadge();
                 }
             } else if ('dctmz'.includes(e.key)) {
                 // Plain preview marks into the same session queues the file
@@ -404,6 +432,27 @@ const Detail = {
         if (!document.getElementById('preview-zoom-btn')) return false;
         this.openPreviewModal(detail);
         return true;
+    },
+
+    /** Cursor mode: the detail panel stays on the selection, so the preview
+     *  fetches the cursor's file itself. With onlyIfOpen it just follows the
+     *  cursor while a plain preview is showing; otherwise it opens the
+     *  preview, if the file is one the panel could enlarge. */
+    async previewFile(file, onlyIfOpen) {
+        const m = this.previewModal;
+        if (!m || !file || file.type === 'folder' || typeof file.id !== 'number') return;
+        const isOpen = () => !m.overlay.classList.contains('hidden');
+        if (onlyIfOpen && (!isOpen() || this.slideshowTotal > 0)) return;
+        const gen = ++this.cursorPreviewGen;
+        const res = await API.get(`/api/files/${file.id}`);
+        if (gen !== this.cursorPreviewGen || !res.ok) return;
+        const detail = res.data;
+        if (onlyIfOpen) {
+            if (!isOpen() || this.slideshowTotal > 0) return;
+        } else if (!(detail.online && !detail.stale && this.buildPreview(detail).includes('preview-zoom-btn'))) {
+            return;
+        }
+        this.openPreviewModal(detail);
     },
 
     downloadPreviewFile() {
@@ -762,11 +811,13 @@ const Detail = {
         const fileId = m.fileId;
         const badge = m.markBadge;
         const ops = fileId ? Triage.getMarks(fileId) : [];
-        if (ops.length > 0) {
+        const selected = !!(fileId && this.isFileSelected && this.isFileSelected(fileId));
+        if (ops.length > 0 || selected) {
             const labels = { delete: 'D', consolidate: 'C', tag: 'T', move: 'M', zip: 'Z' };
-            badge.innerHTML = ops.map(o =>
-                `<span class="mark-pip mark-${o}">${labels[o] || o[0].toUpperCase()}</span>`
-            ).join('');
+            badge.innerHTML = (selected ? '<span class="mark-pip mark-selected">Selected</span>' : '')
+                + ops.map(o =>
+                    `<span class="mark-pip mark-${o}">${labels[o] || o[0].toUpperCase()}</span>`
+                ).join('');
             badge.classList.remove('hidden');
         } else {
             badge.innerHTML = '';
@@ -2138,6 +2189,7 @@ const Detail = {
             <div class="detail-section">
                 <h3>Items</h3>
                 ${itemListHtml}
+                <button class="btn btn-sm" id="batch-clear-btn" style="margin-top:0.4rem">Clear Selection</button>
             </div>
         `;
     },

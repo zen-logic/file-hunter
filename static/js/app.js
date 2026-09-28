@@ -467,6 +467,10 @@ function wireBatchActions(items) {
         });
     }
 
+    // Clear selection
+    const clearBtn = document.getElementById('batch-clear-btn');
+    if (clearBtn) clearBtn.addEventListener('click', () => FileList.deselectAll());
+
     // Batch rehash
     const rehashBtn = document.getElementById('batch-rehash-btn');
     if (rehashBtn && fileIds.length > 0) {
@@ -563,6 +567,11 @@ function startApp(user) {
     Keyboard.setSelectAllHandler(() => FileList.selectAll());
     Keyboard.setNewLocationHandler(() => AddLocationModal.open());
     Keyboard.setScanHandler(() => scanBtn.click());
+    Keyboard.setSelectToggleHandler(() => {
+        if (!FileList.wantsSelectKey()) return false;
+        FileList.toggleAtCursor();
+        return true;
+    });
     Keyboard.setDeleteHandler(() => {
         const delBtn = document.getElementById('detail-delete-file')
             || document.getElementById('detail-delete-folder');
@@ -1280,6 +1289,10 @@ FileList.onPreview = (file) => Detail.openPreviewFor(file);
 // Arrow keys keep working while the preview is open — the list advances and
 // the enlarged view follows the selection.
 Detail.onPreviewNavigate = (delta) => FileList.moveSelection(delta);
+// S in the preview, slideshow or playlist selects the file being viewed
+Detail.onSelectToggle = (file) => FileList.toggleFile(file);
+Detail.isFileSelected = (fileId) => FileList.showsAsSelected(fileId);
+FileList.onCursorPreview = (file, onlyIfOpen) => Detail.previewFile(file, onlyIfOpen);
 Detail.onSlideshowClose = (fileId) => FileList.focusFile(fileId);
 Detail.getSortParams = () => ({ sort: FileList.sortKey, sortDir: FileList.sortDirStr() });
 

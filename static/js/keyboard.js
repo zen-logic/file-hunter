@@ -5,6 +5,7 @@ const Keyboard = {
     selectAllHandler: null,
     newLocationHandler: null,
     scanHandler: null,
+    selectToggleHandler: null,
     deleteHandler: null,
     panels: {},
 
@@ -58,6 +59,11 @@ const Keyboard = {
 
     setScanHandler(fn) {
         this.scanHandler = fn;
+    },
+
+    /** fn returns true if it handled S as select, false to fall through to scan. */
+    setSelectToggleHandler(fn) {
+        this.selectToggleHandler = fn;
     },
 
     setDeleteHandler(fn) {
@@ -180,9 +186,11 @@ const Keyboard = {
             return;
         }
 
-        // 6. S — scan selected location
+        // 6. S - toggle the file at the cursor when files are selected,
+        // otherwise scan the selected location
         if (e.key === 's' || e.key === 'S') {
             e.preventDefault();
+            if (this.selectToggleHandler && this.selectToggleHandler()) return;
             if (this.scanHandler) this.scanHandler();
             return;
         }

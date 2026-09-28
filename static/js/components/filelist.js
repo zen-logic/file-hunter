@@ -101,12 +101,15 @@ const FileList = {
     currentPage: 0,
     selectedItems: new Map(),   // key → item object
     anchorIdx: null,           // for Shift+click range select
+    cursorIdx: null,           // item last moved to; Shift+arrow extends from here
+    cursorMode: false,         // S toggled a file: arrows move the cursor, not the selection
     selectAllGen: 0,           // generation counter — incremented by clearSelection to abort in-flight selectAll
     onSelect: null,
     onFolderOpen: null,
     onDeselect: null,
     onMultiSelect: null,
     onPreview: null,            // space — enlarge the selected file
+    onCursorPreview: null,      // cursor mode: show this file in the preview (open = only if already open)
     onSelectingAll: null,
     onBreadcrumbNav: null,
     currentBreadcrumb: null,
@@ -140,6 +143,10 @@ const FileList = {
             this.viewToggleEl.innerHTML = this.viewMode === 'list' ? icons.grid : icons.list;
             this.viewToggleEl.title = this.viewMode === 'list' ? 'Gallery view' : 'List view';
             this.render();
+            // The old scroll offset means nothing in the other layout, so bring
+            // back the item the user was on (render only follows a single one)
+            const pos = this.cursorPosition(this.getDisplayItems());
+            if (pos >= 0) this.scrollSelectedIntoView(pos);
         });
 
         this.filterEl.addEventListener('input', () => {
@@ -187,6 +194,8 @@ const FileList = {
     clearSelection() {
         this.selectedItems.clear();
         this.anchorIdx = null;
+        this.cursorIdx = null;
+        this.cursorMode = false;
         this.selectAllGen++;
     },
 
@@ -194,6 +203,8 @@ const FileList = {
         this.selectedItems.clear();
         this.selectedItems.set(itemKey(item), item);
         this.anchorIdx = idx !== undefined ? idx : this.indexOfItem(item);
+        this.cursorIdx = this.anchorIdx;
+        this.cursorMode = false;
     },
 
     toggleItem(item, idx) {
@@ -204,6 +215,83 @@ const FileList = {
             this.selectedItems.set(key, item);
         }
         this.anchorIdx = idx !== undefined ? idx : this.indexOfItem(item);
+        this.cursorIdx = this.anchorIdx;
+        this.cursorMode = false;
+    },
+
+    /** Position of the cursor on the current page, or -1. In cursor mode it's
+     *  wherever the arrows left it, selected or not. Otherwise it's the item
+     *  last moved to; a range's end can't be inferred from the selection
+     *  (it's stored low to high), so it's tracked, with a fallback if the
+     *  page has changed under it. */
+    cursorPosition(items) {
+        const c = this.cursorIdx;
+        if (this.cursorMode) return c !== null && c < items.length ? c : -1;
+        if (this.selectedItems.size === 0) return -1;
+        if (c !== null && c < items.length && this.isSelected(items[c])) return c;
+        const sel = this.getSelection();
+        return this.indexOfItem(sel[sel.length - 1]);
+    },
+
+    /** S with files selected, or already in cursor mode: toggle the file at
+     *  the cursor and switch the arrows to moving the cursor only. */
+    wantsSelectKey() {
+        return this.cursorMode || this.selectedItems.size > 0;
+    },
+
+    /** Switch the arrows to moving the cursor. After ordinary navigation the
+     *  one selected file is only where the arrows left it, so the first S on
+     *  it keeps it selected rather than toggling it off. Returns true when
+     *  that happened and the toggle should be skipped. */
+    startCursorMode(key) {
+        if (this.cursorMode) return false;
+        this.cursorMode = true;
+        return this.selectedItems.size === 1 && this.selectedItems.has(key);
+    },
+
+    toggleKey(key, item) {
+        if (this.startCursorMode(key)) return;
+        if (this.selectedItems.has(key)) {
+            this.selectedItems.delete(key);
+        } else {
+            this.selectedItems.set(key, item);
+        }
+    },
+
+    /** Selected as far as the preview badge is concerned: a lone selection
+     *  from ordinary navigation isn't a choice the user made. */
+    showsAsSelected(fileId) {
+        return this.selectedItems.has(String(fileId))
+            && (this.cursorMode || this.selectedItems.size > 1);
+    },
+
+    /** S in the preview, slideshow or playlist. The file may not be on the
+     *  current page (slideshows run over the whole folder or search). */
+    toggleFile(file) {
+        const key = itemKey(file);
+        const items = this.getDisplayItems();
+        const idx = items.findIndex(f => itemKey(f) === key);
+        this.toggleKey(key, idx >= 0 ? items[idx] : file);
+        if (idx >= 0) {
+            this.cursorIdx = idx;
+            this.anchorIdx = idx;
+        }
+        this.fireSelectionChange();
+        this.render();
+        if (idx >= 0) this.scrollSelectedIntoView(idx);
+    },
+
+    toggleAtCursor() {
+        const items = this.getDisplayItems();
+        const idx = this.cursorPosition(items);
+        if (idx < 0) return;
+        const item = items[idx];
+        this.toggleKey(itemKey(item), item);
+        this.cursorIdx = idx;
+        this.anchorIdx = idx;
+        this.fireSelectionChange();
+        this.render();
+        this.scrollSelectedIntoView(idx);
     },
 
     selectRange(fromIdx, toIdx) {
@@ -360,14 +448,7 @@ const FileList = {
         const items = this.getDisplayItems();
         if (!items || items.length === 0) return;
 
-        // Find current cursor position based on last single-selected or anchor
-        let curIdx = -1;
-        if (this.selectedItems.size > 0) {
-            // Use the last item in selection order or anchor
-            const sel = this.getSelection();
-            const lastItem = sel[sel.length - 1];
-            curIdx = this.indexOfItem(lastItem);
-        }
+        const curIdx = this.cursorPosition(items);
 
         let newIdx = curIdx;
         const totalPages = this.totalPages();
@@ -387,15 +468,20 @@ const FileList = {
                 newIdx = curIdx < items.length - 1 ? curIdx + 1 : curIdx;
                 if (curIdx === -1) newIdx = 0;
 
+                if (e.shiftKey && this.cursorMode) {
+                    this.selectAtCursor(items, newIdx);
+                    return;
+                }
                 if (e.shiftKey) {
                     // Extend selection
                     const anchor = this.anchorIdx !== null ? this.anchorIdx : curIdx;
                     this.selectedItems.clear();
                     this.selectRange(anchor, newIdx);
                     this.anchorIdx = anchor;
+                    this.cursorIdx = newIdx;
                     this.fireSelectionChange();
                     this.render();
-                    this.scrollSelectedIntoView();
+                    this.scrollSelectedIntoView(newIdx);
                     return;
                 }
                 break;
@@ -408,14 +494,19 @@ const FileList = {
                 newIdx = curIdx > 0 ? curIdx - 1 : 0;
                 if (curIdx === -1) newIdx = 0;
 
+                if (e.shiftKey && this.cursorMode) {
+                    this.selectAtCursor(items, newIdx);
+                    return;
+                }
                 if (e.shiftKey) {
                     const anchor = this.anchorIdx !== null ? this.anchorIdx : curIdx;
                     this.selectedItems.clear();
                     this.selectRange(anchor, newIdx);
                     this.anchorIdx = anchor;
+                    this.cursorIdx = newIdx;
                     this.fireSelectionChange();
                     this.render();
-                    this.scrollSelectedIntoView();
+                    this.scrollSelectedIntoView(newIdx);
                     return;
                 }
                 break;
@@ -458,11 +549,24 @@ const FileList = {
                     if (this.onFolderOpen) this.onFolderOpen(items[curIdx]);
                 }
                 return;
+            case 'Escape':
+                if (!this.cursorMode) return;
+                this.cursorMode = false;
+                this.render();
+                return;
             case ' ':
                 // Enlarge the selected file without leaving the keyboard —
                 // space or escape closes it and the list is still where it was.
                 // Only swallows the keypress when a preview actually opened.
                 if (curIdx === -1 || items[curIdx].type === 'folder') return;
+                if (this.cursorMode && this.onCursorPreview) {
+                    // The detail panel stays on the selection, so the preview
+                    // is fetched for the cursor's file directly.
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    this.onCursorPreview(items[curIdx], false);
+                    return;
+                }
                 if (this.onPreview && this.onPreview(items[curIdx])) {
                     e.preventDefault();
                     // The modal's own keydown listener is registered after the
@@ -485,9 +589,30 @@ const FileList = {
 
         const file = items[newIdx];
         if (!file) return;
+        if (this.cursorMode) {
+            this.moveCursor(items, newIdx);
+            return;
+        }
         this.selectOnly(file, newIdx);
         this.render();
         this.fireSelectionChange();
+    },
+
+    /** Cursor mode: move the cursor, and an open preview follows it. */
+    moveCursor(items, idx) {
+        this.cursorIdx = idx;
+        this.render();
+        this.scrollSelectedIntoView(idx);
+        if (this.onCursorPreview && items[idx]) this.onCursorPreview(items[idx], true);
+    },
+
+    /** Shift+arrow in cursor mode: move the cursor and add what it lands on. */
+    selectAtCursor(items, idx) {
+        const file = items[idx];
+        if (!file) return;
+        this.selectedItems.set(itemKey(file), file);
+        this.fireSelectionChange();
+        this.moveCursor(items, idx);
     },
 
     /** Move the selection one row, as if the arrow key had been pressed.
@@ -503,14 +628,23 @@ const FileList = {
         });
     },
 
-    scrollSelectedIntoView() {
+    /** Keep the selection in view. Without an index only a single selection
+     *  is followed: with several selected there's no one item to keep in view,
+     *  and scrolling to the first drags the view back up while the user is
+     *  selecting further down. Shift+arrow passes the cursor's index, since
+     *  extending a range should follow the end that's moving. */
+    scrollSelectedIntoView(idx) {
+        if (idx === undefined && this.selectedItems.size !== 1) return;
         if (this.viewMode === 'gallery') {
-            const el = this.el.querySelector('.gallery-item.selected');
+            const el = idx !== undefined
+                ? this.el.querySelectorAll('.gallery-item')[idx]
+                : this.el.querySelector('.gallery-item.selected');
             if (el) el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
             return;
         }
-        const el = this.el.querySelector('tr.selected:last-child')
-            || this.el.querySelector('tr.selected');
+        const el = idx !== undefined
+            ? this.el.querySelectorAll('tbody tr')[idx]
+            : this.el.querySelector('tr.selected');
         if (!el) return;
 
         // The column header is sticky, so it overlays the top of the scroll
@@ -673,12 +807,7 @@ const FileList = {
         if (focusFileId && res.ok && res.data.focusFileId) {
             const foldersLen = this.currentFolders ? this.currentFolders.length : 0;
             const idx = this.currentItems.findIndex(f => f.id === res.data.focusFileId);
-            if (idx >= 0) {
-                this.selectOnly(this.currentItems[idx], foldersLen + idx);
-                this.render();
-                this.fireSelectionChange();
-                this.scrollSelectedIntoView();
-            }
+            if (idx >= 0) this.focusAt(foldersLen + idx);
         }
     },
 
@@ -719,12 +848,7 @@ const FileList = {
         if (focusFileId && res.ok && res.data.focusFileId) {
             const foldersLen = this.currentFolders ? this.currentFolders.length : 0;
             const idx = this.currentItems.findIndex(f => f.id === res.data.focusFileId);
-            if (idx >= 0) {
-                this.selectOnly(this.currentItems[idx], foldersLen + idx);
-                this.render();
-                this.fireSelectionChange();
-                this.scrollSelectedIntoView();
-            }
+            if (idx >= 0) this.focusAt(foldersLen + idx);
         }
     },
 
@@ -791,20 +915,36 @@ const FileList = {
         await this.fetchFolder(focusFileId);
     },
 
+    /** Show the item at idx: select it, or in cursor mode put the cursor on
+     *  it and leave the selection alone. */
+    focusAt(idx) {
+        const items = this.getDisplayItems();
+        if (this.cursorMode) {
+            this.cursorIdx = idx;
+            this.render();
+            this.scrollSelectedIntoView(idx);
+            return;
+        }
+        this.selectOnly(items[idx], idx);
+        this.render();
+        this.fireSelectionChange();
+        this.scrollSelectedIntoView();
+    },
+
     async focusFile(fileId) {
         // Try current page first — no round-trip needed
         const items = this.getDisplayItems();
         const idx = items.findIndex(f => f.id === fileId);
         if (idx >= 0) {
-            this.selectOnly(items[idx], idx);
-            this.render();
-            this.fireSelectionChange();
-            this.scrollSelectedIntoView();
+            this.focusAt(idx);
             return;
         }
         // File is on a different page — refetch with focusFile
         if (this.searchMode) {
             await this.fetchSearch(fileId);
+        } else if (this.currentFolder && this.cursorMode) {
+            // refreshFolder would clear the selection being built
+            await this.fetchFolder(fileId);
         } else if (this.currentFolder) {
             this.pendingFocusFile = fileId;
             await this.refreshFolder();
@@ -889,7 +1029,16 @@ const FileList = {
             if (items.length > 0) {
                 const file = selectPosition === 'last' ? items[items.length - 1] : items[0];
                 const idx = selectPosition === 'last' ? items.length - 1 : 0;
+                if (this.cursorMode) {
+                    if (extend) {
+                        this.selectAtCursor(items, idx);
+                    } else {
+                        this.moveCursor(items, idx);
+                    }
+                    return;
+                }
                 this.anchorIdx = idx;
+                this.cursorIdx = idx;
                 // Only shift-extend carries the previous page's selection over.
                 // Plain navigation moves a cursor, so crossing a page boundary
                 // must leave exactly one row selected — otherwise it reports a
@@ -898,7 +1047,12 @@ const FileList = {
                 this.selectedItems.set(itemKey(file), file);
                 this.render();
                 this.fireSelectionChange();
+                this.scrollSelectedIntoView(idx);
             }
+        } else if (this.cursorMode) {
+            // Paging bar: the cursor starts at the top of the new page
+            this.cursorIdx = 0;
+            this.render();
         }
     },
 
@@ -992,6 +1146,7 @@ const FileList = {
                 grid.querySelectorAll('.gallery-item').forEach((cell, idx) => {
                     const key = cell.dataset.key;
                     cell.classList.toggle('selected', key != null && this.selectedItems.has(key));
+                    cell.classList.toggle('cursor', this.cursorMode && idx === this.cursorIdx);
                     const file = items[idx];
                     if (file && file.type !== 'folder') this.buildGalleryBadges(cell, file);
                 });
@@ -1076,6 +1231,7 @@ const FileList = {
             const tr = document.createElement('tr');
             const selected = this.isSelected(file);
             if (selected) tr.classList.add('selected');
+            if (this.cursorMode && idx === this.cursorIdx) tr.classList.add('cursor');
             if (file.pendingOp) tr.classList.add('pending-op');
             else if (file.stale) tr.classList.add('stale');
             else if (file.missing) tr.classList.add('missing');
@@ -1093,6 +1249,8 @@ const FileList = {
                 this.fireSelectionChange();
                 // Update row highlight + header checkbox without full re-render
                 const nowSelected = this.isSelected(file);
+                const cursorRow = this.el.querySelector('tr.cursor');
+                if (cursorRow) cursorRow.classList.remove('cursor');
                 tr.classList.toggle('selected', nowSelected);
                 cb.checked = nowSelected;
                 this.updateHeaderCheckbox();
@@ -1173,6 +1331,8 @@ const FileList = {
                     // Range select
                     this.selectedItems.clear();
                     this.selectRange(this.anchorIdx, idx);
+                    this.cursorIdx = idx;
+                    this.cursorMode = false;
                     this.fireSelectionChange();
                     this.render();
                 } else if (e.ctrlKey || e.metaKey) {
@@ -1227,6 +1387,7 @@ const FileList = {
             cell.className = 'gallery-item';
             cell.dataset.key = itemKey(file);
             if (this.isSelected(file)) cell.classList.add('selected');
+            if (this.cursorMode && idx === this.cursorIdx) cell.classList.add('cursor');
             if (file.stale) cell.classList.add('stale');
             if (file.pendingOp) cell.classList.add('pending-op');
 
@@ -1283,6 +1444,8 @@ const FileList = {
                 } else if (e.shiftKey && this.anchorIdx !== null) {
                     this.selectedItems.clear();
                     this.selectRange(this.anchorIdx, idx);
+                    this.cursorIdx = idx;
+                    this.cursorMode = false;
                     this.fireSelectionChange();
                     this.render();
                 } else {
