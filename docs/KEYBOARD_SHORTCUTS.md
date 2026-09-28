@@ -29,7 +29,7 @@ while a dialog is open; the dialog has its own keys.
 | Escape | In a filter box: clear the filter and return focus to its panel. In a search field: close the search panel |
 | N | Add a new location |
 | S | With no files selected: open the Scan dialog for the location or folder selected in the tree. With files selected: select or deselect a file (see [Selecting with S](#selecting-with-s)) |
-| Delete or Backspace | Delete the file or folder shown in the details panel. This asks for confirmation first. It works when the details panel is showing a single file or folder, not a multiple selection |
+| Delete or Backspace | Delete the selected files and folders, the same as the Delete button in the details panel. This asks for confirmation first |
 
 ## Tree
 

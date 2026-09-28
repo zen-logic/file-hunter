@@ -574,7 +574,8 @@ function startApp(user) {
     });
     Keyboard.setDeleteHandler(() => {
         const delBtn = document.getElementById('detail-delete-file')
-            || document.getElementById('detail-delete-folder');
+            || document.getElementById('detail-delete-folder')
+            || document.getElementById('batch-delete-btn');
         if (delBtn) delBtn.click();
     });
 
