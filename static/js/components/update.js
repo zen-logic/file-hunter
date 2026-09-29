@@ -1,5 +1,6 @@
 import API from '../api.js';
 import WS from '../ws.js';
+import { esc } from '../format.js';
 
 const Update = {
     overlay: null,
@@ -37,7 +38,9 @@ const Update = {
 
     // ── Free mode: single "Upgrade" button ──────────────────────────
 
-    upgradeLayout(title, savedKey) {
+    /** The update dialog: licence key row, action buttons, then the
+     *  package upload and status line both modes share. */
+    layout(title, keyRow, actions) {
         return `
             <div class="modal-dialog" style="width:440px">
                 <div class="settings-header">
@@ -47,14 +50,9 @@ const Update = {
                 <div id="update-body">
                     <div class="modal-field">
                         <label class="modal-label">License Key</label>
-                        <input type="text" class="modal-input" id="update-key"
-                               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                               value="${this.esc(savedKey || '')}"
-                               spellcheck="false" autocomplete="off">
+                        ${keyRow}
                     </div>
-                    <div style="margin-top:0.75rem">
-                        <button class="btn btn-sm btn-primary" id="update-upgrade">Upgrade</button>
-                    </div>
+                    ${actions}
                     <div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;font-size:var(--font-size-sm);color:var(--color-text-muted)">
                         <hr style="flex:1;border:none;border-top:1px solid var(--color-border)">
                         <span>or upload package</span>
@@ -69,8 +67,15 @@ const Update = {
             </div>`;
     },
 
-    bindUpgradeEvents() {
-        document.getElementById('update-upgrade').addEventListener('click', () => this.upgrade());
+    keyInput(savedKey) {
+        return `<input type="text" class="modal-input" id="update-key"
+                               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                               value="${esc(savedKey || '')}"
+                               spellcheck="false" autocomplete="off">`;
+    },
+
+    /** Show the Upload button once a package is chosen. */
+    bindUpload() {
         document.getElementById('update-file').addEventListener('change', (e) => {
             const uploadBtn = document.getElementById('update-upload');
             if (e.target.files.length) {
@@ -80,6 +85,20 @@ const Update = {
             }
         });
         document.getElementById('update-upload').addEventListener('click', () => this.uploadFile());
+    },
+
+    // ── Free mode: single "Upgrade" button ──────────────────────────
+
+    upgradeLayout(title, savedKey) {
+        return this.layout(title, this.keyInput(savedKey), `
+                    <div style="margin-top:0.75rem">
+                        <button class="btn btn-sm btn-primary" id="update-upgrade">Upgrade</button>
+                    </div>`);
+    },
+
+    bindUpgradeEvents() {
+        document.getElementById('update-upgrade').addEventListener('click', () => this.upgrade());
+        this.bindUpload();
     },
 
     async upgrade() {
@@ -134,11 +153,10 @@ const Update = {
         const form = new FormData();
         form.append('file', file);
 
-        const token = localStorage.getItem('fh-token');
         try {
             const resp = await fetch('/api/update/upload', {
                 method: 'POST',
-                headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+                headers: API.authHeaders(),
                 body: form,
             });
             const res = await resp.json();
@@ -163,54 +181,21 @@ const Update = {
     // ── Pro mode: check + install ───────────────────────────────────
 
     proLayout(title, savedKey) {
-        return `
-            <div class="modal-dialog" style="width:440px">
-                <div class="settings-header">
-                    <h2 class="modal-title">${title}</h2>
-                    <button class="btn btn-sm" id="update-close">&times;</button>
-                </div>
-                <div id="update-body">
-                    <div class="modal-field">
-                        <label class="modal-label">License Key</label>
-                        <div class="settings-inline">
-                            <input type="text" class="modal-input" id="update-key"
-                                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                                   value="${this.esc(savedKey || '')}"
-                                   spellcheck="false" autocomplete="off">
+        return this.layout(title, `<div class="settings-inline">
+                            ${this.keyInput(savedKey)}
                             <button class="btn btn-sm" id="update-save-key">Save</button>
-                        </div>
-                    </div>
+                        </div>`, `
                     <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
                         <button class="btn btn-sm btn-primary" id="update-check">Check for Updates</button>
                         <button class="btn btn-sm hidden" id="update-install">Install</button>
-                    </div>
-                    <div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;font-size:var(--font-size-sm);color:var(--color-text-muted)">
-                        <hr style="flex:1;border:none;border-top:1px solid var(--color-border)">
-                        <span>or upload package</span>
-                        <hr style="flex:1;border:none;border-top:1px solid var(--color-border)">
-                    </div>
-                    <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem">
-                        <input type="file" id="update-file" accept=".filehunter,.zip" style="font-size:var(--font-size-sm)">
-                        <button class="btn btn-sm btn-primary hidden" id="update-upload">Upload</button>
-                    </div>
-                    <div id="update-status" class="hidden" style="margin-top:0.75rem;font-size:var(--font-size-sm)"></div>
-                </div>
-            </div>`;
+                    </div>`);
     },
 
     bindProEvents() {
         document.getElementById('update-save-key').addEventListener('click', () => this.saveKey());
         document.getElementById('update-check').addEventListener('click', () => this.check());
         document.getElementById('update-install').addEventListener('click', () => this.install());
-        document.getElementById('update-file').addEventListener('change', (e) => {
-            const uploadBtn = document.getElementById('update-upload');
-            if (e.target.files.length) {
-                uploadBtn.classList.remove('hidden');
-            } else {
-                uploadBtn.classList.add('hidden');
-            }
-        });
-        document.getElementById('update-upload').addEventListener('click', () => this.uploadFile());
+        this.bindUpload();
     },
 
     async saveKey() {
@@ -344,12 +329,6 @@ const Update = {
             type === 'error' ? 'var(--color-status-error)' :
             type === 'success' ? 'var(--color-status-success)' :
             'var(--color-text-muted)';
-    },
-
-    esc(s) {
-        const d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
     },
 };
 

@@ -3,7 +3,7 @@
 Uses the in-memory agent connection state to determine if an agent-backed
 location should be considered online, without touching the filesystem.
 
-A DB-backed cache (_all_agent_loc_ids) is loaded at startup so that agent
+A DB-backed cache (all_agent_loc_ids) is loaded at startup so that agent
 locations are correctly identified even before any agent connects.
 """
 
@@ -12,13 +12,13 @@ from file_hunter.services.agent_ops import dispatch
 
 # Persistent cache of ALL agent-backed location IDs (online or offline).
 # Loaded from DB at startup, updated on agent connect/disconnect.
-_all_agent_loc_ids: set[int] = set()
+all_agent_loc_ids: set[int] = set()
 
 # location_id -> agent name (for tree label prefixes)
-_agent_label_prefixes: dict[int, str] = {}
+label_prefix_cache: dict[int, str] = {}
 
 # Per-location path availability reported by agents: {agent_id: {location_id: bool}}
-_agent_location_path_status: dict[int, dict[int, bool]] = {}
+agent_location_path_status: dict[int, dict[int, bool]] = {}
 
 
 async def load_agent_location_ids():
@@ -33,37 +33,37 @@ async def load_agent_location_ids():
                WHERE l.agent_id IS NOT NULL"""
         )
         rows = await cursor.fetchall()
-    _all_agent_loc_ids.clear()
-    _agent_label_prefixes.clear()
+    all_agent_loc_ids.clear()
+    label_prefix_cache.clear()
     for row in rows:
-        _all_agent_loc_ids.add(row["id"])
-        _agent_label_prefixes[row["id"]] = row["agent_name"]
+        all_agent_loc_ids.add(row["id"])
+        label_prefix_cache[row["id"]] = row["agent_name"]
 
 
 def refresh_agent_location_ids_from_memory(agent_name: str = "", agent_id: int = 0):
-    """Update the cache from in-memory WS state (after _sync_agent_locations)."""
+    """Update the cache from in-memory WS state (after sync_agent_locations)."""
     from file_hunter.ws.agent import get_agent_location_ids
 
     all_agent_locs = get_agent_location_ids()
     if agent_id and agent_id in all_agent_locs:
         location_ids = all_agent_locs[agent_id]
-        _all_agent_loc_ids.update(location_ids)
+        all_agent_loc_ids.update(location_ids)
         if agent_name:
             for loc_id in location_ids:
-                _agent_label_prefixes[loc_id] = agent_name
+                label_prefix_cache[loc_id] = agent_name
     else:
         for location_ids in all_agent_locs.values():
-            _all_agent_loc_ids.update(location_ids)
+            all_agent_loc_ids.update(location_ids)
 
 
 def update_location_path_status(agent_id: int, status_dict: dict[int, bool]):
     """Update per-location path availability for an agent."""
-    _agent_location_path_status[agent_id] = status_dict
+    agent_location_path_status[agent_id] = status_dict
 
 
 def clear_location_path_status(agent_id: int):
     """Clear per-location path status when an agent disconnects."""
-    _agent_location_path_status.pop(agent_id, None)
+    agent_location_path_status.pop(agent_id, None)
 
 
 def register_agent_location(agent_id: int, location_id: int, agent_name: str = ""):
@@ -73,19 +73,19 @@ def register_agent_location(agent_id: int, location_id: int, agent_name: str = "
     Updates both the location ID mapping and the path availability so the
     online check works immediately without waiting for an agent reconnect.
     """
-    from file_hunter.ws.agent import _agent_location_ids
+    from file_hunter.ws.agent import agent_location_ids
 
-    if agent_id in _agent_location_ids:
-        _agent_location_ids[agent_id].add(location_id)
+    if agent_id in agent_location_ids:
+        agent_location_ids[agent_id].add(location_id)
 
-    _all_agent_loc_ids.add(location_id)
+    all_agent_loc_ids.add(location_id)
     if agent_name:
-        _agent_label_prefixes[location_id] = agent_name
+        label_prefix_cache[location_id] = agent_name
 
     # Mark path as available (agent already has it in config)
-    if agent_id not in _agent_location_path_status:
-        _agent_location_path_status[agent_id] = {}
-    _agent_location_path_status[agent_id][location_id] = True
+    if agent_id not in agent_location_path_status:
+        agent_location_path_status[agent_id] = {}
+    agent_location_path_status[agent_id][location_id] = True
 
 
 def agent_online_check(loc):
@@ -103,7 +103,7 @@ def agent_online_check(loc):
         if loc_id in location_ids:
             if agent_id not in online_agents:
                 return False
-            path_status = _agent_location_path_status.get(agent_id, {})
+            path_status = agent_location_path_status.get(agent_id, {})
             return path_status.get(loc_id, False)
     return False
 
@@ -118,9 +118,9 @@ async def agent_disk_stats(location_id: int, root_path: str) -> dict | None:
 
 def all_agent_location_ids():
     """Return set of all location IDs that are agent-backed (online or offline)."""
-    return set(_all_agent_loc_ids)
+    return set(all_agent_loc_ids)
 
 
 def agent_label_prefixes():
     """Return {location_id: agent_name} for tree label prefixes."""
-    return dict(_agent_label_prefixes)
+    return dict(label_prefix_cache)

@@ -9,9 +9,9 @@ RESTART_EXIT_CODE = 75
 def schedule_restart(delay: float = 1.0):
     """Schedule a server restart after a short delay (so the HTTP response sends first)."""
     loop = asyncio.get_event_loop()
-    loop.call_later(delay, _restart)
+    loop.call_later(delay, restart)
 
 
-def _restart():
+def restart():
     """Exit with a special code so the launcher restarts server + agent."""
     os._exit(RESTART_EXIT_CODE)

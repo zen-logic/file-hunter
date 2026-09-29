@@ -9,6 +9,7 @@ from starlette.routing import Route, Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from pathlib import Path
 
+from file_hunter.core import RequestError, json_error
 from file_hunter.db import read_db, close_db, db_writer
 from file_hunter.ws.scan import ws_endpoint
 from file_hunter.ws.agent import agent_ws_endpoint
@@ -180,21 +181,21 @@ async def on_startup():
 
     t0 = time.monotonic()
 
-    def _elapsed(label):
+    def elapsed(label):
         logger.info("startup: %s (%.1fs)", label, time.monotonic() - t0)
 
     async with read_db() as db:
         pass  # ensures DB is initialized
-    _elapsed("db ready")
+    elapsed("db ready")
 
     await init_hashes_db()
-    _elapsed("hashes db ready")
+    elapsed("hashes db ready")
 
     await init_stats_db()
-    _elapsed("stats db ready")
+    elapsed("stats db ready")
 
     await init_text_db()
-    _elapsed("text db ready")
+    elapsed("text db ready")
 
     # Local agent is created by preflight.py before the server starts.
     # If somehow missed (e.g. manual startup), create it now.
@@ -208,24 +209,24 @@ async def on_startup():
         )
 
     await load_agent_location_ids()
-    _elapsed("agent location ids loaded")
+    elapsed("agent location ids loaded")
 
     await populate_all_sizes_if_needed()
-    _elapsed("sizes checked")
+    elapsed("sizes checked")
 
     await start_scheduler()
-    _elapsed("scheduler started")
+    elapsed("scheduler started")
 
     for hook in extensions.get_startup_hooks():
         await hook()
-    _elapsed("extension hooks done")
+    elapsed("extension hooks done")
 
     # Reset stale agent status from previous session
     async with db_writer() as wdb:
         await wdb.execute(
             "UPDATE agents SET status = 'offline' WHERE status = 'online'"
         )
-    _elapsed("stale agent status reset")
+    elapsed("stale agent status reset")
 
     await restore_dup_exclude()
 
@@ -245,17 +246,17 @@ async def on_startup():
         logger.info("Marked %d interrupted scan(s) as error", len(interrupted))
 
     await restore_backfills()
-    _elapsed("backfills restored")
+    elapsed("backfills restored")
 
     start_queue_manager()
-    _elapsed("queue manager started")
+    elapsed("queue manager started")
 
     await init_housekeeping()
     start_housekeeping()
-    _elapsed("housekeeping started")
+    elapsed("housekeeping started")
 
     asyncio.get_event_loop().create_task(warm_stats_cache())
-    _elapsed("startup complete")
+    elapsed("startup complete")
 
 
 async def on_shutdown():
@@ -278,8 +279,13 @@ async def lifespan(app):
     await on_shutdown()
 
 
+async def request_error(request, exc):
+    return json_error(str(exc), exc.status)
+
+
 app = Starlette(
     lifespan=lifespan,
+    exception_handlers={RequestError: request_error},
     routes=[
         Route("/api/auth/status", auth_status, methods=["GET"]),
         Route("/api/auth/setup", auth_setup, methods=["POST"]),

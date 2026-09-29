@@ -1,13 +1,12 @@
 """Upload processing — hash uploaded files, detect duplicates, catalog."""
 
 import logging
-from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
 from file_hunter_core.paths import safe_timestamp
-from file_hunter.db import db_writer, read_db
+from file_hunter.db import db_writer, read_db, id_batches
 from file_hunter.hashes_db import hashes_writer, read_hashes
-from file_hunter.helpers import post_op_stats
+from file_hunter.helpers import post_op_stats, utc_now
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update as act_update
 from file_hunter.services.agent_ops import dispatch, hash_partial_batch
@@ -56,7 +55,7 @@ async def run_upload(
         }
     )
 
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_iso = utc_now()
     for i, sf in enumerate(saved_files):
         try:
             (hash_fast,) = await fs.file_hash(sf["full_path"], location_id)
@@ -246,7 +245,7 @@ async def run_upload(
                 "duplicates": duplicates,
                 "currentFile": "checking duplicates...",
             })
-            dup_result = await _check_dup_candidates(
+            dup_result = await check_dup_candidates(
                 uploaded_file_ids, location_id, location_name
             )
             duplicates += dup_result
@@ -272,7 +271,7 @@ async def run_upload(
         pass
 
 
-async def _check_dup_candidates(
+async def check_dup_candidates(
     uploaded_file_ids: list[int],
     location_id: int,
     location_name: str,
@@ -343,9 +342,7 @@ async def _check_dup_candidates(
     cand_fids = [c["file_id"] for c in candidates]
     file_paths: dict[int, str] = {}
     async with read_db() as db:
-        for i in range(0, len(cand_fids), 500):
-            batch = cand_fids[i : i + 500]
-            fph = ",".join("?" for _ in batch)
+        for batch, fph in id_batches(cand_fids):
             rows = await db.execute_fetchall(
                 f"SELECT id, full_path FROM files "
                 f"WHERE id IN ({fph}) AND stale = 0",

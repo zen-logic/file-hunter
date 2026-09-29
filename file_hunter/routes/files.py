@@ -5,8 +5,8 @@ import logging
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
-from file_hunter.core import json_ok, json_error
-from file_hunter.db import read_db, db_writer, execute_write
+from file_hunter.core import NotFound, json_error, json_ok, parse_bool, parse_int, parse_int_array, parse_node_id, parse_str, parse_str_array, parse_tag_input, read_body
+from file_hunter.db import read_db, db_writer, execute_write, file_row, folder_row, location_row, folder_tree_ids, in_folder_tree
 from file_hunter.helpers import parse_folder_id, parse_location_id, post_op_stats
 from file_hunter.services.files import (
     list_files,
@@ -27,12 +27,11 @@ from file_hunter.hashes_db import (
     update_file_hash,
 )
 from file_hunter.services import fs
-from file_hunter.services.tags import list_all_tags
-from file_hunter.services.agent_ops import hash_partial_batch
+from file_hunter.services.tags import list_all_tags, parse_tags
+from file_hunter.services.agent_ops import hash_partial_batch, get_agent_id, location_agent_has_capability
 from file_hunter.services.zip_download import start_build, get_job, cleanup_job
 from file_hunter.services.content_proxy import (
     fetch_agent_bytes,
-    fetch_agent_byte_range,
     MIME_MAP,
 )
 from file_hunter.services.deferred_ops import cancel_pending_op, queue_deferred_op
@@ -44,12 +43,16 @@ from file_hunter.services.dup_exclude import (
 )
 from file_hunter.services.quick_scan import run_quick_scan
 from file_hunter.services.settings import set_setting
+from file_hunter.services.similarity import embedding_url, require_chromadb, remove_embeddings, mark_embedded, get_collection, get_document_collection, mark_embedded_batch
 from file_hunter.ws.scan import broadcast
+from file_hunter.services.queue_manager import enqueue
+from file_hunter.services.activity import register, unregister
+from file_hunter import text_db
 
 logger = logging.getLogger("file_hunter")
 
 
-async def _freshness_check(folder_id_str: str):
+async def freshness_check(folder_id_str: str):
     """Fire a quick scan for the browsed folder. Background, fire-and-forget."""
     try:
         if folder_id_str.startswith("loc-"):
@@ -72,15 +75,13 @@ async def _freshness_check(folder_id_str: str):
 
 
 async def files_list(request: Request):
-    folder_id = request.query_params.get("folder_id", "")
-    if not folder_id:
-        return json_error("folder_id query parameter is required.")
-    page = int(request.query_params.get("page", 0))
+    folder_id = parse_node_id(request.query_params.get("folder_id"), "folder_id")
+    page = parse_int(request.query_params.get("page"), "page", 0, minimum=0)
     sort = request.query_params.get("sort", "name")
     sort_dir = request.query_params.get("sortDir", "asc")
     filter_text = request.query_params.get("filter", "") or None
     focus_file = request.query_params.get("focusFile")
-    focus_file_id = int(focus_file) if focus_file else None
+    focus_file_id = parse_int(focus_file, "focusFile", None)
     async with read_db() as db:
         data = await list_files(
             db,
@@ -94,16 +95,16 @@ async def files_list(request: Request):
 
     # Trigger freshness check on initial folder load (not pagination or post-scan refresh)
     if page == 0 and not request.query_params.get("fresh"):
-        asyncio.create_task(_freshness_check(folder_id))
+        asyncio.create_task(freshness_check(folder_id))
 
     return json_ok(data)
 
 
 async def file_dup_counts(request: Request):
     """POST /api/files/dup-counts — live dup counts for a list of hashes."""
-    body = await request.json()
-    hashes = body.get("hashes")
-    if not hashes or not isinstance(hashes, list):
+    body = await read_body(request)
+    hashes = parse_str_array(body.get("hashes"), "hashes")
+    if not hashes:
         return json_error("hashes list is required.")
 
     # Auto-detect: SHA-256 = 64 hex chars, xxHash64 = 16 hex chars
@@ -124,14 +125,7 @@ async def file_detail(request: Request):
 
 async def file_content(request: Request):
     file_id = int(request.path_params["id"])
-    async with read_db() as db:
-        row = await db.execute(
-            "SELECT full_path, filename, location_id FROM files WHERE id = ?",
-            (file_id,),
-        )
-        row = await row.fetchone()
-    if not row:
-        return json_error("File not found.", 404)
+    row = await file_row(file_id, "full_path, filename, location_id")
 
     full_path = row["full_path"]
     filename = row["filename"]
@@ -154,23 +148,16 @@ async def file_content(request: Request):
 async def file_bytes(request: Request):
     """Return a slice of raw bytes from a file. For hex viewer paging."""
     file_id = int(request.path_params["id"])
-    async with read_db() as db:
-        row = await db.execute(
-            "SELECT full_path, location_id, file_size FROM files WHERE id = ?",
-            (file_id,),
-        )
-        row = await row.fetchone()
-    if not row:
-        return json_error("File not found.", 404)
+    row = await file_row(file_id, "full_path, location_id, file_size")
 
     full_path = row["full_path"]
     location_id = row["location_id"]
     file_size = row["file_size"] or 0
 
-    offset = int(request.query_params.get("offset", 0))
-    limit = min(int(request.query_params.get("limit", 4096)), 65536)
+    offset = parse_int(request.query_params.get("offset"), "offset", 0, minimum=0)
+    limit = min(parse_int(request.query_params.get("limit"), "limit", 4096, minimum=0), 65536)
 
-    data = await fetch_agent_byte_range(full_path, location_id, offset, limit)
+    data = await fetch_agent_bytes(full_path, location_id, (offset, limit))
     if data is None:
         return json_error("File not available (agent offline).", 404)
 
@@ -187,14 +174,7 @@ async def file_bytes(request: Request):
 async def file_base64(request: Request):
     """Return file content as base64 with media type, ready for vision model APIs."""
     file_id = int(request.path_params["id"])
-    async with read_db() as db:
-        row = await db.execute(
-            "SELECT full_path, filename, location_id FROM files WHERE id = ?",
-            (file_id,),
-        )
-        row = await row.fetchone()
-    if not row:
-        return json_error("File not found.", 404)
+    row = await file_row(file_id, "full_path, filename, location_id")
 
     data = await fetch_agent_bytes(row["full_path"], row["location_id"])
     if data is None:
@@ -217,7 +197,6 @@ async def tags_list(request: Request):
 
 async def tags_search(request: Request):
     """GET /api/tags/{tags} — find files matching all specified tags."""
-    from file_hunter.services.tags import parse_tags
 
     raw = request.path_params.get("tags", "")
     names = parse_tags(raw)
@@ -266,10 +245,10 @@ async def tags_search(request: Request):
 
 async def file_update(request: Request):
     file_id = int(request.path_params["id"])
-    body = await request.json()
+    body = await read_body(request)
 
-    description = body.get("description")
-    tags = body.get("tags")
+    description = parse_str(body.get("description"), "description", None)
+    tags = parse_tag_input(body.get("tags"), "tags")
 
     propagated = await execute_write(
         update_file, file_id, description=description, tags=tags
@@ -348,30 +327,22 @@ async def file_verify(request: Request):
     """POST /api/files/{id:int}/verify — compute SHA-256 for the entire dup group."""
     file_id = int(request.path_params["id"])
 
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            """SELECT f.id, f.filename, f.full_path, f.location_id, l.root_path
-               FROM files f
-               JOIN locations l ON l.id = f.location_id
-               WHERE f.id = ?""",
-            (file_id,),
-        )
-        if not row:
-            return json_error("File not found.", 404)
+    f = await file_with_location(file_id)
+    if f is None:
+        raise NotFound("File not found.")
 
-        f = dict(row[0])
+    h_map = await get_file_hashes([file_id])
+    h = h_map.get(file_id, {})
+    hash_fast = h.get("hash_fast")
 
-        h_map = await get_file_hashes([file_id])
-        h = h_map.get(file_id, {})
-        hash_fast = h.get("hash_fast")
-
-        if h.get("hash_strong"):
-            # Already verified — return detail
+    if h.get("hash_strong"):
+        # Already verified — return detail
+        async with read_db() as db:
             detail = await get_file_detail(db, file_id)
-            return json_ok(detail)
+        return json_ok(detail)
 
-        if not hash_fast:
-            return json_error("File has no hash — scan or re-hash it first.", 400)
+    if not hash_fast:
+        return json_error("File has no hash — scan or re-hash it first.", 400)
 
     # Find all files in the same hash_fast group
     async with read_hashes() as hdb:
@@ -383,7 +354,7 @@ async def file_verify(request: Request):
 
     # Launch background task to verify the whole group
     asyncio.create_task(
-        _run_group_verify(file_id, f["filename"], hash_fast, group_file_ids)
+        run_group_verify(file_id, f["filename"], hash_fast, group_file_ids)
     )
 
     return json_ok(
@@ -391,7 +362,7 @@ async def file_verify(request: Request):
     )
 
 
-async def _run_group_verify(
+async def run_group_verify(
     trigger_file_id: int, trigger_filename: str, hash_fast: str, file_ids: list[int]
 ):
     """Background: compute SHA-256 for all files in a hash_fast group."""
@@ -476,61 +447,54 @@ async def _run_group_verify(
     )
 
 
-async def file_rehash(request: Request):
-    """POST /api/files/{id:int}/rehash — compute hash_partial + hash_fast."""
-    file_id = int(request.path_params["id"])
-
+async def file_with_location(file_id):
+    """The file's row with its location's root_path and agent_id, or None
+    if the file isn't catalogued."""
     async with read_db() as db:
-        row = await db.execute_fetchall(
+        rows = await db.execute_fetchall(
             """SELECT f.id, f.filename, f.full_path, f.file_size,
-                      f.location_id, l.root_path
+                      f.location_id, l.root_path, l.agent_id
                FROM files f
                JOIN locations l ON l.id = f.location_id
                WHERE f.id = ?""",
             (file_id,),
         )
-        if not row:
-            return json_error("File not found.", 404)
-        f = dict(row[0])
+    return dict(rows[0]) if rows else None
 
-        loc_row = await db.execute_fetchall(
-            "SELECT agent_id FROM locations WHERE id = ?", (f["location_id"],)
-        )
-    agent_id = loc_row[0]["agent_id"] if loc_row else None
 
-    # Read old hashes before overwriting
+async def rehash_target(file_id):
+    """(file row from file_with_location, old hash_fast, old hash_strong),
+    or None if the file isn't catalogued."""
+    f = await file_with_location(file_id)
+    if f is None:
+        return None
     old_h = (await get_file_hashes([file_id])).get(file_id, {})
-    old_fast = old_h.get("hash_fast")
-    old_strong = old_h.get("hash_strong")
+    return f, old_h.get("hash_fast"), old_h.get("hash_strong")
 
-    online = await fs.dir_exists(f["root_path"], f["location_id"])
-    if not online:
-        return json_error("Location is offline.", 400)
 
-    # Compute hash_fast
-    try:
-        (hash_fast,) = await fs.file_hash(f["full_path"], f["location_id"])
-    except FileNotFoundError:
-        return json_error("File not found on disk.", 400)
-    except Exception as exc:
-        return json_error(f"Hash computation failed: {exc}", 500)
-
-    # Compute hash_partial
+async def compute_hashes(f):
+    """(hash_fast, hash_partial). hash_fast errors propagate; hash_partial
+    is None if the agent can't supply it."""
+    (hash_fast,) = await fs.file_hash(f["full_path"], f["location_id"])
     hash_partial = None
-    if agent_id is not None:
+    if f["agent_id"] is not None:
         try:
-            hp_result = await hash_partial_batch(agent_id, [f["full_path"]])
+            hp_result = await hash_partial_batch(f["agent_id"], [f["full_path"]])
             for hr in hp_result.get("results", []):
                 if hr.get("path") == f["full_path"]:
                     hash_partial = hr.get("hash_partial")
                     break
         except Exception:
             pass
+    return hash_fast, hash_partial
 
-    # Ensure entry exists in hashes.db, then update
+
+async def store_rehash(file_id, f, hash_fast, hash_partial):
+    """Write the new hashes; hash_strong is cleared, as it's now stale."""
     async with hashes_writer() as hdb:
         await hdb.execute(
-            "INSERT INTO file_hashes (file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+            "INSERT INTO file_hashes "
+            "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
             "VALUES (?, ?, ?, ?, ?, NULL) "
             "ON CONFLICT(file_id) DO UPDATE SET "
             "hash_partial=COALESCE(excluded.hash_partial, file_hashes.hash_partial), "
@@ -538,6 +502,29 @@ async def file_rehash(request: Request):
             "hash_strong=NULL",
             (file_id, f["location_id"], f["file_size"], hash_partial, hash_fast),
         )
+
+
+async def file_rehash(request: Request):
+    """POST /api/files/{id:int}/rehash — compute hash_partial + hash_fast."""
+    file_id = int(request.path_params["id"])
+
+    target = await rehash_target(file_id)
+    if target is None:
+        raise NotFound("File not found.")
+    f, old_fast, old_strong = target
+
+    online = await fs.dir_exists(f["root_path"], f["location_id"])
+    if not online:
+        return json_error("Location is offline.", 400)
+
+    try:
+        hash_fast, hash_partial = await compute_hashes(f)
+    except FileNotFoundError:
+        return json_error("File not found on disk.", 400)
+    except Exception as exc:
+        return json_error(f"Hash computation failed: {exc}", 500)
+
+    await store_rehash(file_id, f, hash_fast, hash_partial)
 
     recalc_fast = {hash_fast}
     if old_fast and old_fast != hash_fast:
@@ -556,18 +543,17 @@ async def file_rehash(request: Request):
 
 async def batch_rehash(request: Request):
     """POST /api/files/rehash — rehash multiple files. Body: { fileIds: [int] }."""
-    body = await request.json()
-    file_ids = body.get("fileIds", [])
+    body = await read_body(request)
+    file_ids = parse_int_array(body.get("fileIds"), "fileIds")
     if not file_ids:
         return json_error("fileIds is required.")
 
-    from file_hunter.services.queue_manager import enqueue
 
     await enqueue("batch_rehash", None, {"file_ids": file_ids})
     return json_ok({"queued": len(file_ids)})
 
 
-async def _run_batch_rehash(file_ids: list[int]):
+async def run_batch_rehash(file_ids: list[int]):
     """Background task: rehash each file (partial + fast)."""
     affected_fast: set[str] = set()
     affected_strong: set[str] = set()
@@ -575,63 +561,17 @@ async def _run_batch_rehash(file_ids: list[int]):
 
     for i, file_id in enumerate(file_ids):
         try:
-            async with read_db() as db:
-                row = await db.execute_fetchall(
-                    """SELECT f.id, f.filename, f.full_path, f.file_size,
-                              f.location_id, l.root_path
-                       FROM files f
-                       JOIN locations l ON l.id = f.location_id
-                       WHERE f.id = ?""",
-                    (file_id,),
-                )
-                if not row:
-                    continue
-                f = dict(row[0])
-
-                loc_row = await db.execute_fetchall(
-                    "SELECT agent_id FROM locations WHERE id = ?",
-                    (f["location_id"],),
-                )
-            agent_id = loc_row[0]["agent_id"] if loc_row else None
-
-            # Read old hash before overwriting
-            old_h = (await get_file_hashes([file_id])).get(file_id, {})
-            old_fast = old_h.get("hash_fast")
-            old_strong = old_h.get("hash_strong")
+            target = await rehash_target(file_id)
+            if target is None:
+                continue
+            f, old_fast, old_strong = target
 
             try:
-                (hash_fast,) = await fs.file_hash(f["full_path"], f["location_id"])
+                hash_fast, hash_partial = await compute_hashes(f)
             except FileNotFoundError:
                 continue
 
-            hash_partial = None
-            if agent_id is not None:
-                try:
-                    hp_result = await hash_partial_batch(agent_id, [f["full_path"]])
-                    for hr in hp_result.get("results", []):
-                        if hr.get("path") == f["full_path"]:
-                            hash_partial = hr.get("hash_partial")
-                            break
-                except Exception:
-                    pass
-
-            async with hashes_writer() as hdb:
-                await hdb.execute(
-                    "INSERT INTO file_hashes "
-                    "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
-                    "VALUES (?, ?, ?, ?, ?, NULL) "
-                    "ON CONFLICT(file_id) DO UPDATE SET "
-                    "hash_partial=COALESCE(excluded.hash_partial, file_hashes.hash_partial), "
-                    "hash_fast=excluded.hash_fast, "
-                    "hash_strong=NULL",
-                    (
-                        file_id,
-                        f["location_id"],
-                        f["file_size"],
-                        hash_partial,
-                        hash_fast,
-                    ),
-                )
+            await store_rehash(file_id, f, hash_fast, hash_partial)
 
             affected_fast.add(hash_fast)
             if old_fast and old_fast != hash_fast:
@@ -663,27 +603,13 @@ async def folder_download(request: Request):
     """POST /api/folders/{id:int}/download — start async ZIP build for a folder."""
     folder_id = int(request.path_params["id"])
 
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            """SELECT f.name, f.rel_path, f.location_id
-               FROM folders f WHERE f.id = ?""",
-            (folder_id,),
-        )
-        if not row:
-            return json_error("Folder not found.", 404)
-        folder_name = row[0]["name"]
-        folder_rel = row[0]["rel_path"]
-        location_id = row[0]["location_id"]
+    folder = await folder_row(folder_id, "name, rel_path, location_id")
+    folder_name = folder["name"]
+    folder_rel = folder["rel_path"]
+    location_id = folder["location_id"]
 
-        desc_rows = await db.execute_fetchall(
-            """WITH RECURSIVE desc(id) AS (
-                   SELECT ? UNION ALL
-                   SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
-               )
-               SELECT id FROM desc""",
-            (folder_id,),
-        )
-        desc_ids = [r["id"] for r in desc_rows]
+    async with read_db() as db:
+        desc_ids = await folder_tree_ids(db, folder_id)
 
         placeholders = ",".join("?" * len(desc_ids))
         files = await db.execute_fetchall(
@@ -710,14 +636,9 @@ async def location_download(request: Request):
     """POST /api/locations/{id:int}/download — start async ZIP build for a location."""
     loc_id = int(request.path_params["id"])
 
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT name FROM locations WHERE id = ?", (loc_id,)
-        )
-        if not row:
-            return json_error("Location not found.", 404)
-        loc_name = row[0]["name"]
+    loc_name = (await location_row(loc_id, "name"))["name"]
 
+    async with read_db() as db:
         files = await db.execute_fetchall(
             "SELECT full_path, rel_path FROM files WHERE location_id = ?", (loc_id,)
         )
@@ -746,7 +667,7 @@ async def zip_serve(request: Request):
     filename = job["filename"]
     safe_name = filename.replace('"', '\\"')
 
-    async def _stream_and_cleanup():
+    async def stream_and_cleanup():
         try:
             with open(tmp_path, "rb") as f:
                 while True:
@@ -758,7 +679,7 @@ async def zip_serve(request: Request):
             cleanup_job(job_id)
 
     return StreamingResponse(
-        _stream_and_cleanup(),
+        stream_and_cleanup(),
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{safe_name}"',
@@ -770,10 +691,12 @@ async def zip_serve(request: Request):
 async def file_move(request: Request):
     """POST /api/files/{id:int}/move — rename, move, or copy a file."""
     file_id = int(request.path_params["id"])
-    body = await request.json()
-    new_name = body.get("name")
-    destination_folder_id = body.get("destination_folder_id")
-    copy = body.get("copy", False)
+    body = await read_body(request)
+    new_name = parse_str(body.get("name"), "name", None)
+    destination_folder_id = parse_node_id(
+        body.get("destination_folder_id"), "destination_folder_id", None
+    )
+    copy = parse_bool(body.get("copy"), "copy")
 
     if not new_name and not destination_folder_id:
         return json_error("Provide name and/or destination_folder_id.")
@@ -828,18 +751,13 @@ async def file_cancel_pending(request: Request):
     """POST /api/files/{id:int}/cancel-pending — cancel a deferred operation."""
     file_id = int(request.path_params["id"])
 
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT id, pending_op, filename FROM files WHERE id = ?", (file_id,)
-        )
-    if not row:
-        return json_error("File not found.", 404)
-    if not row[0]["pending_op"]:
+    row = await file_row(file_id, "id, pending_op, filename")
+    if not row["pending_op"]:
         return json_error("No pending operation on this file.", 400)
 
     await cancel_pending_op(file_id)
 
-    return json_ok({"cancelled": True, "filename": row[0]["filename"]})
+    return json_ok({"cancelled": True, "filename": row["filename"]})
 
 
 async def folder_dup_exclude(request: Request):
@@ -850,35 +768,20 @@ async def folder_dup_exclude(request: Request):
     operation.
     """
     folder_id = int(request.path_params["id"])
-    body = await request.json()
-    exclude = bool(body.get("exclude", False))
-    confirmed = bool(body.get("confirmed", False))
+    body = await read_body(request)
+    exclude = parse_bool(body.get("exclude"), "exclude")
+    confirmed = parse_bool(body.get("confirmed"), "confirmed")
 
     if is_running():
         return json_error("A duplicate exclusion operation is already running.")
 
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT name FROM folders WHERE id = ?", (folder_id,)
-        )
-        if not row:
-            return json_error("Folder not found.", 404)
-        folder_name = row[0]["name"]
+    folder_name = (await folder_row(folder_id, "name"))["name"]
 
-        # Recursive CTE to count affected folders and files
-        desc_rows = await db.execute_fetchall(
-            """WITH RECURSIVE descendants(id) AS (
-                   SELECT ?
-                   UNION ALL
-                   SELECT fo.id FROM folders fo JOIN descendants d ON fo.parent_id = d.id
-               )
-               SELECT id FROM descendants""",
-            (folder_id,),
-        )
-        folder_count = len(desc_rows)
+    async with read_db() as db:
+        folder_ids = await folder_tree_ids(db, folder_id)
+        folder_count = len(folder_ids)
 
         # Get file count from stored folder counters (O(1), no aggregate query)
-        folder_ids = [r["id"] for r in desc_rows]
         file_count = 0
         for fid in folder_ids:
             fc_row = await db.execute_fetchall(
@@ -937,17 +840,9 @@ async def folder_delete(request: Request):
 
 async def folder_reset_stale(request: Request):
     """POST /api/folders/{id:int}/reset-stale — remove stale entries under a folder."""
-    from file_hunter.services.queue_manager import enqueue
 
     folder_id = int(request.path_params["id"])
-    # Look up name for the activity label
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT name FROM folders WHERE id = ?", (folder_id,)
-        )
-    if not row:
-        return json_error("Folder not found.", 404)
-    label = row[0]["name"]
+    label = (await folder_row(folder_id, "name"))["name"]
     op_id = await enqueue("reset_stale", None, {
         "folder_id": folder_id,
         "label": label,
@@ -957,16 +852,9 @@ async def folder_reset_stale(request: Request):
 
 async def location_reset_stale(request: Request):
     """POST /api/locations/{id:int}/reset-stale — remove stale entries in a location."""
-    from file_hunter.services.queue_manager import enqueue
 
     location_id = int(request.path_params["id"])
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT name FROM locations WHERE id = ?", (location_id,)
-        )
-    if not row:
-        return json_error("Location not found.", 404)
-    label = row[0]["name"]
+    label = (await location_row(location_id, "name"))["name"]
     op_id = await enqueue("reset_stale", None, {
         "location_id": location_id,
         "label": label,
@@ -974,43 +862,41 @@ async def location_reset_stale(request: Request):
     return json_ok({"started": True, "op_id": op_id})
 
 
+async def queue_file_op(op_type, file_id, f, **params):
+    """Queue op_type for the file on its location's agent."""
+
+    agent_id = await get_agent_id(f["location_id"])
+    op_id = await enqueue(op_type, agent_id, {
+        "file_id": file_id,
+        "filename": f["filename"],
+        "path": f["full_path"],
+        "location_id": f["location_id"],
+        **params,
+    })
+    return json_ok({"started": True, "op_id": op_id})
+
+
 async def file_transcode(request: Request):
     """POST /api/files/{id:int}/transcode — queue a video transcode on the agent."""
-    from file_hunter.services.agent_ops import location_agent_has_capability, _get_agent_id
-    from file_hunter.services.queue_manager import enqueue
 
     file_id = int(request.path_params["id"])
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    quality = body.get("quality", "medium")
+    body = await read_body(request) if request.headers.get("content-type", "").startswith("application/json") else {}
+    quality = parse_str(body.get("quality"), "quality", "medium")
     if quality not in ("low", "medium", "high"):
         quality = "medium"
 
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT filename, full_path, location_id, file_type_high FROM files WHERE id = ?",
-            (file_id,),
-        )
-    if not row:
-        return json_error("File not found.", 404)
-    f = row[0]
+    f = await file_row(file_id, "filename, full_path, location_id, file_type_high")
     if (f["file_type_high"] or "").lower() != "video":
         return json_error("File is not a video.")
     has_ffmpeg = await location_agent_has_capability(f["location_id"], "ffmpeg")
     if not has_ffmpeg:
         return json_error("Agent does not support transcoding.")
-    agent_id = await _get_agent_id(f["location_id"])
-    op_id = await enqueue("transcode", agent_id, {
-        "file_id": file_id,
-        "filename": f["filename"],
-        "path": f["full_path"],
-        "location_id": f["location_id"],
-        "location_name": f["filename"],
-        "quality": quality,
-    })
-    return json_ok({"started": True, "op_id": op_id})
+    return await queue_file_op(
+        "transcode", file_id, f, location_name=f["filename"], quality=quality
+    )
 
 
-_RAW_EXTENSIONS = {
+RAW_EXTENSIONS = {
     "nef", "cr2", "cr3", "arw", "orf", "raf", "dng", "rw2",
     "pef", "srw", "nrw", "raw", "mrw", "dcr", "kdc", "erf",
     "3fr", "mef", "mos", "iiq",
@@ -1019,59 +905,24 @@ _RAW_EXTENSIONS = {
 
 async def file_raw_convert(request: Request):
     """POST /api/files/{id:int}/rawconvert — queue a camera raw to JPEG conversion."""
-    from file_hunter.services.agent_ops import location_agent_has_capability, _get_agent_id
-    from file_hunter.services.queue_manager import enqueue
 
     file_id = int(request.path_params["id"])
-
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT filename, full_path, location_id, file_type_low FROM files WHERE id = ?",
-            (file_id,),
-        )
-    if not row:
-        return json_error("File not found.", 404)
-    f = row[0]
-    if (f["file_type_low"] or "").lower() not in _RAW_EXTENSIONS:
+    f = await file_row(file_id, "filename, full_path, location_id, file_type_low")
+    if (f["file_type_low"] or "").lower() not in RAW_EXTENSIONS:
         return json_error("File is not a supported camera raw format.")
     has_dcraw = await location_agent_has_capability(f["location_id"], "dcraw")
     if not has_dcraw:
         return json_error("Agent does not support raw conversion.")
-    agent_id = await _get_agent_id(f["location_id"])
-    op_id = await enqueue("raw_convert", agent_id, {
-        "file_id": file_id,
-        "filename": f["filename"],
-        "path": f["full_path"],
-        "location_id": f["location_id"],
-    })
-    return json_ok({"started": True, "op_id": op_id})
+    return await queue_file_op("raw_convert", file_id, f)
 
 
 async def file_embed(request: Request):
     """POST /api/files/{id}/embed — queue embedding for a single file (image or document)."""
-    from file_hunter.services.similarity import is_chromadb_available
-    from file_hunter.services.agent_ops import _get_agent_id
-    from file_hunter.services.queue_manager import enqueue
-    from file_hunter.services import settings as settings_svc
-
-    if not is_chromadb_available():
-        return json_error("Similarity search is not available.", 400)
-
-    file_id = int(request.path_params["id"])
-
+    require_chromadb()
     async with read_db() as db:
-        embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
-        if not embed_url:
-            return json_error("Embedding service URL not configured.", 400)
-
-        row = await db.execute_fetchall(
-            "SELECT filename, full_path, location_id, file_type_high, file_type_low FROM files WHERE id = ?",
-            (file_id,),
-        )
-    if not row:
-        return json_error("File not found.", 404)
-
-    f = row[0]
+        embed_url = await embedding_url(db)
+    file_id = int(request.path_params["id"])
+    f = await file_row(file_id, "filename, full_path, location_id, file_type_high")
     type_high = (f["file_type_high"] or "").lower()
     if type_high == "image":
         embed_type = "image"
@@ -1080,65 +931,30 @@ async def file_embed(request: Request):
     else:
         return json_error("File type not supported for embedding.", 400)
 
-    agent_id = await _get_agent_id(f["location_id"])
-    op_id = await enqueue("embed_file", agent_id, {
-        "file_id": file_id,
-        "filename": f["filename"],
-        "path": f["full_path"],
-        "location_id": f["location_id"],
-        "embed_url": embed_url,
-        "type": embed_type,
-    })
-    return json_ok({"started": True, "op_id": op_id})
+    return await queue_file_op(
+        "embed_file", file_id, f, embed_url=embed_url, type=embed_type
+    )
 
 
 async def file_extract(request: Request):
     """POST /api/files/{id}/extract — queue a document to markdown extraction."""
-    from file_hunter.services.similarity import is_chromadb_available
-    from file_hunter.services.agent_ops import _get_agent_id
-    from file_hunter.services.queue_manager import enqueue
-    from file_hunter.services import settings as settings_svc
-
-    if not is_chromadb_available():
-        return json_error("Similarity search is not available.", 400)
-
-    file_id = int(request.path_params["id"])
-
+    require_chromadb()
     async with read_db() as db:
-        embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
-        if not embed_url:
-            return json_error("Embedding service URL not configured.", 400)
-
-        row = await db.execute_fetchall(
-            "SELECT filename, full_path, location_id, file_type_high FROM files WHERE id = ?",
-            (file_id,),
-        )
-    if not row:
-        return json_error("File not found.", 404)
-
-    f = row[0]
+        embed_url = await embedding_url(db)
+    file_id = int(request.path_params["id"])
+    f = await file_row(file_id, "filename, full_path, location_id, file_type_high")
     if (f["file_type_high"] or "").lower() != "document":
         return json_error("Only documents can be extracted.", 400)
 
-    agent_id = await _get_agent_id(f["location_id"])
-    op_id = await enqueue("extract_markdown", agent_id, {
-        "file_id": file_id,
-        "filename": f["filename"],
-        "path": f["full_path"],
-        "location_id": f["location_id"],
-        "embed_url": embed_url,
-    })
-    return json_ok({"started": True, "op_id": op_id})
+    return await queue_file_op(
+        "extract_markdown", file_id, f, embed_url=embed_url
+    )
 
 
 async def file_unembed(request: Request):
     """POST /api/files/{id}/unembed — remove embedding for a single file."""
-    from file_hunter.services.similarity import (
-        is_chromadb_available, remove_embeddings, mark_embedded,
-    )
 
-    if not is_chromadb_available():
-        return json_error("Similarity search is not available.", 400)
+    require_chromadb()
 
     file_id = int(request.path_params["id"])
     await remove_embeddings([file_id])
@@ -1152,32 +968,24 @@ async def delete_embeddings(request: Request):
     Body: { "locationId": N, "folderId": N, "type": "image"|"document" }
     Runs as a background task with activity tracking.
     """
-    from file_hunter.services.similarity import is_chromadb_available
+    require_chromadb()
 
-    if not is_chromadb_available():
-        return json_error("Similarity search is not available.", 400)
-
-    body = await request.json()
-    location_id = body.get("locationId")
-    folder_id = body.get("folderId")
-    embed_type = body.get("type")  # "image" or "document"
+    body = await read_body(request)
+    location_id = parse_int(body.get("locationId"), "locationId", None)
+    folder_id = parse_int(body.get("folderId"), "folderId", None)
+    embed_type = parse_str(body.get("type"), "type", None)  # "image" or "document"
 
     if not location_id and not folder_id:
         return json_error("locationId or folderId required", 400)
     if embed_type not in ("image", "document"):
         return json_error("type must be 'image' or 'document'", 400)
 
-    import asyncio
-    asyncio.create_task(_run_delete_embeddings(location_id, folder_id, embed_type))
+    asyncio.create_task(run_delete_embeddings(location_id, folder_id, embed_type))
     return json_ok({"started": True})
 
 
-async def _run_delete_embeddings(location_id, folder_id, embed_type):
+async def run_delete_embeddings(location_id, folder_id, embed_type):
     """Background task: delete embeddings with activity tracking."""
-    import asyncio
-    from file_hunter.services.similarity import get_collection, get_document_collection
-    from file_hunter.services.activity import register, unregister
-    from file_hunter.ws.scan import broadcast
 
     scope_label = ""
     if location_id:
@@ -1193,11 +1001,11 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
     act_name = f"embed-delete-{location_id or folder_id}"
     register(act_name, f"Deleting {type_label} embeddings: {scope_label}")
 
-    _file_ids = []
+    file_ids = []
     if folder_id:
-        _file_ids = await _embedding_scope_file_ids(None, folder_id)
+        file_ids = await embedding_scope_file_ids(None, folder_id)
 
-    def _delete():
+    def delete():
         deleted = 0
         affected = []
         if embed_type == "image":
@@ -1213,7 +1021,7 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
                 except Exception:
                     pass
             else:
-                str_ids = [str(fid) for fid in _file_ids]
+                str_ids = [str(fid) for fid in file_ids]
                 for i in range(0, len(str_ids), 500):
                     batch = str_ids[i : i + 500]
                     try:
@@ -1239,8 +1047,8 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
                     pass
             else:
                 doc_fids = set()
-                for i in range(0, len(_file_ids), 500):
-                    batch = _file_ids[i : i + 500]
+                for i in range(0, len(file_ids), 500):
+                    batch = file_ids[i : i + 500]
                     try:
                         result = doc_coll.get(where={"file_id": {"$in": batch}}, include=[])
                         if result["ids"]:
@@ -1254,12 +1062,10 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
         return deleted, affected
 
     try:
-        deleted, affected_ids = await asyncio.to_thread(_delete)
+        deleted, affected_ids = await asyncio.to_thread(delete)
         if affected_ids:
-            from file_hunter.services.similarity import mark_embedded_batch
             await mark_embedded_batch(affected_ids, False)
             if embed_type != "image":
-                from file_hunter import text_db
                 await text_db.delete_files(affected_ids)
         logger.info("Deleted %d %s embeddings for %s",
                     deleted, embed_type, scope_label)
@@ -1282,17 +1088,13 @@ async def _run_delete_embeddings(location_id, folder_id, embed_type):
         unregister(act_name)
 
 
-async def _embedding_scope_file_ids(location_id, folder_id) -> list[int]:
+async def embedding_scope_file_ids(location_id, folder_id) -> list[int]:
     """Get file IDs within a location or folder scope."""
     async with read_db() as db:
         if folder_id:
             folder_id = int(folder_id)
             rows = await db.execute_fetchall(
-                """WITH RECURSIVE descendants(id) AS (
-                       SELECT ? UNION ALL
-                       SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id
-                   )
-                   SELECT id FROM files WHERE folder_id IN (SELECT id FROM descendants)""",
+                f"SELECT id FROM files WHERE {in_folder_tree('folder_id')}",
                 (folder_id,),
             )
         else:

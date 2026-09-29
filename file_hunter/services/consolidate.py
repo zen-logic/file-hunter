@@ -2,12 +2,12 @@
 
 import logging
 import os
-from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
 from file_hunter.db import db_writer, read_db
-from file_hunter.hashes_db import get_file_hashes, hashes_writer, read_hashes, remove_file_hashes
+from file_hunter.hashes_db import get_file_hashes, read_hashes, remove_file_hashes, set_file_hashes
 from file_hunter.helpers import (
+    catalog_rel_paths,
     get_effective_hash,
     get_effective_hashes,
     parse_folder_id,
@@ -15,6 +15,8 @@ from file_hunter.helpers import (
     parse_prefixed_id,
     post_op_stats,
     resolve_target,
+    unique_rel_name,
+    utc_now,
 )
 from file_hunter.services import fs
 from file_hunter.services.activity import (
@@ -23,16 +25,22 @@ from file_hunter.services.activity import (
     update as activity_update,
 )
 from file_hunter.services.dup_counts import recalculate_dup_counts
+from file_hunter.services.provenance import (
+    build_stub_text,
+    file_folder,
+    upsert_sources_record,
+    write_stub_record,
+)
 from file_hunter.services.op_result_log import add_to_catalog, append_row, create_log
 from file_hunter.services.tags import get_merged_tags, parse_tags, set_file_tags
-from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
+from file_hunter.stats_db import update_dup_counts_for_files, update_stats_for_files
 from file_hunter.ws.agent import get_agent_location_ids
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
 
 # Guard against concurrent consolidation of the same hash
-_active_consolidations: set[str] = set()
+active_consolidations: set[str] = set()
 
 
 def is_consolidation_running(hash_value: str) -> bool:
@@ -43,14 +51,11 @@ def is_consolidation_running(hash_value: str) -> bool:
 
     Returns:
         True if a consolidation task is currently running for this hash.
-
-    Called by:
-        routes/consolidate.py (pre-flight check before launching a task).
     """
-    return hash_value in _active_consolidations
+    return hash_value in active_consolidations
 
 
-def _get_online_location_ids() -> set[int]:
+def get_online_location_ids() -> set[int]:
     """Return the set of location_ids whose agents are currently connected."""
     online = set()
     for lids in get_agent_location_ids().values():
@@ -58,25 +63,14 @@ def _get_online_location_ids() -> set[int]:
     return online
 
 
-def _format_location(loc_name, agent_name=None):
+def format_location(loc_name, agent_name=None):
     """Format location name with agent: 'Location [Agent]' or just 'Location'."""
     if agent_name:
         return f"{loc_name} [{agent_name}]"
     return loc_name
 
 
-def _build_stub_text(filename, dest_path, dest_loc_label, now_iso):
-    """Build the text content for a .moved stub file."""
-    moved_to = f"{dest_loc_label}: {dest_path}" if dest_loc_label else dest_path
-    return (
-        f"Consolidated by File Hunter\n"
-        f"Original: {filename}\n"
-        f"Moved to: {moved_to}\n"
-        f"Date: {now_iso}\n"
-    )
-
-
-async def _stub_and_delete(copy, canonical_path, dest_loc_name, now_iso):
+async def stub_and_delete(copy, canonical_path, dest_loc_name, now_iso):
     """Write .moved stub, delete original, update DB for a single duplicate.
 
     Per-file sequence:
@@ -90,7 +84,7 @@ async def _stub_and_delete(copy, canonical_path, dest_loc_name, now_iso):
     original_path = copy["full_path"]
     copy_loc_id = copy["location_id"]
 
-    stub_text = _build_stub_text(
+    stub_text = build_stub_text(
         copy["filename"], canonical_path, dest_loc_name, now_iso
     )
     stub_path = original_path + ".moved"
@@ -98,10 +92,8 @@ async def _stub_and_delete(copy, canonical_path, dest_loc_name, now_iso):
     stub_rel = copy["rel_path"] + ".moved"
     stub_size = len(stub_text.encode())
 
-    # 1. Write stub
     await fs.file_write_text(stub_path, stub_text, copy_loc_id)
 
-    # 2. Delete original
     await fs.file_delete(original_path, copy_loc_id)
 
     # 3. Update DB
@@ -110,48 +102,31 @@ async def _stub_and_delete(copy, canonical_path, dest_loc_name, now_iso):
             "DELETE FROM files WHERE location_id=? AND rel_path=? AND id!=?",
             (copy_loc_id, stub_rel, copy["id"]),
         )
-        await wdb.execute(
-            """UPDATE files SET
-                filename=?, full_path=?, rel_path=?,
-                file_type_high='text', file_type_low='moved',
-                file_size=?,
-                modified_date=?, date_last_seen=?
-               WHERE id=?""",
-            (stub_name, stub_path, stub_rel, stub_size, now_iso, now_iso, copy["id"]),
+        await write_stub_record(
+            wdb, copy["id"], stub_name, stub_path, stub_rel, stub_size, now_iso
         )
-    # Check dup status before removing hashes
-    _h = await get_file_hashes([copy["id"]])
-    was_dup = (_h.get(copy["id"], {}).get("dup_count") or 0) > 0
+    await release_stubbed(copy_loc_id, copy, stub_size)
 
-    await remove_file_hashes([copy["id"]])
+
+async def release_stubbed(location_id, f, stub_size):
+    """After a file became a stub: drop its hashes, take it out of the
+    duplicate counts, and swap it for the stub in the stats."""
+    h = await get_file_hashes([f["id"]])
+    was_dup = (h.get(f["id"], {}).get("dup_count") or 0) > 0
+
+    await remove_file_hashes([f["id"]])
 
     if was_dup:
-
-        async with read_db() as rdb:
-            fp_rows = await rdb.execute_fetchall(
-                "SELECT id, parent_id FROM folders WHERE location_id = ?",
-                (copy_loc_id,),
-            )
-        folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
-        await apply_dup_deltas(
-            copy_loc_id, folder_parents, [(copy["folder_id"], -1)]
-        )
+        await update_dup_counts_for_files(location_id, [(f["folder_id"], -1)])
 
     await update_stats_for_files(
-        copy_loc_id,
-        removed=[
-            (
-                copy["folder_id"],
-                copy["file_size"] or 0,
-                copy["file_type_high"],
-                0,
-            )
-        ],
-        added=[(copy["folder_id"], stub_size, "text", 0)],
+        location_id,
+        removed=[(f["folder_id"], f["file_size"] or 0, f["file_type_high"], 0)],
+        added=[(f["folder_id"], stub_size, "text", 0)],
     )
 
 
-async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False):
+async def find_and_merge_copies(file_id: int, filename_match_only: bool = False):
     """Find all duplicate copies and merge their metadata.
 
     Shared by both copy and move operations. Loads the selected file,
@@ -174,14 +149,7 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
             (file_id,),
         )
     if not rows:
-        await broadcast(
-            {
-                "type": "consolidate_error",
-                "fileId": file_id,
-                "filename": "",
-                "error": "File not found.",
-            }
-        )
+        await broadcast_error(file_id, "", "File not found.")
         return None
 
     selected = dict(rows[0])
@@ -190,18 +158,11 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
     effective_hash, hash_col = await get_effective_hash(file_id)
 
     # Carry hash_partial for destination record
-    _h_map = await get_file_hashes([file_id])
-    selected["hash_partial"] = _h_map.get(file_id, {}).get("hash_partial")
+    h_map = await get_file_hashes([file_id])
+    selected["hash_partial"] = h_map.get(file_id, {}).get("hash_partial")
 
     if not effective_hash:
-        await broadcast(
-            {
-                "type": "consolidate_error",
-                "fileId": file_id,
-                "filename": filename,
-                "error": "File has no hash — scan it first.",
-            }
-        )
+        await broadcast_error(file_id, filename, "File has no hash — scan it first.")
         return None
 
     # Find ALL copies by effective hash from hashes.db
@@ -233,7 +194,7 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
     if filename_match_only:
         all_copies = [c for c in all_copies if c["filename"] == filename]
 
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_iso = utc_now()
 
     # Merge description and earliest modified_date across all copies
     earliest_modified = None
@@ -262,6 +223,209 @@ async def _find_and_merge_copies(file_id: int, filename_match_only: bool = False
     }
 
 
+async def queue_stub(copy, canonical_path, now_iso):
+    """Queue a copy for stubbing when its location is next online."""
+    async with db_writer() as wdb:
+        await wdb.execute(
+            """INSERT INTO consolidation_jobs
+               (source_file, source_location_id, source_path,
+                destination_path, status, date_created)
+               VALUES (?, ?, ?, ?, 'pending', ?)""",
+            (
+                copy["filename"],
+                copy["location_id"],
+                copy["full_path"],
+                canonical_path,
+                now_iso,
+            ),
+        )
+
+
+async def broadcast_error(file_id, filename, error, **extra):
+    await broadcast(
+        {
+            "type": "consolidate_error",
+            "fileId": file_id,
+            "filename": filename,
+            "error": error,
+            **extra,
+        }
+    )
+
+
+async def claim(effective_hash, file_id, filename, location_id, busy_error) -> bool:
+    """Mark the hash as in progress and announce the start, unless another
+    operation on the same file already holds it."""
+    if effective_hash in active_consolidations:
+        await broadcast_error(file_id, filename, busy_error)
+        return False
+    active_consolidations.add(effective_hash)
+    await broadcast(
+        {
+            "type": "consolidate_started",
+            "fileId": file_id,
+            "filename": filename,
+            "locationId": location_id,
+        }
+    )
+    return True
+
+
+async def resolve_destination(file_id, filename, dest_folder_id):
+    """(dest_dir, dest_loc_id), or None after reporting the error."""
+    async with read_db() as db:
+        dest_dir, dest_loc_id = await resolve_folder_path_with_loc(
+            db, dest_folder_id
+        )
+    if dest_dir is None:
+        await broadcast_error(file_id, filename, "Destination folder not found.")
+        return None
+    return dest_dir, dest_loc_id
+
+
+async def location_label(location_id) -> str:
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            "SELECT l.name, a.name as agent_name "
+            "FROM locations l LEFT JOIN agents a ON a.id = l.agent_id "
+            "WHERE l.id = ?",
+            (location_id,),
+        )
+    return format_location(rows[0]["name"], rows[0]["agent_name"]) if rows else ""
+
+
+async def apply_merged_metadata(file_id, description, modified_date, tags):
+    async with db_writer() as wdb:
+        await wdb.execute(
+            "UPDATE files SET description = ?, modified_date = ? WHERE id = ?",
+            (description, modified_date, file_id),
+        )
+        await set_file_tags(wdb, file_id, tags)
+
+
+async def copy_to_destination(file_id, prep, dest_folder_id, dest_dir, dest_loc_id):
+    """Copy the file into the destination folder and catalogue it there.
+
+    The name is made unique against the catalogue, the bytes come from any
+    online copy and are verified by hash, and the new record gets the merged
+    tags and earliest modified date. Returns
+    (canonical_path, canonical_id, filename), or None after reporting the
+    error. A copy that fails is removed from the destination.
+    """
+    selected = prep["selected"]
+    modified = prep["earliest_modified"] or selected["modified_date"]
+
+    async with read_db() as db:
+        target = await resolve_target(db, dest_folder_id) if dest_folder_id else None
+        taken = await catalog_rel_paths(db, dest_loc_id)
+    rel_dir = (target.get("rel_path") or "") if target else ""
+    filename = unique_rel_name(taken, rel_dir, selected["filename"])
+    canonical_path = os.path.join(dest_dir, filename)
+
+    online_loc_ids = get_online_location_ids()
+    source = next(
+        (c for c in prep["all_copies"] if c["location_id"] in online_loc_ids), None
+    )
+    if source is None:
+        await broadcast_error(
+            file_id, filename, "No online copy available to copy from."
+        )
+        return None
+
+    async def copy_progress(bytes_sent, total_bytes):
+        await broadcast(
+            {
+                "type": "consolidate_progress",
+                "fileId": file_id,
+                "filename": filename,
+                "phase": "copying",
+                "bytesSent": bytes_sent,
+                "bytesTotal": total_bytes,
+            }
+        )
+
+    try:
+        await fs.copy_file(
+            source["full_path"],
+            source["location_id"],
+            canonical_path,
+            dest_loc_id,
+            on_progress=copy_progress,
+            mtime=parse_mtime(modified),
+        )
+    except Exception as copy_exc:
+        try:
+            await fs.file_delete(canonical_path, dest_loc_id)
+        except Exception:
+            pass
+        raise RuntimeError(f"Copy failed: {copy_exc}") from copy_exc
+
+    await broadcast(
+        {
+            "type": "consolidate_progress",
+            "fileId": file_id,
+            "filename": filename,
+            "phase": "verifying",
+        }
+    )
+    (source_hash_fast,) = await fs.file_hash(source["full_path"], source["location_id"])
+    (copy_hash_fast,) = await fs.file_hash(canonical_path, dest_loc_id)
+    if copy_hash_fast != source_hash_fast:
+        await fs.file_delete(canonical_path, dest_loc_id)
+        await broadcast_error(file_id, filename, "Hash verification failed after copy.")
+        return None
+
+    selected["filename"] = filename
+    selected["hash_fast"] = source_hash_fast
+    selected["tags"] = prep["merged_tags"]
+    selected["modified_date"] = modified
+    canonical_id = await ensure_canonical_record(
+        canonical_path, dest_folder_id, dest_loc_id, selected, prep["now_iso"]
+    )
+    return canonical_path, canonical_id, filename
+
+
+def folder_id_of(node_id):
+    """The folder id of a fld-N node id; None for a location."""
+    kind, _ = parse_prefixed_id(node_id)
+    return parse_folder_id(node_id) if kind == "fld" else None
+
+
+async def open_result_log(
+    shared_csv_path, shared_csv_loc_id, dest_dir, dest_loc_id, folder_id
+):
+    """(csv_path, csv_loc_id, csv_folder_id, owns_csv): the batch's shared
+    result log, or a new one in dest_dir, catalogued in folder_id."""
+    if shared_csv_path is not None:
+        # the batch catalogues its own log
+        return shared_csv_path, shared_csv_loc_id, None, False
+    csv_path = await create_log(dest_dir, dest_loc_id, "consolidate")
+    return csv_path, dest_loc_id, folder_id, True
+
+
+async def finish_consolidation(
+    result_log, canonical_id, filename, canonical_path, dest_loc_id,
+    stubs_written, stubs_queued,
+):
+    """Catalogue the result log if this consolidation owns it, and tell the
+    UI the file is done."""
+    csv_path, csv_loc_id, csv_folder_id, owns_csv = result_log
+    if owns_csv:
+        await add_to_catalog(csv_path, csv_loc_id, csv_folder_id)
+    await broadcast(
+        {
+            "type": "consolidate_completed",
+            "fileId": canonical_id,
+            "filename": filename,
+            "canonicalPath": canonical_path,
+            "destLocationId": dest_loc_id,
+            "stubsWritten": stubs_written,
+            "stubsQueued": stubs_queued,
+            "batch": not owns_csv,
+        }
+    )
+
+
 async def run_copy(
     file_id: int,
     dest_folder_id: str,
@@ -283,9 +447,6 @@ async def run_copy(
         shared_csv_loc_id: Location id for shared CSV.
         skip_post_processing: Skip stats refresh (batch does it once).
         filename_match_only: Only merge metadata from copies with same filename.
-
-    Called by:
-        routes/consolidate.py (single), run_batch_copy (batch).
     """
     effective_hash = None
     filename = None
@@ -293,204 +454,40 @@ async def run_copy(
     act_name = f"copy_{file_id}"
     activity_register(act_name, "Copying")
     try:
-        prep = await _find_and_merge_copies(file_id, filename_match_only)
+        prep = await find_and_merge_copies(file_id, filename_match_only)
         if not prep:
             return
 
         selected = prep["selected"]
-        all_copies = prep["all_copies"]
         effective_hash = prep["effective_hash"]
         filename = selected["filename"]
-        merged_tags = prep["merged_tags"]
-        merged_description = prep["merged_description"]
-        earliest_modified = prep["earliest_modified"]
-        now_iso = prep["now_iso"]
 
-        # Guard concurrent operations on same hash
-        if effective_hash in _active_consolidations:
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "error": "Operation already in progress for this file.",
-                }
-            )
+        if not await claim(
+            effective_hash, file_id, filename, selected["location_id"],
+            "Operation already in progress for this file.",
+        ):
             return
-        _active_consolidations.add(effective_hash)
 
-        await broadcast(
-            {
-                "type": "consolidate_started",
-                "fileId": file_id,
-                "filename": filename,
-                "locationId": selected["location_id"],
-            }
+        dest = await resolve_destination(file_id, filename, dest_folder_id)
+        if not dest:
+            return
+        dest_dir, dest_loc_id = dest
+        selected["description"] = prep["merged_description"]
+        copied = await copy_to_destination(
+            file_id, prep, dest_folder_id, dest_dir, dest_loc_id
         )
-
-        # Resolve destination
-        async with read_db() as db:
-            dest_dir, dest_loc_id = await _resolve_folder_path_with_loc(
-                db, dest_folder_id
-            )
-        if dest_dir is None:
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "error": "Destination folder not found.",
-                }
-            )
+        if not copied:
             return
-
-        # Name collision check
-        dest_file_path = os.path.join(dest_dir, filename)
-        canonical_path = dest_file_path
-        async with read_db() as db:
-            dest_rel_paths = {
-                r["rel_path"].lower()
-                for r in await db.execute_fetchall(
-                    "SELECT rel_path FROM files "
-                    "WHERE location_id = ? AND stale = 0",
-                    (dest_loc_id,),
-                )
-            }
-            target = (
-                await resolve_target(db, dest_folder_id) if dest_folder_id else None
-            )
-        if target:
-            check_rel = (
-                os.path.join(target.get("rel_path", ""), filename)
-                if target.get("rel_path")
-                else filename
-            )
-        else:
-            check_rel = filename
-
-        if check_rel.lower() in dest_rel_paths:
-            base, ext = os.path.splitext(filename)
-            counter = 1
-            while check_rel.lower() in dest_rel_paths:
-                new_name = f"{base}_{counter}{ext}"
-                check_rel = (
-                    os.path.join(target.get("rel_path", ""), new_name)
-                    if target and target.get("rel_path")
-                    else new_name
-                )
-                counter += 1
-            actual_filename = os.path.basename(check_rel)
-            canonical_path = os.path.join(dest_dir, actual_filename)
-            filename = actual_filename
-
-        # Find an online source copy
-        online_loc_ids = _get_online_location_ids()
-        source_path = None
-        source_loc_id = None
-        for copy in all_copies:
-            if copy["location_id"] in online_loc_ids:
-                source_path = copy["full_path"]
-                source_loc_id = copy["location_id"]
-                break
-
-        if source_path is None:
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "error": "No online copy available to copy from.",
-                }
-            )
-            return
-
-        # Copy with progress
-        async def _copy_progress(bytes_sent, total_bytes):
-            await broadcast(
-                {
-                    "type": "consolidate_progress",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "phase": "copying",
-                    "bytesSent": bytes_sent,
-                    "bytesTotal": total_bytes,
-                }
-            )
-
-        try:
-            await fs.copy_file(
-                source_path,
-                source_loc_id,
-                canonical_path,
-                dest_loc_id,
-                on_progress=_copy_progress,
-                mtime=parse_mtime(
-                    earliest_modified or selected["modified_date"]
-                ),
-            )
-        except Exception as copy_exc:
-            try:
-                await fs.file_delete(canonical_path, dest_loc_id)
-            except Exception:
-                pass
-            raise RuntimeError(f"Copy failed: {copy_exc}") from copy_exc
-
-        # Hash-verify
-        await broadcast(
-            {
-                "type": "consolidate_progress",
-                "fileId": file_id,
-                "filename": filename,
-                "phase": "verifying",
-            }
-        )
-        (source_hash_fast,) = await fs.file_hash(source_path, source_loc_id)
-        (copy_hash_fast,) = await fs.file_hash(canonical_path, dest_loc_id)
-        if copy_hash_fast != source_hash_fast:
-            await fs.file_delete(canonical_path, dest_loc_id)
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "error": "Hash verification failed after copy.",
-                }
-            )
-            return
-
-        # Create DB record with merged metadata
-        selected["hash_fast"] = source_hash_fast
-        selected["tags"] = merged_tags
-        selected["description"] = merged_description
-        selected["modified_date"] = earliest_modified or selected["modified_date"]
-        selected["filename"] = filename
-
-        canonical_id = await _ensure_canonical_record(
-            canonical_path, dest_folder_id, dest_loc_id, selected, now_iso
-        )
+        canonical_path, canonical_id, filename = copied
 
         # CSV audit trail
-        owns_csv = shared_csv_path is None
-        if owns_csv:
-            csv_path = await create_log(dest_dir, dest_loc_id, "consolidate")
-            csv_loc_id = dest_loc_id
-            kind, _ = parse_prefixed_id(dest_folder_id)
-            csv_folder_id = parse_folder_id(dest_folder_id) if kind == "fld" else None
-        else:
-            csv_path = shared_csv_path
-            csv_loc_id = shared_csv_loc_id
-            csv_folder_id = None
+        result_log = await open_result_log(
+            shared_csv_path, shared_csv_loc_id, dest_dir, dest_loc_id,
+            folder_id_of(dest_folder_id),
+        )
+        csv_path, csv_loc_id = result_log[:2]
 
-        async with read_db() as db:
-            _ln = await db.execute_fetchall(
-                "SELECT l.name, a.name as agent_name "
-                "FROM locations l LEFT JOIN agents a ON a.id = l.agent_id "
-                "WHERE l.id = ?",
-                (dest_loc_id,),
-            )
-        dest_loc_name = _format_location(
-            _ln[0]["name"], _ln[0]["agent_name"]
-        ) if _ln else ""
+        dest_loc_name = await location_label(dest_loc_id)
 
         await append_row(
             csv_path, csv_loc_id,
@@ -498,20 +495,8 @@ async def run_copy(
             dest_loc_name, canonical_path, "copied",
         )
 
-        if owns_csv:
-            await add_to_catalog(csv_path, csv_loc_id, csv_folder_id)
-
-        await broadcast(
-            {
-                "type": "consolidate_completed",
-                "fileId": canonical_id,
-                "filename": filename,
-                "canonicalPath": canonical_path,
-                "destLocationId": dest_loc_id,
-                "stubsWritten": 0,
-                "stubsQueued": 0,
-                "batch": not owns_csv,
-            }
+        await finish_consolidation(
+            result_log, canonical_id, filename, canonical_path, dest_loc_id, 0, 0
         )
 
         if not skip_post_processing:
@@ -521,20 +506,14 @@ async def run_copy(
             )
 
     except Exception as exc:
-        await broadcast(
-            {
-                "type": "consolidate_error",
-                "fileId": file_id,
-                "filename": filename or "",
-                "destLocationId": dest_loc_id,
-                "error": str(exc),
-            }
+        await broadcast_error(
+            file_id, filename or "", str(exc), destLocationId=dest_loc_id
         )
 
     finally:
         activity_unregister(act_name)
         if effective_hash:
-            _active_consolidations.discard(effective_hash)
+            active_consolidations.discard(effective_hash)
 
 
 async def run_consolidation(
@@ -568,9 +547,6 @@ async def run_consolidation(
         shared_csv_loc_id: Location id for shared CSV.
         skip_post_processing: Skip dup-count recalc (batch does it once).
         filename_match_only: Only consolidate copies with the same filename.
-
-    Called by:
-        routes/consolidate.py (single), run_batch_consolidation (batch).
     """
     effective_hash = None
     filename = None
@@ -581,7 +557,7 @@ async def run_consolidation(
     act_name = f"consolidate_{file_id}"
     activity_register(act_name, "Consolidating")
     try:
-        prep = await _find_and_merge_copies(file_id, filename_match_only)
+        prep = await find_and_merge_copies(file_id, filename_match_only)
         if not prep:
             return
 
@@ -596,61 +572,29 @@ async def run_consolidation(
         filename = selected["filename"]
         selected_loc_id = selected["location_id"]
 
-        # Guard concurrent consolidation
-        if effective_hash in _active_consolidations:
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "error": "Consolidation already in progress for this file.",
-                }
-            )
+        if not await claim(
+            effective_hash, file_id, filename, selected_loc_id,
+            "Consolidation already in progress for this file.",
+        ):
             return
-        _active_consolidations.add(effective_hash)
-
-        await broadcast(
-            {
-                "type": "consolidate_started",
-                "fileId": file_id,
-                "filename": filename,
-                "locationId": selected_loc_id,
-            }
-        )
 
         if mode == "keep_here":
             canonical_path = selected["full_path"]
             canonical_id = file_id
             dest_loc_id = selected_loc_id
 
-            # Apply merged metadata to canonical
-            async with db_writer() as wdb:
-                await wdb.execute(
-                    "UPDATE files SET description = ?, modified_date = ? WHERE id = ?",
-                    (
-                        merged_description or selected.get("description") or "",
-                        earliest_modified or selected["modified_date"],
-                        canonical_id,
-                    ),
-                )
-                await set_file_tags(wdb, canonical_id, merged_tags)
+            await apply_merged_metadata(
+                canonical_id,
+                merged_description or selected.get("description") or "",
+                earliest_modified or selected["modified_date"],
+                merged_tags,
+            )
 
         elif mode == "move_to":
-            # Resolve destination path and location_id
-            async with read_db() as db:
-                dest_dir, dest_loc_id = await _resolve_folder_path_with_loc(
-                    db, dest_folder_id
-                )
-            if dest_dir is None:
-                await broadcast(
-                    {
-                        "type": "consolidate_error",
-                        "fileId": file_id,
-                        "filename": filename,
-                        "error": "Destination folder not found.",
-                    }
-                )
+            dest = await resolve_destination(file_id, filename, dest_folder_id)
+            if not dest:
                 return
+            dest_dir, dest_loc_id = dest
 
             # Check if a copy already lives at the destination — use it as
             # canonical instead of copying a duplicate
@@ -670,158 +614,28 @@ async def run_consolidation(
                 canonical_path = existing_at_dest["full_path"]
                 canonical_id = existing_at_dest["id"]
 
-                # Apply merged metadata
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        "UPDATE files SET description = ?, modified_date = ? WHERE id = ?",
-                        (
-                            merged_description or existing_at_dest.get("description") or "",
-                            earliest_modified or existing_at_dest["modified_date"],
-                            canonical_id,
-                        ),
-                    )
-                    await set_file_tags(wdb, canonical_id, merged_tags)
+                await apply_merged_metadata(
+                    canonical_id,
+                    merged_description or existing_at_dest.get("description") or "",
+                    earliest_modified or existing_at_dest["modified_date"],
+                    merged_tags,
+                )
             else:
-                # Name collision: check catalog instead of filesystem
-                canonical_path = dest_file_path
-                async with read_db() as db:
-                    dest_rel_paths = {
-                        r["rel_path"].lower()
-                        for r in await db.execute_fetchall(
-                            "SELECT rel_path FROM files "
-                            "WHERE location_id = ? AND stale = 0",
-                            (dest_loc_id,),
-                        )
-                    }
-                    target = (
-                        await resolve_target(db, dest_folder_id) if dest_folder_id else None
-                    )
-                if target:
-                    check_rel = (
-                        os.path.join(target.get("rel_path", ""), filename)
-                        if target.get("rel_path")
-                        else filename
-                    )
-                else:
-                    check_rel = filename
-
-                if check_rel.lower() in dest_rel_paths:
-                    base, ext = os.path.splitext(filename)
-                    counter = 1
-                    while check_rel.lower() in dest_rel_paths:
-                        new_name = f"{base}_{counter}{ext}"
-                        check_rel = (
-                            os.path.join(target.get("rel_path", ""), new_name)
-                            if target and target.get("rel_path")
-                            else new_name
-                        )
-                        counter += 1
-                    actual_filename = os.path.basename(check_rel)
-                    canonical_path = os.path.join(dest_dir, actual_filename)
-                    selected["filename"] = actual_filename
-                    filename = actual_filename
-
-                # Find a source copy on an online location
-                online_loc_ids = _get_online_location_ids()
-                source_path = None
-                source_loc_id = None
-                for copy in all_copies:
-                    if copy["location_id"] in online_loc_ids:
-                        source_path = copy["full_path"]
-                        source_loc_id = copy["location_id"]
-                        break
-
-                if source_path is None:
-                    await broadcast(
-                        {
-                            "type": "consolidate_error",
-                            "fileId": file_id,
-                            "filename": filename,
-                            "error": "No online copy available to copy from.",
-                        }
-                    )
+                copied = await copy_to_destination(
+                    file_id, prep, dest_folder_id, dest_dir, dest_loc_id
+                )
+                if not copied:
                     return
-
-                # Copy with progress
-                async def _copy_progress(bytes_sent, total_bytes):
-                    await broadcast(
-                        {
-                            "type": "consolidate_progress",
-                            "fileId": file_id,
-                            "filename": filename,
-                            "phase": "copying",
-                            "bytesSent": bytes_sent,
-                            "bytesTotal": total_bytes,
-                        }
-                    )
-
-                try:
-                    await fs.copy_file(
-                        source_path,
-                        source_loc_id,
-                        canonical_path,
-                        dest_loc_id,
-                        on_progress=_copy_progress,
-                        mtime=parse_mtime(
-                            earliest_modified or selected["modified_date"]
-                        ),
-                    )
-                except Exception as copy_exc:
-                    try:
-                        await fs.file_delete(canonical_path, dest_loc_id)
-                    except Exception:
-                        pass
-                    raise RuntimeError(f"Copy failed: {copy_exc}") from copy_exc
-
-                # Hash-verify: compare hash_fast (same algorithm both sides)
-                await broadcast(
-                    {
-                        "type": "consolidate_progress",
-                        "fileId": file_id,
-                        "filename": filename,
-                        "phase": "verifying",
-                    }
-                )
-                (source_hash_fast,) = await fs.file_hash(source_path, source_loc_id)
-                (copy_hash_fast,) = await fs.file_hash(canonical_path, dest_loc_id)
-                if copy_hash_fast != source_hash_fast:
-                    await fs.file_delete(canonical_path, dest_loc_id)
-                    await broadcast(
-                        {
-                            "type": "consolidate_error",
-                            "fileId": file_id,
-                            "filename": filename,
-                            "error": "Hash verification failed after copy.",
-                        }
-                    )
-                    return
-
-                selected["hash_fast"] = source_hash_fast
-                selected["tags"] = merged_tags
-                selected["modified_date"] = (
-                    earliest_modified or selected["modified_date"]
-                )
-
-                # Create DB record for the canonical copy at destination
-                canonical_id = await _ensure_canonical_record(
-                    canonical_path, dest_folder_id, dest_loc_id, selected, now_iso
-                )
+                canonical_path, canonical_id, filename = copied
 
         else:
-            await broadcast(
-                {
-                    "type": "consolidate_error",
-                    "fileId": file_id,
-                    "filename": filename,
-                    "error": f"Unknown mode: {mode}",
-                }
-            )
+            await broadcast_error(file_id, filename, f"Unknown mode: {mode}")
             return
 
         # Write .sources file next to canonical — single append call
         try:
             sources_entries = "".join(
-                f"- {_format_location(c['location_name'], c.get('agent_name'))}: {c['rel_path']}\n"
+                f"- {format_location(c['location_name'], c.get('agent_name'))}: {c['rel_path']}\n"
                 for c in all_copies
             )
             await fs.file_write_text(
@@ -830,46 +644,36 @@ async def run_consolidation(
                 dest_loc_id,
                 append=True,
             )
-            await _upsert_sources_record(
-                canonical_path, canonical_id, dest_loc_id, sources_entries, now_iso
-            )
+            # the record goes in the canonical file's folder; none if it
+            # isn't catalogued
+            found = await file_folder(canonical_id)
+            if found:
+                await upsert_sources_record(
+                    canonical_path, dest_loc_id, *found, sources_entries, now_iso
+                )
         except Exception as e:
             logger.warning("Could not write .sources file: %s", e)
 
         # Result log CSV — use shared one from batch, or create per-file
-        owns_csv = shared_csv_path is None
-        if owns_csv:
-            dest_dir = os.path.dirname(canonical_path)
-            csv_path = await create_log(dest_dir, dest_loc_id, "consolidate")
-            csv_loc_id = dest_loc_id
-            csv_folder_id = None
-            if mode == "keep_here":
-                csv_folder_id = selected.get("folder_id")
-            elif mode == "move_to":
-                kind, _ = parse_prefixed_id(dest_folder_id)
-                if kind == "fld":
-                    csv_folder_id = parse_folder_id(dest_folder_id)
+        if mode == "keep_here":
+            log_folder_id = selected.get("folder_id")
+        elif mode == "move_to":
+            log_folder_id = folder_id_of(dest_folder_id)
         else:
-            csv_path = shared_csv_path
-            csv_loc_id = shared_csv_loc_id
-            csv_folder_id = None  # batch manages catalog entry
+            log_folder_id = None
+        result_log = await open_result_log(
+            shared_csv_path, shared_csv_loc_id, os.path.dirname(canonical_path),
+            dest_loc_id, log_folder_id,
+        )
+        csv_path, csv_loc_id = result_log[:2]
 
         # Resolve destination location label
         if mode == "keep_here":
-            dest_loc_name = _format_location(
+            dest_loc_name = format_location(
                 selected["location_name"], selected.get("agent_name")
             )
         else:
-            async with read_db() as db:
-                _ln = await db.execute_fetchall(
-                    "SELECT l.name, a.name as agent_name "
-                    "FROM locations l LEFT JOIN agents a ON a.id = l.agent_id "
-                    "WHERE l.id = ?",
-                    (dest_loc_id,),
-                )
-            dest_loc_name = _format_location(
-                _ln[0]["name"], _ln[0]["agent_name"]
-            ) if _ln else ""
+            dest_loc_name = await location_label(dest_loc_id)
 
         # Log the canonical file
         await append_row(
@@ -894,11 +698,17 @@ async def run_consolidation(
         total_dups = len(duplicates)
 
         # Build online location set once
-        online_loc_ids = _get_online_location_ids()
+        online_loc_ids = get_online_location_ids()
 
         for idx, copy in enumerate(duplicates, 1):
             original_path = copy["full_path"]
             copy_loc_id = copy["location_id"]
+
+            def log_copy(status, *detail):
+                return append_row(
+                    csv_path, csv_loc_id, copy["location_name"], original_path,
+                    dest_loc_name, canonical_path, status, *detail,
+                )
 
             await broadcast(
                 {
@@ -916,109 +726,30 @@ async def run_consolidation(
             # Check if location is online via agent registry
             if copy_loc_id not in online_loc_ids:
                 stubs_queued += 1
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        """INSERT INTO consolidation_jobs
-                           (source_file, source_location_id, source_path,
-                            destination_path, status, date_created)
-                           VALUES (?, ?, ?, ?, 'pending', ?)""",
-                        (
-                            copy["filename"],
-                            copy_loc_id,
-                            original_path,
-                            canonical_path,
-                            now_iso,
-                        ),
-                    )
-                await append_row(
-                    csv_path,
-                    csv_loc_id,
-                    copy["location_name"],
-                    original_path,
-                    dest_loc_name,
-                    canonical_path,
-                    "offline - queued",
-                )
+                await queue_stub(copy, canonical_path, now_iso)
+                await log_copy("offline - queued")
                 continue
 
             # Try stub + delete; handle failures
             try:
-                await _stub_and_delete(copy, canonical_path, dest_loc_name, now_iso)
+                await stub_and_delete(copy, canonical_path, dest_loc_name, now_iso)
                 stubs_written += 1
-                await append_row(
-                    csv_path,
-                    csv_loc_id,
-                    copy["location_name"],
-                    original_path,
-                    dest_loc_name,
-                    canonical_path,
-                    "stubbed",
-                )
+                await log_copy("stubbed")
             except FileNotFoundError:
                 # File missing on disk — queue for later
                 stubs_queued += 1
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        """INSERT INTO consolidation_jobs
-                           (source_file, source_location_id, source_path,
-                            destination_path, status, date_created)
-                           VALUES (?, ?, ?, ?, 'pending', ?)""",
-                        (
-                            copy["filename"],
-                            copy_loc_id,
-                            original_path,
-                            canonical_path,
-                            now_iso,
-                        ),
-                    )
-                await append_row(
-                    csv_path,
-                    csv_loc_id,
-                    copy["location_name"],
-                    original_path,
-                    dest_loc_name,
-                    canonical_path,
-                    "file missing - queued",
-                )
+                await queue_stub(copy, canonical_path, now_iso)
+                await log_copy("file missing - queued")
             except PermissionError:
                 # Read-only — log and continue
-                await append_row(
-                    csv_path,
-                    csv_loc_id,
-                    copy["location_name"],
-                    original_path,
-                    dest_loc_name,
-                    canonical_path,
-                    "stub failed (read-only)",
-                )
+                await log_copy("stub failed (read-only)")
             except Exception as e:
                 logger.warning("Stub write failed for %s: %s", original_path, e)
-                await append_row(
-                    csv_path,
-                    csv_loc_id,
-                    copy["location_name"],
-                    original_path,
-                    dest_loc_name,
-                    canonical_path,
-                    "stub failed",
-                    str(e),
-                )
+                await log_copy("stub failed", str(e))
 
-        # Add result CSV to catalog (only if this consolidation owns it)
-        if owns_csv:
-            await add_to_catalog(csv_path, csv_loc_id, csv_folder_id)
-
-        await broadcast(
-            {
-                "type": "consolidate_completed",
-                "fileId": canonical_id,
-                "filename": filename,
-                "canonicalPath": canonical_path,
-                "destLocationId": dest_loc_id,
-                "stubsWritten": stubs_written,
-                "stubsQueued": stubs_queued,
-                "batch": not owns_csv,
-            }
+        await finish_consolidation(
+            result_log, canonical_id, filename, canonical_path, dest_loc_id,
+            stubs_written, stubs_queued,
         )
         if not skip_post_processing:
             recalc_strong = set()
@@ -1036,22 +767,17 @@ async def run_consolidation(
             )
 
     except Exception as exc:
-        await broadcast(
-            {
-                "type": "consolidate_error",
-                "fileId": file_id,
-                "filename": filename or "",
-                "destLocationId": dest_loc_id or selected_loc_id,
-                "error": str(exc),
-                "stubsWritten": stubs_written,
-                "stubsQueued": stubs_queued,
-            }
+        await broadcast_error(
+            file_id, filename or "", str(exc),
+            destLocationId=dest_loc_id or selected_loc_id,
+            stubsWritten=stubs_written,
+            stubsQueued=stubs_queued,
         )
 
     finally:
         activity_unregister(act_name)
         if effective_hash:
-            _active_consolidations.discard(effective_hash)
+            active_consolidations.discard(effective_hash)
 
 
 async def run_batch_consolidation(
@@ -1073,9 +799,6 @@ async def run_batch_consolidation(
         mode: 'keep_here' or 'move_to' (passed through to run_consolidation).
         dest_folder_id: Prefixed id ('loc-N' or 'fld-N') for move_to mode.
         filename_match_only: Only consolidate copies with the same filename.
-
-    Called by:
-        routes/consolidate.py (via asyncio.create_task).
     """
     # Resolve destination for the shared CSV
     dest_dir = None
@@ -1083,12 +806,10 @@ async def run_batch_consolidation(
     csv_folder_id = None
     if dest_folder_id:
         async with read_db() as db:
-            d, lid = await _resolve_folder_path_with_loc(db, dest_folder_id)
+            d, lid = await resolve_folder_path_with_loc(db, dest_folder_id)
         dest_dir = d
         dest_loc_id = lid
-        kind, _ = parse_prefixed_id(dest_folder_id)
-        if kind == "fld":
-            csv_folder_id = parse_folder_id(dest_folder_id)
+        csv_folder_id = folder_id_of(dest_folder_id)
 
     if not dest_dir and file_ids:
         # keep_here mode — resolve from first file
@@ -1198,9 +919,6 @@ async def drain_pending_jobs(location_id: int, root_path: str):
     Args:
         location_id: The DB id of the location whose jobs should be drained.
         root_path: The filesystem root path of the location.
-
-    Called by:
-        ws/agent.py when an agent reconnects and its locations come online.
     """
     async with read_db() as db:
         rows = await db.execute_fetchall(
@@ -1213,7 +931,7 @@ async def drain_pending_jobs(location_id: int, root_path: str):
     if not rows:
         return
 
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_iso = utc_now()
     jobs_completed = 0
 
     for job in rows:
@@ -1232,12 +950,12 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                     "WHERE f.full_path = ? LIMIT 1",
                     (dest_path,),
                 )
-            dest_loc_label = _format_location(
+            dest_loc_label = format_location(
                 dest_rows[0]["name"], dest_rows[0]["agent_name"]
             ) if dest_rows else ""
 
             # Build a stub text for this job
-            stub_text = _build_stub_text(source_file, dest_path, dest_loc_label, now_iso)
+            stub_text = build_stub_text(source_file, dest_path, dest_loc_label, now_iso)
             stub_path = source_path + ".moved"
             stub_name = source_file + ".moved"
             stub_size = len(stub_text.encode())
@@ -1256,53 +974,12 @@ async def drain_pending_jobs(location_id: int, root_path: str):
 
             async with db_writer() as wdb:
                 if file_rows:
-                    fid = file_rows[0]["id"]
-                    stub_rel = file_rows[0]["rel_path"] + ".moved"
-                    await wdb.execute(
-                        """UPDATE files SET
-                            filename=?, full_path=?, rel_path=?,
-                            file_type_high='text', file_type_low='moved',
-                            file_size=?,
-                            modified_date=?, date_last_seen=?
-                           WHERE id=?""",
-                        (
-                            stub_name,
-                            stub_path,
-                            stub_rel,
-                            stub_size,
-                            now_iso,
-                            now_iso,
-                            fid,
-                        ),
+                    f = file_rows[0]
+                    await write_stub_record(
+                        wdb, f["id"], stub_name, stub_path,
+                        f["rel_path"] + ".moved", stub_size, now_iso,
                     )
-                    _h = await get_file_hashes([fid])
-                    was_dup = (_h.get(fid, {}).get("dup_count") or 0) > 0
-                    await remove_file_hashes([fid])
-                    if was_dup:
-                
-                        async with read_db() as rdb2:
-                            fp_rows = await rdb2.execute_fetchall(
-                                "SELECT id, parent_id FROM folders "
-                                "WHERE location_id = ?",
-                                (location_id,),
-                            )
-                        fp = {r["id"]: r["parent_id"] for r in fp_rows}
-                        await apply_dup_deltas(
-                            location_id, fp,
-                            [(file_rows[0]["folder_id"], -1)],
-                        )
-                    await update_stats_for_files(
-                        location_id,
-                        removed=[
-                            (
-                                file_rows[0]["folder_id"],
-                                file_rows[0]["file_size"] or 0,
-                                file_rows[0]["file_type_high"],
-                                0,
-                            )
-                        ],
-                        added=[(file_rows[0]["folder_id"], stub_size, "text", 0)],
-                    )
+                    await release_stubbed(location_id, f, stub_size)
                 else:
                     # No file record — just clean up any orphan
                     del_rows = await wdb.execute_fetchall(
@@ -1312,11 +989,11 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                     )
                     if del_rows:
                         del_ids = [r["id"] for r in del_rows]
-                        _h = await get_file_hashes(del_ids)
+                        h = await get_file_hashes(del_ids)
                         dup_deltas = [
                             (r["folder_id"], -1)
                             for r in del_rows
-                            if (_h.get(r["id"], {}).get("dup_count") or 0) > 0
+                            if (h.get(r["id"], {}).get("dup_count") or 0) > 0
                         ]
                     await wdb.execute(
                         "DELETE FROM files WHERE full_path = ? AND location_id = ?",
@@ -1326,14 +1003,7 @@ async def drain_pending_jobs(location_id: int, root_path: str):
                         await remove_file_hashes(del_ids)
                         if dup_deltas:
                     
-                            async with read_db() as rdb2:
-                                fp_rows = await rdb2.execute_fetchall(
-                                    "SELECT id, parent_id FROM folders "
-                                    "WHERE location_id = ?",
-                                    (location_id,),
-                                )
-                            fp = {r["id"]: r["parent_id"] for r in fp_rows}
-                            await apply_dup_deltas(location_id, fp, dup_deltas)
+                            await update_dup_counts_for_files(location_id, dup_deltas)
                         await update_stats_for_files(
                             location_id,
                             removed=[
@@ -1378,7 +1048,7 @@ async def drain_pending_jobs(location_id: int, root_path: str):
         )
 
 
-async def _resolve_folder_path_with_loc(
+async def resolve_folder_path_with_loc(
     db, folder_id: str
 ) -> tuple[str | None, int | None]:
     """Resolve a prefixed folder identifier to its absolute path and location id."""
@@ -1388,7 +1058,7 @@ async def _resolve_folder_path_with_loc(
     return target["abs_path"], target["location_id"]
 
 
-async def _ensure_canonical_record(
+async def ensure_canonical_record(
     canonical_path: str,
     dest_folder_id: str,
     dest_loc_id: int,
@@ -1445,76 +1115,8 @@ async def _ensure_canonical_record(
     hash_fast = source.get("hash_fast")
     hash_strong = source.get("hash_strong")
     if hash_fast or hash_strong:
-        async with hashes_writer() as hdb:
-            await hdb.execute(
-                "INSERT INTO file_hashes "
-                "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(file_id) DO UPDATE SET "
-                "hash_partial=excluded.hash_partial, "
-                "hash_fast=excluded.hash_fast, "
-                "hash_strong=excluded.hash_strong",
-                (new_id, location_id, file_size, hash_partial, hash_fast, hash_strong),
-            )
+        await set_file_hashes(
+            new_id, location_id, file_size, hash_partial, hash_fast, hash_strong
+        )
 
     return new_id
-
-
-async def _upsert_sources_record(
-    canonical_path, canonical_id, dest_loc_id, sources_text, now_iso
-):
-    """Insert or update the .sources file's DB record.
-
-    Uses len(sources_text) as file size — exact for new files, approximate
-    after multiple appends.
-    """
-    sources_path = canonical_path + ".sources"
-    sources_name = os.path.basename(sources_path)
-    sources_size = len(sources_text.encode())
-
-    # Get folder info from the canonical file
-    async with read_db() as db:
-        rows = await db.execute_fetchall(
-            "SELECT folder_id, rel_path FROM files WHERE id = ?",
-            (canonical_id,),
-        )
-    if not rows:
-        return
-    folder_id = rows[0]["folder_id"]
-    rel_dir = os.path.dirname(rows[0]["rel_path"])
-    sources_rel = os.path.join(rel_dir, sources_name) if rel_dir else sources_name
-
-    async with read_db() as db:
-        existing = await db.execute_fetchall(
-            "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
-            (dest_loc_id, sources_rel),
-        )
-
-    async with db_writer() as wdb:
-        if existing:
-            await wdb.execute(
-                "UPDATE files SET modified_date=?, date_last_seen=? WHERE id=?",
-                (now_iso, now_iso, existing[0]["id"]),
-            )
-        else:
-            await wdb.execute(
-                """INSERT OR IGNORE INTO files
-                   (filename, full_path, rel_path, location_id, folder_id,
-                    file_type_high, file_type_low, file_size,
-                    description,
-                    created_date, modified_date, date_cataloged, date_last_seen, scan_id)
-                   VALUES (?, ?, ?, ?, ?, 'text', 'sources', ?, '',
-                           ?, ?, ?, ?, NULL)""",
-                (
-                    sources_name,
-                    sources_path,
-                    sources_rel,
-                    dest_loc_id,
-                    folder_id,
-                    sources_size,
-                    now_iso,
-                    now_iso,
-                    now_iso,
-                    now_iso,
-                ),
-            )

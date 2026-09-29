@@ -1,3 +1,4 @@
+import { esc } from '../format.js';
 const Toast = {
     container: null,
 
@@ -18,7 +19,7 @@ const Toast = {
         const toast = document.createElement('div');
         toast.className = `toast toast-${level}`;
         toast.innerHTML = `
-            <span class="toast-msg">${message}</span>
+            <span class="toast-msg">${esc(message)}</span>
             <button class="toast-close">&times;</button>
         `;
 

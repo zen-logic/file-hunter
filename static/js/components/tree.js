@@ -3,16 +3,8 @@ import ConfirmModal from './confirm.js';
 import icons from '../icons.js';
 import Keyboard from '../keyboard.js';
 import Toast from './toast.js';
+import { formatSize } from '../format.js';
 
-function formatSize(bytes) {
-    if (!bytes) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    if (bytes < 1099511627776) return (bytes / 1073741824).toFixed(1) + ' GB';
-    if (bytes < 1125899906842624) return (bytes / 1099511627776).toFixed(1) + ' TB';
-    return (bytes / 1125899906842624).toFixed(1) + ' PB';
-}
 
 const Tree = {
     el: null,
@@ -237,7 +229,6 @@ const Tree = {
             const el = this.findItemEl(id);
             if (!el) continue;
 
-            // Toggle offline class
             el.classList.toggle('offline', online === false);
 
             // Update offline badge in meta-row
@@ -292,25 +283,8 @@ const Tree = {
         if (oldBar) oldBar.remove();
         if (oldRo) oldRo.remove();
 
-        if (node.diskStats && node.diskStats.mount) {
-            const pct = ((node.diskStats.total - node.diskStats.free) / node.diskStats.total * 100).toFixed(1);
-            const bar = document.createElement('span');
-            bar.className = 'tree-capacity-bar';
-            bar.title = `${formatSize(node.diskStats.free)} free of ${formatSize(node.diskStats.total)}`;
-            const fill = document.createElement('span');
-            fill.className = 'tree-capacity-fill';
-            fill.style.width = pct + '%';
-            bar.appendChild(fill);
-            // Insert before .tree-badges
-            const badges = meta.querySelector('.tree-badges');
-            meta.insertBefore(bar, badges);
-            if (node.diskStats.readonly) {
-                const ro = document.createElement('span');
-                ro.className = 'tree-badge readonly';
-                ro.textContent = 'RO';
-                meta.insertBefore(ro, badges);
-            }
-        }
+        const badges = meta.querySelector('.tree-badges');
+        for (const e of this.capacityElements(node)) meta.insertBefore(e, badges);
     },
 
     updateLocationSize(locationId, totalSize) {
@@ -325,7 +299,7 @@ const Tree = {
         if (sizeSpan) {
             // If scanning with no totalSize, phase text is shown instead — handled by updateLocationBadges
             if (this.scanningLocations.has(key) && !totalSize) return;
-            sizeSpan.textContent = totalSize != null ? formatSize(totalSize) : '';
+            sizeSpan.textContent = totalSize ? formatSize(totalSize) : '';
             sizeSpan.classList.remove('tree-size-scanning');
         }
     },
@@ -521,108 +495,113 @@ const Tree = {
         const meta = el.querySelector('.tree-location-meta');
         const insertBefore = meta || null;
 
-        if (this.scanningLocations.has(nodeId)) {
-            const sb = document.createElement('span');
-            sb.className = 'tree-badge scanning';
-            sb.textContent = 'scanning';
-            el.insertBefore(sb, insertBefore);
-            const cb = document.createElement('span');
-            cb.className = 'tree-badge cancel tree-badge-clickable';
-            cb.textContent = 'cancel';
-            cb.title = 'Cancel scan';
-            cb.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const ok = await ConfirmModal.open({
-                    title: 'Cancel Scan',
-                    message: `Stop scanning "${node.label}"? Files already cataloged will be kept.`,
-                    confirmLabel: 'Cancel Scan',
-                });
-                if (!ok) return;
-                await API.post('/api/scan/cancel', { location_id: nodeId });
-            });
-            el.insertBefore(cb, insertBefore);
-        } else if (this.queuedLocations.has(nodeId)) {
-            const qb = document.createElement('span');
-            qb.className = 'tree-badge queued';
-            qb.textContent = 'queued';
-            el.insertBefore(qb, insertBefore);
-            const cb = document.createElement('span');
-            cb.className = 'tree-badge cancel tree-badge-clickable';
-            cb.textContent = 'cancel';
-            cb.title = 'Remove from queue';
-            const queueId = this.queuedLocations.get(nodeId);
-            cb.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const ok = await ConfirmModal.open({
-                    title: 'Remove from Queue',
-                    message: `Remove "${node.label}" from the scan queue?`,
-                    confirmLabel: 'Remove',
-                });
-                if (!ok) return;
-                await API.post('/api/scan/cancel', { queue_id: queueId });
-            });
-            el.insertBefore(cb, insertBefore);
-        } else if (this.backfillingLocations.has(nodeId)) {
-            const bb = document.createElement('span');
-            bb.className = 'tree-badge backfilling';
-            bb.textContent = 'backfilling';
-            el.insertBefore(bb, insertBefore);
-            const cb = document.createElement('span');
-            cb.className = 'tree-badge cancel tree-badge-clickable';
-            cb.textContent = 'cancel';
-            cb.title = 'Cancel backfill';
-            cb.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const ok = await ConfirmModal.open({
-                    title: 'Cancel Backfill',
-                    message: `Stop backfilling hashes on "${node.label}"? Hashes already computed will be kept.`,
-                    confirmLabel: 'Cancel Backfill',
-                });
-                if (!ok) return;
-                await API.post('/api/scan/cancel', { location_id: nodeId, type: 'backfill' });
-            });
-            el.insertBefore(cb, insertBefore);
-        } else if (this.deletingLocations.has(nodeId)) {
-            const db = document.createElement('span');
-            db.className = 'tree-badge deleting';
-            db.textContent = 'deleting';
-            el.insertBefore(db, insertBefore);
-        } else if (this.mergingLocations.has(nodeId)) {
-            const mb = document.createElement('span');
-            mb.className = 'tree-badge merging';
-            mb.textContent = this.mergingLocations.get(nodeId);
-            el.insertBefore(mb, insertBefore);
-        }
-
-        if (this.paused && !this.scanningLocations.has(nodeId) && !this.deletingLocations.has(nodeId)) {
-            const pb = document.createElement('span');
-            pb.className = 'tree-badge queued';
-            pb.textContent = 'paused';
-            el.insertBefore(pb, insertBefore);
-        }
+        for (const b of this.locationBadges(node)) el.insertBefore(b, insertBefore);
 
         // Update meta-row size/phase text
         const sizeSpan = el.querySelector('.tree-size');
-        if (sizeSpan) {
-            if (this.scanningLocations.has(nodeId) && !node.totalSize) {
-                const phaseLabels = {
-                    scanning: 'metadata...',
-                    comparing: 'comparing...',
-                    hashing: 'partials...',
-                    cataloging: 'ingest...',
-                    cataloging_hashes: 'hashing...',
-                    checking_duplicates: 'hashing...',
-                    recounting: 'finalizing...',
-                    rebuilding: 'finalizing...',
-                };
-                const phase = this.scanningPhases.get(nodeId);
-                sizeSpan.textContent = phaseLabels[phase] || 'scanning...';
-                sizeSpan.classList.add('tree-size-scanning');
-            } else {
-                sizeSpan.textContent = node.totalSize != null ? formatSize(node.totalSize) : '';
-                sizeSpan.classList.remove('tree-size-scanning');
-            }
+        if (sizeSpan) this.setLocationSizeText(sizeSpan, node);
+    },
+
+    /** The status badges after a location's name: its operation (with a
+     *  cancel badge where it can be cancelled), and "paused". */
+    locationBadges(node) {
+        const id = node.id;
+        const badges = [];
+        const badge = (cls, text) => {
+            const b = document.createElement('span');
+            b.className = `tree-badge ${cls}`;
+            b.textContent = text;
+            badges.push(b);
+        };
+        const cancelBadge = (title, confirm, body) => {
+            const cb = document.createElement('span');
+            cb.className = 'tree-badge cancel tree-badge-clickable';
+            cb.textContent = 'cancel';
+            cb.title = title;
+            cb.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const ok = await ConfirmModal.open(confirm);
+                if (!ok) return;
+                await API.post('/api/scan/cancel', body);
+            });
+            badges.push(cb);
+        };
+        if (this.scanningLocations.has(id)) {
+            badge('scanning', 'scanning');
+            cancelBadge('Cancel scan', {
+                title: 'Cancel Scan',
+                message: `Stop scanning "${node.label}"? Files already cataloged will be kept.`,
+                confirmLabel: 'Cancel Scan',
+            }, { location_id: id });
+        } else if (this.queuedLocations.has(id)) {
+            badge('queued', 'queued');
+            cancelBadge('Remove from queue', {
+                title: 'Remove from Queue',
+                message: `Remove "${node.label}" from the scan queue?`,
+                confirmLabel: 'Remove',
+            }, { queue_id: this.queuedLocations.get(id) });
+        } else if (this.backfillingLocations.has(id)) {
+            badge('backfilling', 'backfilling');
+            cancelBadge('Cancel backfill', {
+                title: 'Cancel Backfill',
+                message: `Stop backfilling hashes on "${node.label}"? Hashes already computed will be kept.`,
+                confirmLabel: 'Cancel Backfill',
+            }, { location_id: id, type: 'backfill' });
+        } else if (this.deletingLocations.has(id)) {
+            badge('deleting', 'deleting');
+        } else if (this.mergingLocations.has(id)) {
+            badge('merging', this.mergingLocations.get(id));
         }
+        if (this.paused && !this.scanningLocations.has(id) && !this.deletingLocations.has(id)) {
+            badge('queued', 'paused');
+        }
+        return badges;
+    },
+
+    /** A location's size in the tree, or its scan phase while its first
+     *  scan hasn't produced a size yet. */
+    setLocationSizeText(sizeSpan, node) {
+        if (this.scanningLocations.has(node.id) && !node.totalSize) {
+            const phaseLabels = {
+                scanning: 'metadata...',
+                comparing: 'comparing...',
+                hashing: 'partials...',
+                cataloging: 'ingest...',
+                cataloging_hashes: 'hashing...',
+                checking_duplicates: 'hashing...',
+                recounting: 'finalizing...',
+                rebuilding: 'finalizing...',
+            };
+            const phase = this.scanningPhases.get(node.id);
+            sizeSpan.textContent = phaseLabels[phase] || 'scanning...';
+            sizeSpan.classList.add('tree-size-scanning');
+        } else {
+            sizeSpan.textContent = node.totalSize ? formatSize(node.totalSize) : '';
+            sizeSpan.classList.remove('tree-size-scanning');
+        }
+    },
+
+    /** A location's disk capacity bar, and "RO" if it's read-only; none
+     *  without disk stats. */
+    capacityElements(node) {
+        const ds = node.diskStats;
+        if (!ds || !ds.mount) return [];
+        const pct = ((ds.total - ds.free) / ds.total * 100).toFixed(1);
+        const bar = document.createElement('span');
+        bar.className = 'tree-capacity-bar';
+        bar.title = `${formatSize(ds.free)} free of ${formatSize(ds.total)}`;
+        const fill = document.createElement('span');
+        fill.className = 'tree-capacity-fill';
+        fill.style.width = pct + '%';
+        bar.appendChild(fill);
+        const elements = [bar];
+        if (ds.readonly) {
+            const ro = document.createElement('span');
+            ro.className = 'tree-badge readonly';
+            ro.textContent = 'RO';
+            elements.push(ro);
+        }
+        return elements;
     },
 
     findParent(nodeId, nodes, parent) {
@@ -770,7 +749,6 @@ const Tree = {
         icon.innerHTML = node.type === 'location' ? icons.location : icons.folder;
         item.appendChild(icon);
 
-        // label
         const label = document.createElement('span');
         label.className = 'tree-label';
         label.textContent = node.label;
@@ -784,84 +762,7 @@ const Tree = {
 
         // scanning/queued badge on the name line
         if (node.type === 'location') {
-            if (this.scanningLocations.has(node.id)) {
-                const sb = document.createElement('span');
-                sb.className = 'tree-badge scanning';
-                sb.textContent = 'scanning';
-                item.appendChild(sb);
-                const cb = document.createElement('span');
-                cb.className = 'tree-badge cancel tree-badge-clickable';
-                cb.textContent = 'cancel';
-                cb.title = 'Cancel scan';
-                cb.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    const ok = await ConfirmModal.open({
-                        title: 'Cancel Scan',
-                        message: `Stop scanning "${node.label}"? Files already cataloged will be kept.`,
-                        confirmLabel: 'Cancel Scan',
-                    });
-                    if (!ok) return;
-                    await API.post('/api/scan/cancel', { location_id: node.id });
-                });
-                item.appendChild(cb);
-            } else if (this.queuedLocations.has(node.id)) {
-                const qb = document.createElement('span');
-                qb.className = 'tree-badge queued';
-                qb.textContent = 'queued';
-                item.appendChild(qb);
-                const cb = document.createElement('span');
-                cb.className = 'tree-badge cancel tree-badge-clickable';
-                cb.textContent = 'cancel';
-                cb.title = 'Remove from queue';
-                const queueId = this.queuedLocations.get(node.id);
-                cb.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    const ok = await ConfirmModal.open({
-                        title: 'Remove from Queue',
-                        message: `Remove "${node.label}" from the scan queue?`,
-                        confirmLabel: 'Remove',
-                    });
-                    if (!ok) return;
-                    await API.post('/api/scan/cancel', { queue_id: queueId });
-                });
-                item.appendChild(cb);
-            } else if (this.backfillingLocations.has(node.id)) {
-                const bb = document.createElement('span');
-                bb.className = 'tree-badge backfilling';
-                bb.textContent = 'backfilling';
-                item.appendChild(bb);
-                const cb = document.createElement('span');
-                cb.className = 'tree-badge cancel tree-badge-clickable';
-                cb.textContent = 'cancel';
-                cb.title = 'Cancel backfill';
-                cb.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    const ok = await ConfirmModal.open({
-                        title: 'Cancel Backfill',
-                        message: `Stop backfilling hashes on "${node.label}"? Hashes already computed will be kept.`,
-                        confirmLabel: 'Cancel Backfill',
-                    });
-                    if (!ok) return;
-                    await API.post('/api/scan/cancel', { location_id: node.id, type: 'backfill' });
-                });
-                item.appendChild(cb);
-            } else if (this.deletingLocations.has(node.id)) {
-                const db = document.createElement('span');
-                db.className = 'tree-badge deleting';
-                db.textContent = 'deleting';
-                item.appendChild(db);
-            } else if (this.mergingLocations.has(node.id)) {
-                const mb = document.createElement('span');
-                mb.className = 'tree-badge merging';
-                mb.textContent = this.mergingLocations.get(node.id);
-                item.appendChild(mb);
-            }
-            if (this.paused && !this.scanningLocations.has(node.id) && !this.deletingLocations.has(node.id)) {
-                const pb = document.createElement('span');
-                pb.className = 'tree-badge queued';
-                pb.textContent = 'paused';
-                item.appendChild(pb);
-            }
+            for (const b of this.locationBadges(node)) item.appendChild(b);
         }
 
         if (node.type === 'location') {
@@ -871,41 +772,9 @@ const Tree = {
             meta.className = 'tree-location-meta';
             const sizeSpan = document.createElement('span');
             sizeSpan.className = 'tree-size';
-            if (this.scanningLocations.has(node.id) && !node.totalSize) {
-                const phaseLabels = {
-                    scanning: 'metadata...',
-                    comparing: 'comparing...',
-                    hashing: 'partials...',
-                    cataloging: 'ingest...',
-                    cataloging_hashes: 'hashing...',
-                    checking_duplicates: 'hashing...',
-                    recounting: 'finalizing...',
-                    rebuilding: 'finalizing...',
-                };
-                const phase = this.scanningPhases.get(node.id);
-                sizeSpan.textContent = phaseLabels[phase] || 'scanning...';
-                sizeSpan.classList.add('tree-size-scanning');
-            } else {
-                sizeSpan.textContent = node.totalSize != null ? formatSize(node.totalSize) : '';
-            }
+            this.setLocationSizeText(sizeSpan, node);
             meta.appendChild(sizeSpan);
-            if (node.diskStats && node.diskStats.mount) {
-                const pct = ((node.diskStats.total - node.diskStats.free) / node.diskStats.total * 100).toFixed(1);
-                const bar = document.createElement('span');
-                bar.className = 'tree-capacity-bar';
-                bar.title = `${formatSize(node.diskStats.free)} free of ${formatSize(node.diskStats.total)}`;
-                const fill = document.createElement('span');
-                fill.className = 'tree-capacity-fill';
-                fill.style.width = pct + '%';
-                bar.appendChild(fill);
-                meta.appendChild(bar);
-                if (node.diskStats.readonly) {
-                    const ro = document.createElement('span');
-                    ro.className = 'tree-badge readonly';
-                    ro.textContent = 'RO';
-                    meta.appendChild(ro);
-                }
-            }
+            for (const e of this.capacityElements(node)) meta.appendChild(e);
             const badges = document.createElement('span');
             badges.className = 'tree-badges';
             if (node.agent) {
@@ -927,7 +796,7 @@ const Tree = {
             if (node.totalSize > 0) {
                 const sizeSpan = document.createElement('span');
                 sizeSpan.className = 'tree-size';
-                sizeSpan.textContent = formatSize(node.totalSize);
+                sizeSpan.textContent = node.totalSize ? formatSize(node.totalSize) : '';
                 item.appendChild(sizeSpan);
             }
             if (node.dupExcluded) {

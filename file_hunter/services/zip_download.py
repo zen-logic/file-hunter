@@ -18,21 +18,21 @@ from file_hunter.ws.scan import broadcast
 log = logging.getLogger(__name__)
 
 # Active jobs: job_id -> {status, progress, total, tmp_path, filename, file_size, task, created}
-_jobs: dict[str, dict] = {}
-_job_counter = 0
-_CLEANUP_TIMEOUT = 600  # 10 minutes — auto-delete unclaimed ZIPs
+jobs: dict[str, dict] = {}
+job_counter = 0
+CLEANUP_TIMEOUT = 600  # 10 minutes — auto-delete unclaimed ZIPs
 
 
-def _next_job_id() -> str:
-    global _job_counter
-    _job_counter += 1
-    return f"zip-{_job_counter}"
+def next_job_id() -> str:
+    global job_counter
+    job_counter += 1
+    return f"zip-{job_counter}"
 
 
 async def start_build(files: list[tuple[str, str, int]], zip_name: str) -> str:
     """Kick off an async ZIP build. Returns job_id immediately."""
-    job_id = _next_job_id()
-    _jobs[job_id] = {
+    job_id = next_job_id()
+    jobs[job_id] = {
         "status": "building",
         "progress": 0,
         "total": len(files),
@@ -43,16 +43,16 @@ async def start_build(files: list[tuple[str, str, int]], zip_name: str) -> str:
         "created": time.monotonic(),
     }
     activity_register(job_id, f"Building ZIP: {zip_name}", progress=f"0/{len(files)}")
-    task = asyncio.create_task(_build(job_id, files, zip_name))
-    _jobs[job_id]["task"] = task
+    task = asyncio.create_task(build(job_id, files, zip_name))
+    jobs[job_id]["task"] = task
     return job_id
 
 
-async def _build(job_id: str, files: list[tuple[str, str, int]], zip_name: str):
+async def build(job_id: str, files: list[tuple[str, str, int]], zip_name: str):
     """Build the ZIP in a temp file, broadcasting progress via WS."""
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip")
     os.close(tmp_fd)
-    job = _jobs[job_id]
+    job = jobs[job_id]
     job["tmp_path"] = tmp_path
 
     try:
@@ -98,16 +98,16 @@ async def _build(job_id: str, files: list[tuple[str, str, int]], zip_name: str):
         )
 
         # Schedule cleanup if nobody downloads within timeout
-        asyncio.create_task(_cleanup_after_timeout(job_id))
+        asyncio.create_task(cleanup_after_timeout(job_id))
 
     except asyncio.CancelledError:
         activity_unregister(job_id)
-        _cleanup_job(job_id)
+        cleanup_job(job_id)
         log.info("ZIP build cancelled: %s", zip_name)
     except Exception:
         activity_unregister(job_id)
         log.error("ZIP build failed: %s", zip_name, exc_info=True)
-        _cleanup_job(job_id)
+        cleanup_job(job_id)
         await broadcast(
             {
                 "type": "zip_error",
@@ -118,16 +118,12 @@ async def _build(job_id: str, files: list[tuple[str, str, int]], zip_name: str):
 
 
 def get_job(job_id: str) -> dict | None:
-    return _jobs.get(job_id)
+    return jobs.get(job_id)
 
 
 def cleanup_job(job_id: str):
-    """Public cleanup — called after download stream completes."""
-    _cleanup_job(job_id)
-
-
-def _cleanup_job(job_id: str):
-    job = _jobs.pop(job_id, None)
+    """Drop the job and delete its temporary ZIP."""
+    job = jobs.pop(job_id, None)
     if job and job.get("tmp_path"):
         try:
             os.unlink(job["tmp_path"])
@@ -136,13 +132,13 @@ def _cleanup_job(job_id: str):
 
 
 def cancel_job(job_id: str):
-    job = _jobs.get(job_id)
+    job = jobs.get(job_id)
     if job and job.get("task") and not job["task"].done():
         job["task"].cancel()
 
 
-async def _cleanup_after_timeout(job_id: str):
-    await asyncio.sleep(_CLEANUP_TIMEOUT)
-    if job_id in _jobs:
+async def cleanup_after_timeout(job_id: str):
+    await asyncio.sleep(CLEANUP_TIMEOUT)
+    if job_id in jobs:
         log.info("ZIP download expired, cleaning up: %s", job_id)
-        _cleanup_job(job_id)
+        cleanup_job(job_id)

@@ -3,9 +3,9 @@ import logging
 from collections import defaultdict
 
 from starlette.requests import Request
-from file_hunter.core import ProgressTracker, json_ok, json_error
+from file_hunter.core import BadRequest, ProgressTracker, json_error, json_ok, parse_str_array, read_body
 from file_hunter.db import db_writer, read_db, open_connection
-from file_hunter.hashes_db import hashes_writer, mark_hashes_stale, _hashes_db_path
+from file_hunter.hashes_db import hashes_writer, mark_hashes_stale, hashes_db_path
 from file_hunter.services.agent_ops import hash_fast_batch, hash_partial_batch
 from file_hunter.services.dup_counts import (
     find_dup_candidates,
@@ -25,7 +25,7 @@ from file_hunter.ws.scan import broadcast
 
 log = logging.getLogger("file_hunter")
 
-_repair_progress = ProgressTracker(
+repair_progress = ProgressTracker(
     phase="",
     phases=[],
     # partials phase
@@ -58,25 +58,25 @@ _repair_progress = ProgressTracker(
 )
 
 # Tracked so on_shutdown can cancel it
-_repair_task: asyncio.Task | None = None
+repair_task: asyncio.Task | None = None
 
 
-def _reset_progress():
-    _repair_progress.reset()
-    _repair_progress["phases"] = []
-    _repair_progress["error_details"] = []
+def reset_progress():
+    repair_progress.reset()
+    repair_progress["phases"] = []
+    repair_progress["error_details"] = []
 
 
 async def stop_repair():
     """Cancel a running repair and resume the queue. Called from on_shutdown."""
-    global _repair_task
-    if _repair_task and not _repair_task.done():
-        _repair_task.cancel()
+    global repair_task
+    if repair_task and not repair_task.done():
+        repair_task.cancel()
         try:
-            await _repair_task
+            await repair_task
         except (asyncio.CancelledError, Exception):
             pass
-    _repair_task = None
+    repair_task = None
 
 
 async def stats(request: Request):
@@ -96,19 +96,18 @@ async def repair_catalog(request: Request):
     Default (no phases specified): all three.
     Pauses the queue, runs selected phases, resumes.
     """
-    global _repair_task
+    global repair_task
 
-    if _repair_progress["status"] not in ("idle", "complete", "error"):
+    if repair_progress["status"] not in ("idle", "complete", "error"):
         return json_error("A repair is already in progress")
 
-    body = {}
     try:
-        body = await request.json()
-    except Exception:
-        pass
+        body = await read_body(request)
+    except BadRequest:
+        body = {}
 
     valid_phases = {"partials", "hashes", "duplicates", "sizes"}
-    phases = body.get("phases")
+    phases = parse_str_array(body.get("phases"), "phases")
     if phases:
         phases = [p for p in phases if p in valid_phases]
         if not phases:
@@ -116,18 +115,50 @@ async def repair_catalog(request: Request):
     else:
         phases = ["partials", "hashes", "duplicates", "sizes"]
 
-    _reset_progress()
-    _repair_progress["phases"] = phases
-    _repair_task = asyncio.create_task(_bg_repair(phases))
+    reset_progress()
+    repair_progress["phases"] = phases
+    repair_task = asyncio.create_task(bg_repair(phases))
     return json_ok({"status": "started", "phases": phases})
 
 
 async def repair_catalog_progress(request: Request):
     """Return current repair progress."""
-    return json_ok(dict(_repair_progress))
+    return json_ok(dict(repair_progress))
 
 
-async def _bg_repair(phases: list[str] | None = None):
+async def record_batch_errors(result, path_to_id, phase, label):
+    """Mark the files an agent hash batch couldn't find as stale in the
+    catalog, and log and record its other errors. Returns (the stale file
+    ids, the number of other errors)."""
+    not_found_ids = []
+    error_count = 0
+    for err in result.get("errors", []):
+        if err.get("error") == "File not found":
+            fp = err.get("path")
+            fid = path_to_id.get(fp)
+            if fid:
+                not_found_ids.append(fid)
+            log.info("Catalog repair: marking stale (not found): %s", fp)
+        else:
+            log.warning("Catalog repair: %s error: %s", label, err)
+            error_count += 1
+            repair_progress["error_details"].append(
+                {
+                    "phase": phase,
+                    "path": err.get("path", ""),
+                    "error": err.get("error", ""),
+                }
+            )
+    if not_found_ids:
+        async with db_writer() as cdb:
+            ph = ",".join("?" for _ in not_found_ids)
+            await cdb.execute(
+                f"UPDATE files SET stale = 1 WHERE id IN ({ph})", not_found_ids
+            )
+    return not_found_ids, error_count
+
+
+async def bg_repair(phases: list[str] | None = None):
     """Repair catalog with selectable phases, queue paused.
 
     Phase: "partials" — find catalog files with no file_hashes row, compute
@@ -143,8 +174,8 @@ async def _bg_repair(phases: list[str] | None = None):
     HASH_BATCH_SIZE = 200
 
     try:
-        _repair_progress["status"] = "running"
-        _repair_progress["phase"] = "pausing"
+        repair_progress["status"] = "running"
+        repair_progress["phase"] = "pausing"
         await broadcast({"type": "repair_started"})
 
         hashed = 0
@@ -160,7 +191,7 @@ async def _bg_repair(phases: list[str] | None = None):
             if "partials" not in phases:
                 log.info("Catalog repair: skipping phase (partials)")
             else:
-                _repair_progress["phase"] = "finding_partials"
+                repair_progress["phase"] = "finding_partials"
                 log.info("Catalog repair: finding files missing from hashes.db")
 
                 # Get all locations
@@ -172,10 +203,10 @@ async def _bg_repair(phases: list[str] | None = None):
                 finally:
                     await rdb.close()
 
-                _repair_progress["partials_scan_total"] = len(loc_rows)
+                repair_progress["partials_scan_total"] = len(loc_rows)
 
                 # Find missing files per location via ATTACH
-                hashes_path = str(_hashes_db_path())
+                hashes_path = str(hashes_db_path())
                 all_missing: list[dict] = []
                 cat_conn = await open_connection()
                 try:
@@ -210,8 +241,8 @@ async def _bg_repair(phases: list[str] | None = None):
                                     "inode": r["inode"],
                                 }
                             )
-                        _repair_progress["partials_scan_done"] = i + 1
-                        _repair_progress["partials_found"] = len(all_missing)
+                        repair_progress["partials_scan_done"] = i + 1
+                        repair_progress["partials_found"] = len(all_missing)
                         await asyncio.sleep(0)
                     await cat_conn.execute("DETACH h")
                 finally:
@@ -224,18 +255,18 @@ async def _bg_repair(phases: list[str] | None = None):
 
                 # Dispatch to agents for hash_partial
                 partials_total = len(all_missing)
-                _repair_progress["phase"] = "hashing_partials"
-                _repair_progress["partials_total"] = partials_total
+                repair_progress["phase"] = "hashing_partials"
+                repair_progress["partials_total"] = partials_total
 
                 loc_agent_map: dict[int, int] = {}
                 for loc in loc_rows:
                     if loc["agent_id"]:
                         loc_agent_map[loc["id"]] = loc["agent_id"]
 
-                path_to_file: dict[str, dict] = {}
+                path_to_id: dict[str, int] = {}
                 agent_batches: dict[int, list[dict]] = defaultdict(list)
                 for f in all_missing:
-                    path_to_file[f["full_path"]] = f
+                    path_to_id[f["full_path"]] = f["id"]
                     agent_id = loc_agent_map.get(f["location_id"])
                     if agent_id:
                         agent_batches[agent_id].append(f)
@@ -249,7 +280,7 @@ async def _bg_repair(phases: list[str] | None = None):
                 for agent_id, files in agent_batches.items():
                     if agent_id not in online_agents:
                         p_skipped += len(files)
-                        _repair_progress["partials_skipped"] = p_skipped
+                        repair_progress["partials_skipped"] = p_skipped
                         log.info(
                             "Catalog repair: agent %d offline, "
                             "skipping %d partials",
@@ -273,7 +304,7 @@ async def _bg_repair(phases: list[str] | None = None):
                             )
                         except (ConnectionError, OSError):
                             p_skipped += len(paths[j:])
-                            _repair_progress["partials_skipped"] = p_skipped
+                            repair_progress["partials_skipped"] = p_skipped
                             log.warning(
                                 "Catalog repair: agent %d failed, "
                                 "skipping %d partials",
@@ -314,46 +345,14 @@ async def _bg_repair(phases: list[str] | None = None):
                                     )
                                 p_hashed += len(inserts)
 
-                        batch_errors = result.get("errors", [])
-                        not_found_ids = []
-                        for err in batch_errors:
-                            if err.get("error") == "File not found":
-                                # Mark catalog entry stale
-                                fp = err.get("path")
-                                bf_match = path_to_file.get(fp)
-                                if bf_match:
-                                    not_found_ids.append(bf_match["id"])
-                                log.info(
-                                    "Catalog repair: marking stale "
-                                    "(not found): %s",
-                                    fp,
-                                )
-                            else:
-                                log.warning(
-                                    "Catalog repair: partial hash "
-                                    "error: %s",
-                                    err,
-                                )
-                                p_errors += 1
-                                _repair_progress["error_details"].append(
-                                    {
-                                        "phase": "partials",
-                                        "path": err.get("path", ""),
-                                        "error": err.get("error", ""),
-                                    }
-                                )
-                        if not_found_ids:
-                            async with db_writer() as cdb:
-                                ph = ",".join("?" for _ in not_found_ids)
-                                await cdb.execute(
-                                    f"UPDATE files SET stale = 1 "
-                                    f"WHERE id IN ({ph})",
-                                    not_found_ids,
-                                )
-                            p_stale += len(not_found_ids)
-                        _repair_progress["partials_hashed"] = p_hashed
-                        _repair_progress["partials_errors"] = p_errors
-                        _repair_progress["partials_stale"] = p_stale
+                        not_found_ids, batch_errors = await record_batch_errors(
+                            result, path_to_id, "partials", "partial hash"
+                        )
+                        p_errors += batch_errors
+                        p_stale += len(not_found_ids)
+                        repair_progress["partials_hashed"] = p_hashed
+                        repair_progress["partials_errors"] = p_errors
+                        repair_progress["partials_stale"] = p_stale
 
                 log.info(
                     "Catalog repair: partials complete — "
@@ -369,15 +368,15 @@ async def _bg_repair(phases: list[str] | None = None):
             if "hashes" not in phases:
                 log.info("Catalog repair: skipping phase 1 (hashes)")
             else:
-                _repair_progress["phase"] = "querying"
+                repair_progress["phase"] = "querying"
                 log.info("Catalog repair: phase 1 — querying candidates")
 
-                async def _on_query_progress(done, total_groups):
-                    _repair_progress["query_done"] = done
-                    _repair_progress["query_total"] = total_groups
+                async def on_query_progress(done, total_groups):
+                    repair_progress["query_done"] = done
+                    repair_progress["query_total"] = total_groups
 
                 all_candidates = await find_dup_candidates(
-                    on_progress=_on_query_progress
+                    on_progress=on_query_progress
                 )
 
                 # Build location → agent mapping
@@ -395,8 +394,8 @@ async def _bg_repair(phases: list[str] | None = None):
                         loc_agent_map[loc["id"]] = loc["agent_id"]
 
                 total = len(all_candidates)
-                _repair_progress["phase"] = "hashing"
-                _repair_progress["total"] = total
+                repair_progress["phase"] = "hashing"
+                repair_progress["total"] = total
                 log.info(
                     "Catalog repair: %d files need hash_fast",
                     total,
@@ -416,7 +415,7 @@ async def _bg_repair(phases: list[str] | None = None):
                 for agent_id, paths in agent_batches.items():
                     if agent_id not in online_agents or agent_id in failed_agents:
                         skipped += len(paths)
-                        _repair_progress["skipped"] = skipped
+                        repair_progress["skipped"] = skipped
                         log.info(
                             "Catalog repair: agent %d offline, skipping %d files",
                             agent_id,
@@ -429,7 +428,7 @@ async def _bg_repair(phases: list[str] | None = None):
 
                         if agent_id in failed_agents:
                             skipped += len(paths[i:])
-                            _repair_progress["skipped"] = skipped
+                            repair_progress["skipped"] = skipped
                             break
 
                         batch = paths[i : i + HASH_BATCH_SIZE]
@@ -438,7 +437,7 @@ async def _bg_repair(phases: list[str] | None = None):
                         except (ConnectionError, OSError):
                             failed_agents.add(agent_id)
                             skipped += len(paths[i:])
-                            _repair_progress["skipped"] = skipped
+                            repair_progress["skipped"] = skipped
                             log.warning(
                                 "Catalog repair: agent %d failed, skipping %d files",
                                 agent_id,
@@ -461,45 +460,16 @@ async def _bg_repair(phases: list[str] | None = None):
                                         )
                                         written += 1
                         hashed += written
-                        batch_errors = result.get("errors", [])
-                        not_found_ids = []
-                        for err in batch_errors:
-                            if err.get("error") == "File not found":
-                                fp = err.get("path")
-                                fid = path_to_id.get(fp)
-                                if fid:
-                                    not_found_ids.append(fid)
-                                log.info(
-                                    "Catalog repair: marking stale "
-                                    "(not found): %s",
-                                    fp,
-                                )
-                            else:
-                                log.warning(
-                                    "Catalog repair: hash error: %s",
-                                    err,
-                                )
-                                errors += 1
-                                _repair_progress["error_details"].append(
-                                    {
-                                        "phase": "hashes",
-                                        "path": err.get("path", ""),
-                                        "error": err.get("error", ""),
-                                    }
-                                )
+                        not_found_ids, batch_errors = await record_batch_errors(
+                            result, path_to_id, "hashes", "hash"
+                        )
+                        errors += batch_errors
                         if not_found_ids:
-                            async with db_writer() as cdb:
-                                ph = ",".join("?" for _ in not_found_ids)
-                                await cdb.execute(
-                                    f"UPDATE files SET stale = 1 "
-                                    f"WHERE id IN ({ph})",
-                                    not_found_ids,
-                                )
                             await mark_hashes_stale(not_found_ids)
                             stale += len(not_found_ids)
-                        _repair_progress["hashed"] = hashed
-                        _repair_progress["errors"] = errors
-                        _repair_progress["stale"] = stale
+                        repair_progress["hashed"] = hashed
+                        repair_progress["errors"] = errors
+                        repair_progress["stale"] = stale
 
                         done = hashed + errors + skipped
                         if done % 500 == 0 and done > 0:
@@ -526,18 +496,18 @@ async def _bg_repair(phases: list[str] | None = None):
             if "duplicates" not in phases:
                 log.info("Catalog repair: skipping phase 2 (duplicates)")
             else:
-                _repair_progress["phase"] = "dup_recount"
+                repair_progress["phase"] = "dup_recount"
                 log.info("Catalog repair: full dup recount")
 
-                async def _on_recount_progress(step, done, total):
-                    _repair_progress["dup_step"] = step
-                    _repair_progress["dup_step_done"] = done
-                    _repair_progress["dup_step_total"] = total
+                async def on_recount_progress(step, done, total):
+                    repair_progress["dup_step"] = step
+                    repair_progress["dup_step_done"] = done
+                    repair_progress["dup_step_total"] = total
 
                 dup_total = await optimized_dup_recount(
-                    on_progress=_on_recount_progress
+                    on_progress=on_recount_progress
                 )
-                _repair_progress["dup_groups"] = dup_total
+                repair_progress["dup_groups"] = dup_total
 
                 rdb = await open_connection()
                 try:
@@ -556,10 +526,10 @@ async def _bg_repair(phases: list[str] | None = None):
             if "sizes" not in phases:
                 log.info("Catalog repair: skipping phase 3 (sizes)")
             else:
-                _repair_progress["phase"] = "sizes"
-                async with read_db() as _rdb:
-                    all_locs = await _rdb.execute_fetchall("SELECT id FROM locations")
-                _repair_progress["locations_total"] = len(all_locs)
+                repair_progress["phase"] = "sizes"
+                async with read_db() as db:
+                    all_locs = await db.execute_fetchall("SELECT id FROM locations")
+                repair_progress["locations_total"] = len(all_locs)
                 log.info(
                     "Catalog repair: phase 3 — recalculating sizes for %d locations",
                     len(all_locs),
@@ -567,14 +537,14 @@ async def _bg_repair(phases: list[str] | None = None):
 
                 for i, loc in enumerate(all_locs):
                     await recalculate_location_sizes(loc["id"])
-                    _repair_progress["locations_done"] = i + 1
+                    repair_progress["locations_done"] = i + 1
 
                 invalidate_stats_cache()
                 log.info("Catalog repair: phase 3 complete")
 
         # ── Done ─────────────────────────────────────────────────────
-        _repair_progress["status"] = "complete"
-        _repair_progress["phase"] = "complete"
+        repair_progress["status"] = "complete"
+        repair_progress["phase"] = "complete"
 
         await broadcast(
             {
@@ -591,12 +561,12 @@ async def _bg_repair(phases: list[str] | None = None):
 
     except asyncio.CancelledError:
         log.info("Catalog repair: cancelled")
-        _repair_progress["status"] = "error"
-        _repair_progress["error"] = "Cancelled (server shutting down)"
+        repair_progress["status"] = "error"
+        repair_progress["error"] = "Cancelled (server shutting down)"
     except Exception as e:
         log.exception("Catalog repair failed")
-        _repair_progress["status"] = "error"
-        _repair_progress["error"] = str(e)
+        repair_progress["status"] = "error"
+        repair_progress["error"] = str(e)
         await broadcast({"type": "repair_failed"})
 
 

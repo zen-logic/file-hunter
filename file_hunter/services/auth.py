@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import os
 import secrets
-from datetime import datetime, timezone
+from file_hunter.helpers import utc_now
 
 
 def hash_password(password: str) -> str:
@@ -31,7 +31,7 @@ async def user_count(db) -> int:
 
 async def create_user(db, username: str, password: str, display_name: str = "") -> dict:
     pw_hash = hash_password(password)
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now("auto")
     cursor = await db.execute(
         "INSERT INTO users (username, display_name, password_hash, date_created) VALUES (?, ?, ?, ?)",
         (username, display_name, pw_hash, now),
@@ -64,7 +64,7 @@ async def authenticate(db, username: str, password: str):
 
 async def create_session(db, user_id: int) -> str:
     token = secrets.token_hex(32)
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now("auto")
     await db.execute(
         "INSERT INTO sessions (user_id, token, date_created) VALUES (?, ?, ?)",
         (user_id, token, now),

@@ -3,6 +3,7 @@ import { applyTheme, isBuiltIn } from '../themes.js';
 import ConfirmModal from './confirm.js';
 import PromptModal from './prompt.js';
 import Toast from './toast.js';
+import { wireModal } from './modal.js';
 
 let manifest = null;
 let currentValues = {};
@@ -27,19 +28,12 @@ const ThemeEditor = {
         this.bodyEl = document.getElementById('theme-editor-body');
         this.actionsEl = document.getElementById('theme-editor-actions');
 
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.cancel();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape') return;
-            if (this.overlayEl.classList.contains('hidden')) return;
-            // Don't close if a sub-modal (prompt/confirm) is open
-            const prompt = document.getElementById('prompt-modal');
-            const confirm = document.getElementById('confirm-modal');
-            if (!prompt.classList.contains('hidden')) return;
-            if (!confirm.classList.contains('hidden')) return;
-            this.cancel();
+        wireModal(this.overlayEl, {
+            close: () => this.cancel(),
+            // Escape belongs to a prompt or confirm open on top of it
+            canClose: () => ['prompt-modal', 'confirm-modal'].every(
+                id => document.getElementById(id).classList.contains('hidden')
+            ),
         });
     },
 

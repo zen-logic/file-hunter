@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timezone
+from file_hunter.helpers import utc_now
 
 
 async def get_applications(db) -> list:
@@ -20,7 +20,7 @@ async def get_applications(db) -> list:
 
 async def create_application(db, name: str) -> dict:
     token = secrets.token_hex(32)
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now("auto")
     cursor = await db.execute(
         "INSERT INTO applications (name, token, date_created) VALUES (?, ?, ?)",
         (name, token, now),

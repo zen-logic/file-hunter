@@ -2,8 +2,8 @@ import logging
 import re
 
 from starlette.requests import Request
-from file_hunter.db import read_db, db_writer, execute_write
-from file_hunter.core import json_ok, json_error
+from file_hunter.db import read_db, db_writer, execute_write, location_row
+from file_hunter.core import json_error, json_ok, parse_bool, parse_int, parse_node_id, parse_str, read_body
 from file_hunter.services.locations import (
     get_shallow_tree,
     get_children,
@@ -15,13 +15,14 @@ from file_hunter.services.locations import (
     move_folder,
     get_treemap_children,
 )
-from file_hunter.extensions import get_location_changed
-from file_hunter.helpers import post_op_stats
-from file_hunter.services.agent_ops import _resolve_agent, _post, _get
+from file_hunter.extensions import get_location_changed, get_agent_label_prefixes
+from file_hunter.helpers import parse_prefixed_id, post_op_stats
+from file_hunter.services.agent_ops import resolve_agent, agent_post, agent_get
 from file_hunter.services.hash_backfill import cancel_backfill_by_location
 from file_hunter.services.housekeeping import enqueue as hk_enqueue
 from file_hunter.services.queue_manager import cancel_by_location
 from file_hunter.ws.scan import broadcast
+from urllib.parse import quote
 
 
 async def list_locations(request: Request):
@@ -31,9 +32,9 @@ async def list_locations(request: Request):
 
 
 async def add_location(request: Request):
-    body = await request.json()
-    name = body.get("name", "").strip()
-    path = body.get("path", "").strip()
+    body = await read_body(request)
+    name = parse_str(body.get("name"), "name").strip()
+    path = parse_str(body.get("path"), "path").strip()
     if not name or not path:
         return json_error("Name and path are required.")
 
@@ -45,15 +46,14 @@ async def add_location(request: Request):
 
     # Validate path via the local agent
     if agent_id:
-        resolved = _resolve_agent(agent_id)
+        resolved = resolve_agent(agent_id)
         if resolved:
             host, port, token = resolved
             # Use /browse-system to validate — /files/exists rejects paths
             # not yet in a configured location, but we're adding a new one.
-            from urllib.parse import quote
 
             try:
-                browse_data = await _get(
+                browse_data = await agent_get(
                     host,
                     port,
                     token,
@@ -81,7 +81,7 @@ async def add_location(request: Request):
 
     # Push location to agent config so it knows about the new path
     try:
-        await _post(host, port, token, "/locations/add", {"name": name, "path": path})
+        await agent_post(host, port, token, "/locations/add", {"name": name, "path": path})
     except Exception as e:
         logging.getLogger("file_hunter").warning(
             "Failed to push new location to agent: %s", e
@@ -95,17 +95,11 @@ async def add_location(request: Request):
 
 async def remove_location(request: Request):
     raw_id = request.path_params["id"]
-    loc_id = int(raw_id.replace("loc-", ""))
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT name, root_path, agent_id FROM locations WHERE id = ?", (loc_id,)
-        )
-    if not row:
-        return json_error("Location not found.", 404)
-
-    location_name = row[0]["name"]
-    root_path = row[0]["root_path"]
-    agent_id = row[0]["agent_id"]
+    loc_id = parse_int(raw_id, "id", prefix="loc-")
+    loc = await location_row(loc_id, "name, root_path, agent_id")
+    location_name = loc["name"]
+    root_path = loc["root_path"]
+    agent_id = loc["agent_id"]
 
     # Cancel any running scan/backfill for this location first
     await cancel_by_location(loc_id)
@@ -120,11 +114,11 @@ async def remove_location(request: Request):
 
     # Tell the agent to remove this path from its config
     if agent_id:
-        resolved = _resolve_agent(agent_id)
+        resolved = resolve_agent(agent_id)
         if resolved:
             host, port, token = resolved
             try:
-                await _post(host, port, token, "/locations/delete", {"path": root_path}, agent_id=agent_id)
+                await agent_post(host, port, token, "/locations/delete", {"path": root_path}, agent_id=agent_id)
             except Exception as e:
                 logging.getLogger("file_hunter").warning(
                     "Failed to remove location from agent: %s", e
@@ -156,14 +150,14 @@ async def remove_location(request: Request):
 
 async def update_location(request: Request):
     raw_id = request.path_params["id"]
-    loc_id = int(str(raw_id).replace("loc-", ""))
-    body = await request.json()
+    loc_id = parse_int(raw_id, "id", prefix="loc-")
+    body = await read_body(request)
 
     # Schedule update (can be sent alone or with name)
     if "scheduleEnabled" in body:
-        enabled = bool(body.get("scheduleEnabled"))
+        enabled = parse_bool(body.get("scheduleEnabled"), "scheduleEnabled")
         days = body.get("scheduleDays", [])
-        time_val = body.get("scheduleTime", "03:00")
+        time_val = parse_str(body.get("scheduleTime"), "scheduleTime", "03:00")
         # Validate days: list of ints 0-6
         if not isinstance(days, list) or not all(
             isinstance(d, int) and 0 <= d <= 6 for d in days
@@ -185,7 +179,7 @@ async def update_location(request: Request):
             await post_op_stats()
             return json_ok({"updated": True})
 
-    new_name = body.get("name", "").strip()
+    new_name = parse_str(body.get("name"), "name").strip()
     if not new_name:
         return json_error("Name is required.")
     result = await execute_write(rename_location, loc_id, new_name)
@@ -214,10 +208,10 @@ async def update_location(request: Request):
 
 
 async def create_new_folder(request: Request):
-    body = await request.json()
-    parent_id = body.get("parent_id", "").strip()
-    name = body.get("name", "").strip()
-    if not parent_id or not name:
+    body = await read_body(request)
+    parent_id = parse_node_id(body.get("parent_id"), "parent_id")
+    name = parse_str(body.get("name"), "name").strip()
+    if not name:
         return json_error("parent_id and name are required.")
     try:
         result = await execute_write(create_folder, parent_id, name)
@@ -264,7 +258,7 @@ async def treemap_data(request: Request):
     """GET /api/treemap/{id:int} — treemap children with cumulative sizes."""
     location_id = int(request.path_params["id"])
     parent_raw = request.query_params.get("parent_id", "")
-    parent_id = int(parent_raw) if parent_raw else None
+    parent_id = parse_int(parent_raw, "parent_id", None)
     async with read_db() as db:
         result = await get_treemap_children(db, location_id, parent_id)
     if result is None:
@@ -275,10 +269,12 @@ async def treemap_data(request: Request):
 async def folder_move(request: Request):
     """POST /api/folders/{id:int}/move — move, copy, and/or rename a folder."""
     folder_id = int(request.path_params["id"])
-    body = await request.json()
-    destination_parent_id = body.get("destination_parent_id", "").strip() or None
-    new_name = body.get("name")
-    copy = body.get("copy", False)
+    body = await read_body(request)
+    destination_parent_id = parse_node_id(
+        body.get("destination_parent_id"), "destination_parent_id", None
+    )
+    new_name = parse_str(body.get("name"), "name", None)
+    copy = parse_bool(body.get("copy"), "copy")
 
     if new_name is not None:
         new_name = new_name.strip()
@@ -316,19 +312,10 @@ async def folder_move(request: Request):
 
 async def toggle_favourite(request: Request):
     """POST /api/favourite/toggle — toggle is_favourite on a location or folder."""
-    body = await request.json()
-    prefixed_id = body.get("id", "")
-    if not prefixed_id:
-        return json_error("id is required.", 400)
-
-    if prefixed_id.startswith("loc-"):
-        table = "locations"
-        row_id = int(prefixed_id.replace("loc-", ""))
-    elif prefixed_id.startswith("fld-"):
-        table = "folders"
-        row_id = int(prefixed_id.replace("fld-", ""))
-    else:
-        return json_error("id must be loc-N or fld-N.", 400)
+    body = await read_body(request)
+    prefixed_id = parse_node_id(body.get("id"), "id")
+    kind, row_id = parse_prefixed_id(prefixed_id)
+    table = "locations" if kind == "loc" else "folders"
 
     async with db_writer() as wdb:
         rows = await wdb.execute_fetchall(
@@ -349,7 +336,6 @@ async def toggle_favourite(request: Request):
 
 async def list_favourites(request: Request):
     """GET /api/favourites — list all favourited locations and folders."""
-    from file_hunter.extensions import get_agent_label_prefixes
 
     agent_prefixes = get_agent_label_prefixes()
 

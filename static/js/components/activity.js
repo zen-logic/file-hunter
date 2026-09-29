@@ -11,6 +11,7 @@
 
 import ActivityLog from './activitylog.js';
 import StatusBar from './statusbar.js';
+import { esc } from '../format.js';
 
 const Activity = {
     ops: new Map(), // name -> { label, detail, locationId }
@@ -27,7 +28,7 @@ const Activity = {
     started(name, { label, detail, locationId, log, background } = {}) {
         this.ops.set(name, { label, detail: detail || '', locationId, background: !!background });
         this.render();
-        if (log !== false) ActivityLog.add(log || label);
+        if (log !== false) ActivityLog.add(log || esc(label));
     },
 
     /**

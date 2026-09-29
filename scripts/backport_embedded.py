@@ -5,11 +5,11 @@ import os
 import sqlite3
 import chromadb
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-cat = sqlite3.connect(os.path.join(_ROOT, "data", "file_hunter.db"))
+cat = sqlite3.connect(os.path.join(ROOT, "data", "file_hunter.db"))
 cat.execute("PRAGMA journal_mode=WAL")
-client = chromadb.PersistentClient(path=os.path.join(_ROOT, "data", "similarity"))
+client = chromadb.PersistentClient(path=os.path.join(ROOT, "data", "similarity"))
 
 file_ids = set()
 

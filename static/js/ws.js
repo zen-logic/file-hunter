@@ -1,3 +1,5 @@
+import API from './api.js';
+
 const WS = {
     socket: null,
     listeners: {},
@@ -5,8 +7,7 @@ const WS = {
 
     connect() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const token = localStorage.getItem('fh-token') || '';
-        this.socket = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+        this.socket = new WebSocket(API.authUrl(`${protocol}//${location.host}/ws`));
         this.reconnectScheduled = false;
 
         this.socket.onopen = () => {

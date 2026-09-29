@@ -4,8 +4,8 @@ import os
 
 from starlette.requests import Request
 
-from file_hunter.core import json_ok, json_error
-from file_hunter.db import read_db
+from file_hunter.core import BadRequest, json_error, json_ok, parse_bool, parse_int, parse_str, read_body
+from file_hunter.db import folder_row, location_row, read_db
 from file_hunter.services.queue_manager import (
     enqueue,
     cancel,
@@ -14,6 +14,7 @@ from file_hunter.services.queue_manager import (
     get_queue_status_for_broadcast,
 )
 from file_hunter.services import settings as settings_svc
+from file_hunter.services.similarity import embedding_url, scan_label
 from file_hunter.services.hash_backfill import cancel_backfill_by_location
 from file_hunter.services.quick_scan import run_quick_scan
 from file_hunter.ws.agent import get_agent_capabilities
@@ -22,92 +23,80 @@ from file_hunter.ws.scan import broadcast
 logger = logging.getLogger("file_hunter")
 
 
-async def start_scan(request: Request):
-    body = await request.json()
-    raw_id = body.get("location_id", "")
-    loc_id = int(str(raw_id).replace("loc-", ""))
-
-    async with read_db() as db:
-        # Verify location exists
-        rows = await db.execute_fetchall(
-            "SELECT id, name, root_path, agent_id FROM locations WHERE id = ?",
-            (loc_id,),
-        )
-        if not rows:
-            return json_error("Location not found.", 404)
-
-        location_name = rows[0]["name"]
-        root_path = rows[0]["root_path"]
-        agent_id = rows[0]["agent_id"]
-
-        if not agent_id:
-            return json_error(
-                f"Location '{location_name}' has no agent assigned. "
-                "Configure your agent with this location path.",
-                400,
-            )
-
-        # Check if already running or queued for this location
-        status = await get_queue_status()
-        for item in status:
-            if item.get("location_id") == loc_id:
-                return json_error(
-                    f"'{location_name}' already has a pending operation.", 409
-                )
-
-        # Resolve scan path (full location or subfolder)
-        scan_path = root_path
-        folder_name = None
-        raw_folder_id = body.get("folder_id")
-        if raw_folder_id:
-            fld_id = int(str(raw_folder_id).replace("fld-", ""))
-            fld_rows = await db.execute_fetchall(
-                "SELECT id, name, rel_path, location_id FROM folders WHERE id = ?",
-                (fld_id,),
-            )
-            if not fld_rows:
-                return json_error("Folder not found.", 404)
-            folder = fld_rows[0]
-            if folder["location_id"] != loc_id:
-                return json_error("Folder does not belong to this location.", 400)
-            scan_path = os.path.join(root_path, folder["rel_path"])
-            folder_name = folder["name"]
-
-    label = f"{location_name} / {folder_name}" if folder_name else location_name
-
+async def scan_payload(body, loc_id, loc):
+    """The queued payload for scanning the location, or the folder named by
+    the body's folder_id."""
     payload = {
         "location_id": loc_id,
-        "location_name": label,
-        "path": scan_path,
-        "root_path": root_path,
+        "location_name": loc["name"],
+        "path": loc["root_path"],
+        "root_path": loc["root_path"],
     }
+    raw_folder_id = body.get("folder_id")
     if raw_folder_id:
-        payload["folder_id"] = int(str(raw_folder_id).replace("fld-", ""))
+        fld_id = parse_int(raw_folder_id, "folder_id", prefix="fld-")
+        folder = await folder_row(fld_id, "name, rel_path, location_id")
+        if folder["location_id"] != loc_id:
+            raise BadRequest("Folder does not belong to this location.")
+        payload["path"] = os.path.join(loc["root_path"], folder["rel_path"])
+        payload["folder_id"] = fld_id
+        if folder["name"]:
+            payload["location_name"] = f"{loc['name']} / {folder['name']}"
+    return payload
 
-    op_id = await enqueue(
-        "scan_dir",
-        agent_id,
-        payload,
-    )
+
+async def queue_scan(op_type, agent_id, payload, entry_name, what):
+    """Queue the scan, announce it to the UI, and answer "<what> queued"."""
+    op_id = await enqueue(op_type, agent_id, payload)
     await broadcast(
         {
             "type": "scan_queued",
             "entry": {
                 "queue_id": op_id,
-                "location_id": loc_id,
-                "name": label,
+                "location_id": payload["location_id"],
+                "name": entry_name,
             },
             "queue": (await get_queue_status_for_broadcast()),
         }
     )
+    label = payload["location_name"]
+    return json_ok({"message": f"{what} queued for '{label}'", "queue_id": op_id})
 
-    return json_ok({"message": f"Scan queued for '{label}'", "queue_id": op_id})
+
+async def start_scan(request: Request):
+    body = await read_body(request)
+    raw_id = body.get("location_id", "")
+    loc_id = parse_int(raw_id, "location_id", prefix="loc-")
+
+    loc = await location_row(loc_id, "name, root_path, agent_id")
+    location_name = loc["name"]
+    agent_id = loc["agent_id"]
+
+    if not agent_id:
+        return json_error(
+            f"Location '{location_name}' has no agent assigned. "
+            "Configure your agent with this location path.",
+            400,
+        )
+
+    # Check if already running or queued for this location
+    status = await get_queue_status()
+    for item in status:
+        if item.get("location_id") == loc_id:
+            return json_error(
+                f"'{location_name}' already has a pending operation.", 409
+            )
+
+    payload = await scan_payload(body, loc_id, loc)
+    return await queue_scan(
+        "scan_dir", agent_id, payload, payload["location_name"], "Scan"
+    )
 
 
 async def scan_capabilities(request: Request):
     """GET /api/scan/capabilities?location_id=N — check what scan types the agent supports."""
     raw_id = request.query_params.get("location_id", "")
-    loc_id = int(str(raw_id).replace("loc-", ""))
+    loc_id = parse_int(raw_id, "location_id", prefix="loc-")
 
     async with read_db() as db:
         rows = await db.execute_fetchall(
@@ -122,20 +111,13 @@ async def scan_capabilities(request: Request):
 
 async def start_quick_scan(request: Request):
     """POST /api/scan/quick — shallow scan of a single folder or location root."""
-    body = await request.json()
+    body = await read_body(request)
     raw_id = body.get("location_id", "")
-    loc_id = int(str(raw_id).replace("loc-", ""))
+    loc_id = parse_int(raw_id, "location_id", prefix="loc-")
 
-    async with read_db() as db:
-        rows = await db.execute_fetchall(
-            "SELECT id, name, agent_id FROM locations WHERE id = ?", (loc_id,)
-        )
-        if not rows:
-            return json_error("Location not found.", 404)
-
-        agent_id = rows[0]["agent_id"]
-        if not agent_id:
-            return json_error("Location has no agent assigned.", 400)
+    agent_id = (await location_row(loc_id, "agent_id"))["agent_id"]
+    if not agent_id:
+        return json_error("Location has no agent assigned.", 400)
 
     # Check agent supports quick_scan
     caps = get_agent_capabilities(agent_id)
@@ -148,28 +130,28 @@ async def start_quick_scan(request: Request):
     folder_id = None
     raw_folder_id = body.get("folder_id")
     if raw_folder_id:
-        folder_id = int(str(raw_folder_id).replace("fld-", ""))
+        folder_id = parse_int(raw_folder_id, "folder_id", prefix="fld-")
 
     asyncio.create_task(run_quick_scan(loc_id, folder_id))
     return json_ok({"message": "Quick scan started"})
 
 
 async def cancel_scan(request: Request):
-    body = await request.json()
+    body = await read_body(request)
 
     # Cancel by queue/operation ID
     queue_id = body.get("queue_id")
     if queue_id is not None:
-        cancelled = await cancel(int(queue_id))
+        cancelled = await cancel(parse_int(queue_id, "queue_id"))
         if cancelled:
             return json_ok({"message": "Operation cancelled."})
         return json_error("Queue item not found.", 400)
 
     # Cancel by location_id
     raw_id = body.get("location_id", "")
-    loc_id = int(str(raw_id).replace("loc-", ""))
+    loc_id = parse_int(raw_id, "location_id", prefix="loc-")
 
-    cancel_type = body.get("type", "scan")
+    cancel_type = parse_str(body.get("type"), "type", "scan")
 
     if cancel_type == "backfill":
         if cancel_backfill_by_location(loc_id):
@@ -198,81 +180,35 @@ async def cancel_scan(request: Request):
 
 async def start_similarity_scan(request: Request):
     """POST /api/scan/similarity — index images for similarity search."""
-    body = await request.json()
+    body = await read_body(request)
     raw_id = body.get("location_id", "")
-    loc_id = int(str(raw_id).replace("loc-", ""))
-    recursive = body.get("recursive", True)
+    loc_id = parse_int(raw_id, "location_id", prefix="loc-")
+    recursive = parse_bool(body.get("recursive"), "recursive", True)
 
     async with read_db() as db:
         # Check similarity search is enabled
         enabled = await settings_svc.get_setting(db, "similaritySearchEnabled")
         if enabled != "1":
             return json_error("Similarity search is not enabled.", 400)
-        embed_url = await settings_svc.get_setting(db, "similaritySearchUrl")
-        if not embed_url:
-            return json_error("Embedding service URL not configured.", 400)
+        embed_url = await embedding_url(db)
 
-        rows = await db.execute_fetchall(
-            "SELECT id, name, root_path, agent_id FROM locations WHERE id = ?",
-            (loc_id,),
-        )
-        if not rows:
-            return json_error("Location not found.", 404)
+    loc = await location_row(loc_id, "name, root_path, agent_id")
+    payload = await scan_payload(body, loc_id, loc)
 
-        location_name = rows[0]["name"]
-        root_path = rows[0]["root_path"]
-        agent_id = rows[0]["agent_id"]
-
-    # Resolve scan path
-    scan_path = root_path
-    folder_name = None
-    raw_folder_id = body.get("folder_id")
-    if raw_folder_id:
-        fld_id = int(str(raw_folder_id).replace("fld-", ""))
-        async with read_db() as db:
-            fld_rows = await db.execute_fetchall(
-                "SELECT id, name, rel_path, location_id FROM folders WHERE id = ?",
-                (fld_id,),
-            )
-        if not fld_rows:
-            return json_error("Folder not found.", 404)
-        folder = fld_rows[0]
-        if folder["location_id"] != loc_id:
-            return json_error("Folder does not belong to this location.", 400)
-        scan_path = os.path.join(root_path, folder["rel_path"])
-        folder_name = folder["name"]
-
-    label = f"{location_name} / {folder_name}" if folder_name else location_name
-
-    embed_types = body.get("embed_types")  # "image", "document", or None (all)
-
-    payload = {
-        "location_id": loc_id,
-        "location_name": label,
-        "path": scan_path,
-        "root_path": root_path,
-        "recursive": recursive,
-        "embed_url": embed_url,
-    }
+    # "image", "document", or None (all)
+    embed_types = parse_str(body.get("embed_types"), "embed_types", None)
+    payload["recursive"] = recursive
+    payload["embed_url"] = embed_url
     if embed_types:
         payload["embed_types"] = embed_types
-    if raw_folder_id:
-        payload["folder_id"] = int(str(raw_folder_id).replace("fld-", ""))
 
-    op_id = await enqueue("similarity_scan", agent_id, payload)
-    await broadcast(
-        {
-            "type": "scan_queued",
-            "entry": {
-                "queue_id": op_id,
-                "location_id": loc_id,
-                "name": f"{'Image similarity' if embed_types == 'image' else 'Document content' if embed_types == 'document' else 'Similarity'}: {label}",
-            },
-            "queue": (await get_queue_status_for_broadcast()),
-        }
+    return await queue_scan(
+        "similarity_scan",
+        loc["agent_id"],
+        payload,
+        scan_label(embed_types, payload["location_name"]),
+        "Similarity scan",
     )
-
-    return json_ok({"message": f"Similarity scan queued for '{label}'", "queue_id": op_id})
 
 
 async def get_scan_queue(request: Request):

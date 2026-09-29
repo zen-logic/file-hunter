@@ -1,5 +1,7 @@
 import API from '../api.js';
 import icons from '../icons.js';
+import { createFolderPicker } from './folderpicker.js';
+import { wireModal } from './modal.js';
 
 const Consolidate = {
     // DOM — info step
@@ -28,10 +30,7 @@ const Consolidate = {
     dups: [],
     mode: 'copy',
     checkedDupIds: new Set(),
-    selectedDest: null,
-    treeData: null,
-    favourites: [],
-    expandedNodes: new Set(),
+    picker: null,
     onConsolidate: null,
     onDone: null,
 
@@ -51,6 +50,13 @@ const Consolidate = {
         this.mergeSelectAll = document.getElementById('consolidate-merge-select-all');
         this.treePicker = document.getElementById('consolidate-tree-picker');
         this.destDisplay = document.getElementById('consolidate-dest-display');
+        this.picker = createFolderPicker(this.treePicker, {
+            isDisabled: (node) => node.online === false,
+            onPick: (id, label) => {
+                this.destDisplay.textContent = label;
+            },
+            renderTop: (picker) => this.renderKeepHere(picker),
+        });
 
         // Info step
         document.getElementById('consolidate-cancel').addEventListener('click', () => this.close());
@@ -75,17 +81,10 @@ const Consolidate = {
         document.getElementById('consolidate-submit').addEventListener('click', () => this.doSubmit());
 
         // Overlay + escape
-        this.overlay.addEventListener('click', (e) => {
-            if (e.target === this.overlay) this.close();
-        });
-        document.addEventListener('keydown', (e) => {
-            if (this.overlay.classList.contains('hidden')) return;
-            if (e.key === 'Escape') {
-                this.close();
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                this.doSubmit();
-            }
+        wireModal(this.overlay, {
+            close: () => this.close(),
+            submit: () => this.doSubmit(),
+            enterFrom: 'dialog',
         });
 
         // Mode radio
@@ -114,8 +113,7 @@ const Consolidate = {
         this.file = file || null;
         this.files = files || null;
         this.onDone = onDone || null;
-        this.selectedDest = null;
-        this.expandedNodes = new Set();
+        this.picker.selected = null;
         this.checkedDupIds = new Set();
         this.mode = 'copy';
         this.filenameMatchCheck.checked = false;
@@ -153,7 +151,6 @@ const Consolidate = {
             this.allDups = [];
         }
 
-        // Show info step
         this.showStep(this.stepInfo);
         this.overlay.classList.remove('hidden');
     },
@@ -265,182 +262,34 @@ const Consolidate = {
     // ── Destination step ──
 
     async showDestStep() {
-        const [res, favRes] = await Promise.all([
-            API.get('/api/locations'),
-            API.get('/api/favourites'),
-        ]);
-        this.treeData = res.ok ? res.data : [];
-        this.favourites = favRes.ok ? favRes.data : [];
-
-        this.selectedDest = null;
+        await this.picker.load();
         this.destDisplay.textContent = 'No folder selected';
-        this.renderTree();
         this.showStep(this.stepDest);
     },
 
-    renderTree() {
-        this.treePicker.innerHTML = '';
-        if (!this.treeData) return;
-
-        // "Consolidate in place" option — move mode only
-        if (this.mode === 'move') {
-            const keepDiv = document.createElement('div');
-            keepDiv.className = 'ct-node';
-            if (this.selectedDest === 'keep_here') keepDiv.classList.add('ct-selected');
-
-            const icon = document.createElement('span');
-            icon.className = 'ct-icon';
-            icon.innerHTML = icons.location;
-            keepDiv.appendChild(icon);
-
-            const label = document.createElement('span');
-            label.className = 'ct-label';
-            label.style.fontWeight = 'var(--font-weight-semibold)';
-            label.textContent = 'Consolidate in place';
-            keepDiv.appendChild(label);
-
-            keepDiv.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.selectedDest = 'keep_here';
-                this.destDisplay.textContent = 'Consolidate in place';
-                this.renderTree();
-            });
-
-            this.treePicker.appendChild(keepDiv);
-
-            const divider = document.createElement('div');
-            divider.className = 'ct-divider';
-            this.treePicker.appendChild(divider);
-        }
-
-        this.renderFavourites(this.treePicker);
-        this.treeData.forEach(loc => {
-            this.renderTreeNode(this.treePicker, loc, 0);
-        });
-    },
-
-    renderFavourites(container) {
-        if (!this.favourites || this.favourites.length === 0) return;
-
-        const header = document.createElement('div');
-        header.className = 'ct-section-header';
-        header.textContent = 'Favourites';
-        container.appendChild(header);
-
-        for (const fav of this.favourites) {
-            const div = document.createElement('div');
-            div.className = 'ct-node';
-            if (this.selectedDest === fav.id) div.classList.add('ct-selected');
-
-            const heartIcon = document.createElement('span');
-            heartIcon.className = 'ct-icon';
-            heartIcon.innerHTML = icons.heart;
-            div.appendChild(heartIcon);
-
-            const label = document.createElement('span');
-            label.className = 'ct-label';
-            label.textContent = fav.path;
-            div.appendChild(label);
-
-            div.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.selectedDest = fav.id;
-                this.destDisplay.textContent = fav.path;
-                this.renderTree();
-            });
-
-            container.appendChild(div);
-        }
-
-        const divider = document.createElement('div');
-        divider.className = 'ct-divider';
-        container.appendChild(divider);
-    },
-
-    renderTreeNode(container, node, depth) {
-        const div = document.createElement('div');
-        div.className = 'ct-node';
-        if (node.online === false) div.classList.add('ct-offline');
-        if (this.selectedDest === node.id) div.classList.add('ct-selected');
-
-        for (let i = 0; i < depth; i++) {
-            const indent = document.createElement('span');
-            indent.className = 'ct-indent';
-            div.appendChild(indent);
-        }
-
-        const hasChildren = node.hasChildren || (node.children && node.children.length > 0);
-        const toggle = document.createElement('span');
-        toggle.className = 'ct-icon';
-        if (hasChildren) {
-            toggle.textContent = this.expandedNodes.has(node.id) ? '\u25BE' : '\u25B8';
-        }
-        div.appendChild(toggle);
-
-        const icon = document.createElement('span');
-        icon.className = 'ct-icon';
-        icon.innerHTML = node.type === 'location' ? icons.location : icons.folder;
-        div.appendChild(icon);
-
-        const label = document.createElement('span');
-        label.className = 'ct-label';
-        label.textContent = node.label;
-        div.appendChild(label);
-
-        div.addEventListener('click', async (e) => {
+    /** "Consolidate in place", above the favourites — move mode only. */
+    renderKeepHere(picker) {
+        if (this.mode !== 'move') return;
+        const keepDiv = picker.row(0);
+        if (picker.selected === 'keep_here') keepDiv.classList.add('ct-selected');
+        picker.addIcon(keepDiv, icons.location);
+        const label = picker.addLabel(keepDiv, 'Consolidate in place');
+        label.style.fontWeight = 'var(--font-weight-semibold)';
+        keepDiv.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (node.online === false) return;
-
-            let expanded = false;
-            if (hasChildren) {
-                if (this.expandedNodes.has(node.id)) {
-                    this.expandedNodes.delete(node.id);
-                } else {
-                    expanded = true;
-                    this.expandedNodes.add(node.id);
-                    if (node.children === null) {
-                        const numId = node.id.replace('fld-', '');
-                        const res = await API.get(`/api/tree/children?ids=${numId}`);
-                        if (res.ok && res.data[node.id]) {
-                            node.children = res.data[node.id];
-                        } else {
-                            node.children = [];
-                        }
-                    }
-                }
-            }
-            this.selectedDest = node.id;
-            this.destDisplay.textContent = node.label;
-            this.renderTree();
-            if (expanded) {
-                const sel = this.treePicker.querySelector('.ct-selected');
-                if (sel) {
-                    const selDepth = sel.querySelectorAll('.ct-indent').length;
-                    let last = sel;
-                    let sib = sel.nextElementSibling;
-                    while (sib && sib.querySelectorAll('.ct-indent').length > selDepth) {
-                        last = sib;
-                        sib = sib.nextElementSibling;
-                    }
-                    if (last !== sel) last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-                }
-            }
+            picker.select('keep_here', 'Consolidate in place');
         });
-
-        container.appendChild(div);
-
-        if (node.children && node.children.length > 0 && this.expandedNodes.has(node.id)) {
-            node.children.forEach(child => this.renderTreeNode(container, child, depth + 1));
-        }
+        picker.container.appendChild(keepDiv);
+        picker.addDivider();
     },
 
     // ── Submit ──
 
     doSubmit() {
-        if (!this.selectedDest) return;
+        if (!this.picker.selected) return;
 
         const fnMatch = this.filenameMatchCheck.checked;
-        const isKeepHere = this.selectedDest === 'keep_here';
+        const isKeepHere = this.picker.selected === 'keep_here';
 
         const params = {
             consolidateMode: this.mode,
@@ -458,7 +307,7 @@ const Consolidate = {
             params.mode = 'keep_here';
         } else {
             params.mode = 'move_to';
-            params.destination_folder_id = this.selectedDest;
+            params.destination_folder_id = this.picker.selected;
         }
 
         if (fnMatch) params.filename_match_only = true;

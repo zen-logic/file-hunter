@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 
-from file_hunter.core import json_ok, json_error
+from file_hunter.core import BadRequest, json_error, json_ok, parse_node_id, parse_str
 from file_hunter.db import read_db
 from file_hunter.helpers import resolve_target
 from file_hunter.services import fs
@@ -16,9 +16,7 @@ from file_hunter.ws.scan import broadcast
 async def upload_files(request):
     """POST /api/upload — receive uploaded files and process them."""
     form = await request.form()
-    target_id = form.get("target_id")
-    if not target_id:
-        return json_error("target_id is required.", 400)
+    target_id = parse_node_id(form.get("target_id"), "target_id")
 
     # Resolve target to location_id, root_path, folder_id, dest_dir
     async with read_db() as db:
@@ -47,8 +45,15 @@ async def upload_files(request):
         return json_error("No files provided.", 400)
 
     # Per-file modified timestamps from the browser (ms since epoch)
-    raw_mtimes = form.get("mtimes")
-    mtimes = json.loads(raw_mtimes) if raw_mtimes else []
+    raw_mtimes = parse_str(form.get("mtimes"), "mtimes", None)
+    try:
+        mtimes = json.loads(raw_mtimes) if raw_mtimes else []
+    except ValueError:
+        raise BadRequest("mtimes must be JSON.") from None
+    if not isinstance(mtimes, list) or not all(
+        isinstance(m, (int, float)) and not isinstance(m, bool) for m in mtimes
+    ):
+        raise BadRequest("mtimes must be a list of numbers.")
 
     total_files = sum(1 for f in files if hasattr(f, "filename") and f.filename)
 
@@ -75,7 +80,7 @@ async def upload_files(request):
 
         file_size_mb = file_size / 1048576
 
-        async def _progress(sent, total):
+        async def progress(sent, total):
             pct = round((sent / total) * 100) if total else 100
             sent_mb = sent / 1048576
             await broadcast(
@@ -98,7 +103,7 @@ async def upload_files(request):
             upload_file.file,
             file_size,
             location_id,
-            on_progress=_progress,
+            on_progress=progress,
             mtime=mtime,
         )
 

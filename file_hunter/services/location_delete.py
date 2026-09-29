@@ -7,7 +7,7 @@ from file_hunter.hashes_db import read_hashes
 logger = logging.getLogger("file_hunter")
 
 
-async def _collect_affected_hashes(location_id: int) -> tuple[set[str], set[str]]:
+async def collect_affected_hashes(location_id: int) -> tuple[set[str], set[str]]:
     """Collect hash_fast and hash_strong values from files with dups.
 
     Only collects hashes where dup_count > 0 — unique files don't affect

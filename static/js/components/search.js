@@ -1,8 +1,8 @@
 import API from '../api.js';
 import PromptModal from './prompt.js';
 import Tree from './tree.js';
+import { esc } from '../format.js';
 
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 const FIELD_OPTIONS = [
     { value: 'name', label: 'Name' },
@@ -37,6 +37,29 @@ const TYPE_OPTIONS = [
     { value: 'font', label: 'Font' },
     { value: 'other', label: 'Other' },
 ];
+
+/** Two inputs of type with a dash between them, for a range condition;
+ *  each of low/high gives its data-role, and optionally placeholder and min. */
+function rangeInputs(container, type, low, high) {
+    const make = ({ role, placeholder, min }) => {
+        const input = document.createElement('input');
+        input.type = type;
+        input.className = 'search-input search-input-sm';
+        if (placeholder) input.placeholder = placeholder;
+        if (min !== undefined) input.min = min;
+        input.dataset.role = role;
+        return input;
+    };
+    const from = make(low);
+    container.appendChild(from);
+    const sep = document.createElement('span');
+    sep.className = 'search-separator';
+    sep.innerHTML = '&ndash;';
+    container.appendChild(sep);
+    const to = make(high);
+    container.appendChild(to);
+    return [from, to];
+}
 
 const Search = {
     panelEl: null,
@@ -107,7 +130,6 @@ const Search = {
         document.getElementById('search-folders').checked = false;
         document.getElementById('search-files-row').classList.add('hidden');
         document.getElementById('search-dupes').checked = false;
-        // Clear advanced
         this.clearAdvanced();
         // Uncheck scope but keep bar visible
         document.getElementById('search-scope-check').checked = false;
@@ -275,7 +297,6 @@ const Search = {
         inputsDiv.className = 'search-condition-inputs';
         row.appendChild(inputsDiv);
 
-        // Remove button
         const removeBtn = document.createElement('button');
         removeBtn.className = 'search-condition-remove';
         removeBtn.textContent = '\u00d7';
@@ -443,69 +464,24 @@ const Search = {
                 break;
             }
             case 'size': {
-                const min = document.createElement('input');
-                min.type = 'text';
-                min.className = 'search-input search-input-sm';
-                min.placeholder = 'e.g. 5MB';
-                min.dataset.role = 'min';
-                container.appendChild(min);
-
-                const sep = document.createElement('span');
-                sep.className = 'search-separator';
-                sep.innerHTML = '&ndash;';
-                container.appendChild(sep);
-
-                const max = document.createElement('input');
-                max.type = 'text';
-                max.className = 'search-input search-input-sm';
-                max.placeholder = 'e.g. 1GB';
-                max.dataset.role = 'max';
-                container.appendChild(max);
+                const [min] = rangeInputs(container, 'text',
+                    { role: 'min', placeholder: 'e.g. 5MB' }, { role: 'max', placeholder: 'e.g. 1GB' });
                 bind();
                 min.focus();
                 break;
             }
             case 'date': {
-                const from = document.createElement('input');
-                from.type = 'date';
-                from.className = 'search-input search-input-sm';
-                from.dataset.role = 'from';
-                container.appendChild(from);
-
-                const sep = document.createElement('span');
-                sep.className = 'search-separator';
-                sep.innerHTML = '&ndash;';
-                container.appendChild(sep);
-
-                const to = document.createElement('input');
-                to.type = 'date';
-                to.className = 'search-input search-input-sm';
-                to.dataset.role = 'to';
-                container.appendChild(to);
+                const [from] = rangeInputs(container, 'date', { role: 'from' }, { role: 'to' });
                 bind();
                 from.focus();
                 break;
             }
             case 'duplicates':
             case 'files': {
-                const from = document.createElement('input');
-                from.type = 'number';
-                from.className = 'search-input search-input-sm';
-                from.placeholder = 'Min';
-                from.min = field === 'files' ? '0' : '1';
-                from.dataset.role = 'from';
-                container.appendChild(from);
-                const sep = document.createElement('span');
-                sep.className = 'search-separator';
-                sep.innerHTML = '&ndash;';
-                container.appendChild(sep);
-                const to = document.createElement('input');
-                to.type = 'number';
-                to.className = 'search-input search-input-sm';
-                to.placeholder = 'Max';
-                to.min = field === 'files' ? '0' : '1';
-                to.dataset.role = 'to';
-                container.appendChild(to);
+                const minValue = field === 'files' ? '0' : '1';
+                const [from] = rangeInputs(container, 'number',
+                    { role: 'from', placeholder: 'Min', min: minValue },
+                    { role: 'to', placeholder: 'Max', min: minValue });
                 bind();
                 from.focus();
                 break;

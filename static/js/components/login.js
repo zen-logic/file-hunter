@@ -1,5 +1,6 @@
 import API from '../api.js';
 import { loadThemeNames, applyTheme } from '../themes.js';
+import { esc } from '../format.js';
 
 const Login = {
     onAuthenticated: null,
@@ -59,7 +60,7 @@ const Login = {
         const title = serverName ? `File Hunter — ${serverName}` : 'File Hunter';
         screen.innerHTML = `
             <div class="login-card">
-                <h1 class="login-title">${this.esc(title)}</h1>
+                <h1 class="login-title">${esc(title)}</h1>
                 <div class="login-field">
                     <label class="login-label" for="login-username">Username</label>
                     <input type="text" class="modal-input" id="login-username" autocomplete="username">
@@ -167,12 +168,6 @@ const Login = {
         }
         if (themeNames.includes(saved)) sel.value = saved;
         sel.addEventListener('change', () => applyTheme(sel.value));
-    },
-
-    esc(s) {
-        const d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
     },
 };
 

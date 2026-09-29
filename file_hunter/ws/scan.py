@@ -5,9 +5,9 @@ clients: set[WebSocket] = set()
 
 # Tracked activity states for late-joining / reconnecting browsers.
 # Each key holds the most recent broadcast message of that type, or None.
-_current_scan_state: dict | None = None
-_current_finalizing_state: dict | None = None
-_current_backfill_state: dict | None = None
+current_scan_state: dict | None = None
+current_finalizing_state: dict | None = None
+current_backfill_state: dict | None = None
 
 
 async def ws_endpoint(websocket: WebSocket):
@@ -16,9 +16,9 @@ async def ws_endpoint(websocket: WebSocket):
     try:
         # Send current activity state to newly connected client
         for state in (
-            _current_scan_state,
-            _current_finalizing_state,
-            _current_backfill_state,
+            current_scan_state,
+            current_finalizing_state,
+            current_backfill_state,
         ):
             if state is not None:
                 await websocket.send_text(json.dumps(state))
@@ -57,29 +57,29 @@ async def ws_endpoint(websocket: WebSocket):
 
 
 async def broadcast(message: dict):
-    global _current_scan_state, _current_finalizing_state, _current_backfill_state
+    global current_scan_state, current_finalizing_state, current_backfill_state
 
     # Track active states for late-joining clients
     msg_type = message.get("type", "")
 
     if msg_type in ("scan_started", "scan_progress"):
-        _current_scan_state = message
+        current_scan_state = message
     elif msg_type == "scan_finalizing":
-        _current_scan_state = None
-        _current_finalizing_state = message
+        current_scan_state = None
+        current_finalizing_state = message
     elif msg_type in (
         "scan_completed",
         "scan_cancelled",
         "scan_error",
         "scan_interrupted",
     ):
-        _current_scan_state = None
-        _current_finalizing_state = None
+        current_scan_state = None
+        current_finalizing_state = None
 
     if msg_type in ("backfill_started", "backfill_progress"):
-        _current_backfill_state = message
+        current_backfill_state = message
     elif msg_type == "backfill_completed":
-        _current_backfill_state = None
+        current_backfill_state = None
 
     data = json.dumps(message)
     disconnected = []

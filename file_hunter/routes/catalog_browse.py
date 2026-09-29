@@ -19,7 +19,7 @@ async def catalog_browse(request: Request):
     resolve = request.query_params.get("resolve") == "1"
 
     if not path:
-        return await _list_agents()
+        return await list_agents()
 
     parts = path.split("/", 2)
     agent_name = parts[0]
@@ -35,7 +35,7 @@ async def catalog_browse(request: Request):
         agent_name = agent[0]["name"]
 
         if len(parts) == 1:
-            return await _list_locations(db, agent_id, agent_name)
+            return await list_locations(db, agent_id, agent_name)
 
         loc_name = parts[1]
         loc = await db.execute_fetchall(
@@ -52,7 +52,7 @@ async def catalog_browse(request: Request):
         if not rel_path:
             if resolve:
                 return json_ok({"nodeId": f"loc-{loc_id}"})
-            return await _list_folder(db, loc_id, None, agent_name, loc_name)
+            return await list_folder(db, loc_id, None, agent_name, loc_name)
 
         # Resolve rel_path — folder or file?
         folder = await db.execute_fetchall(
@@ -63,7 +63,7 @@ async def catalog_browse(request: Request):
         if folder:
             if resolve:
                 return json_ok({"nodeId": f"fld-{folder[0]['id']}"})
-            return await _list_folder(db, loc_id, folder[0]["id"], agent_name, loc_name)
+            return await list_folder(db, loc_id, folder[0]["id"], agent_name, loc_name)
         if resolve:
             return json_error("Not found.", 404)
 
@@ -76,15 +76,8 @@ async def catalog_browse(request: Request):
         if file:
             f = file[0]
             return json_ok({
-                "kind": "file",
-                "id": f["id"],
-                "name": f["filename"],
-                "path": f["rel_path"],
-                "size": f["file_size"] or 0,
-                "type": f["file_type_high"],
-                "subtype": f["file_type_low"],
+                **file_entry(f),
                 "description": f["description"],
-                "modified": f["modified_date"],
                 "created": f["created_date"],
                 "cataloged": f["date_cataloged"],
             })
@@ -92,7 +85,21 @@ async def catalog_browse(request: Request):
         return json_error("Not found.", 404)
 
 
-async def _list_agents():
+def file_entry(f):
+    """A file as the catalogue browse API lists it."""
+    return {
+        "kind": "file",
+        "id": f["id"],
+        "name": f["filename"],
+        "path": f["rel_path"],
+        "size": f["file_size"] or 0,
+        "type": f["file_type_high"],
+        "subtype": f["file_type_low"],
+        "modified": f["modified_date"],
+    }
+
+
+async def list_agents():
     async with read_db() as db:
         rows = await db.execute_fetchall(
             "SELECT DISTINCT a.id, a.name FROM agents a "
@@ -105,7 +112,7 @@ async def _list_agents():
     })
 
 
-async def _list_locations(db, agent_id, agent_name):
+async def list_locations(db, agent_id, agent_name):
     rows = await db.execute_fetchall(
         "SELECT id, name FROM locations WHERE agent_id = ? ORDER BY name COLLATE NOCASE",
         (agent_id,),
@@ -117,7 +124,7 @@ async def _list_locations(db, agent_id, agent_name):
     })
 
 
-async def _list_folder(db, loc_id, folder_id, agent_name, loc_name):
+async def list_folder(db, loc_id, folder_id, agent_name, loc_name):
     if folder_id is None:
         folders = await db.execute_fetchall(
             "SELECT id, name, rel_path FROM folders "
@@ -155,16 +162,7 @@ async def _list_folder(db, loc_id, folder_id, agent_name, loc_name):
             "path": f["rel_path"],
         })
     for f in files:
-        children.append({
-            "kind": "file",
-            "id": f["id"],
-            "name": f["filename"],
-            "path": f["rel_path"],
-            "size": f["file_size"] or 0,
-            "type": f["file_type_high"],
-            "subtype": f["file_type_low"],
-            "modified": f["modified_date"],
-        })
+        children.append(file_entry(f))
 
     return json_ok({
         "kind": "location" if folder_id is None else "folder",

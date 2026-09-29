@@ -2,7 +2,7 @@
 
 from starlette.requests import Request
 from file_hunter.db import read_db, execute_write
-from file_hunter.core import json_ok, json_error
+from file_hunter.core import json_error, json_ok, parse_bool, parse_int_array, parse_node_id, parse_tag_input, read_body
 from file_hunter.services.batch import (
     batch_move,
     batch_collect_files,
@@ -16,10 +16,10 @@ from file_hunter.ws.scan import broadcast
 
 async def batch_delete_route(request: Request):
     """POST /api/batch/delete — delete multiple files and folders."""
-    body = await request.json()
-    file_ids = body.get("file_ids", [])
-    folder_ids = body.get("folder_ids", [])
-    all_duplicates = body.get("all_duplicates", False)
+    body = await read_body(request)
+    file_ids = parse_int_array(body.get("file_ids"), "file_ids")
+    folder_ids = parse_int_array(body.get("folder_ids"), "folder_ids")
+    all_duplicates = parse_bool(body.get("all_duplicates"), "all_duplicates")
 
     if not file_ids and not folder_ids:
         return json_error("No items to delete.")
@@ -34,16 +34,16 @@ async def batch_delete_route(request: Request):
 
 async def batch_move_route(request: Request):
     """POST /api/batch/move — move or copy multiple files and folders."""
-    body = await request.json()
-    file_ids = body.get("file_ids", [])
-    folder_ids = body.get("folder_ids", [])
-    destination_folder_id = body.get("destination_folder_id")
-    copy = body.get("copy", False)
+    body = await read_body(request)
+    file_ids = parse_int_array(body.get("file_ids"), "file_ids")
+    folder_ids = parse_int_array(body.get("folder_ids"), "folder_ids")
+    destination_folder_id = parse_node_id(
+        body.get("destination_folder_id"), "destination_folder_id"
+    )
+    copy = parse_bool(body.get("copy"), "copy")
 
     if not file_ids and not folder_ids:
         return json_error("No items to move.")
-    if not destination_folder_id:
-        return json_error("destination_folder_id is required.")
 
     result = await execute_write(
         batch_move, file_ids, folder_ids, destination_folder_id, copy=copy
@@ -64,10 +64,10 @@ async def batch_move_route(request: Request):
 
 async def batch_tag_route(request: Request):
     """POST /api/batch/tag — add/remove tags on multiple files."""
-    body = await request.json()
-    file_ids = body.get("file_ids", [])
-    add_tags = parse_tags(body.get("add_tags"))
-    remove_tags = parse_tags(body.get("remove_tags"))
+    body = await read_body(request)
+    file_ids = parse_int_array(body.get("file_ids"), "file_ids")
+    add_tags = parse_tags(parse_tag_input(body.get("add_tags"), "add_tags"))
+    remove_tags = parse_tags(parse_tag_input(body.get("remove_tags"), "remove_tags"))
 
     if not file_ids:
         return json_error("No files specified.")
@@ -84,9 +84,9 @@ async def batch_tag_route(request: Request):
 
 async def batch_download_route(request: Request):
     """POST /api/batch/download — start async ZIP build for selected items."""
-    body = await request.json()
-    file_ids = body.get("file_ids", [])
-    folder_ids = body.get("folder_ids", [])
+    body = await read_body(request)
+    file_ids = parse_int_array(body.get("file_ids"), "file_ids")
+    folder_ids = parse_int_array(body.get("folder_ids"), "folder_ids")
 
     if not file_ids and not folder_ids:
         return json_error("No items to download.")

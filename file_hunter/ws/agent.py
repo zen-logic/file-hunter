@@ -7,58 +7,65 @@ Each agent maintains one persistent WebSocket connection.
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 from urllib.parse import parse_qs
 
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from file_hunter.db import db_writer, read_db, execute_write
 from file_hunter.services.auth import verify_password
+from file_hunter.services.conversions import conversion_for
 from file_hunter.services.stats import invalidate_stats_cache
 from file_hunter.ws.scan import broadcast
+from file_hunter.helpers import utc_now
+from file_hunter.services.agent_ops import resolve_agent, agent_post, delete_agent_location, open_agent_client, close_agent_client
+from file_hunter.services.online_check import agent_location_path_status, update_location_path_status, refresh_agent_location_ids_from_memory, load_agent_location_ids, clear_location_path_status
+from file_hunter.services.deferred_ops import drain_pending_ops
+from file_hunter.services.dup_counts import drain_pending_hashes
+from file_hunter.services.hash_backfill import run_backfill, pop_pending_backfill, cancel_backfill, get_active_backfill_info, queue_pending_backfill
+from file_hunter.services.locations import get_disk_stats
 
 logger = logging.getLogger("file_hunter")
 
 # In-memory state for connected agents
-_agent_connections: dict[int, WebSocket] = {}  # agent_id -> WebSocket
-_agent_tokens: dict[int, str] = {}  # agent_id -> raw token (for HTTP calls)
-_agent_info: dict[int, dict] = {}  # agent_id -> {hostname, httpPort, httpHost, os}
+agent_connections: dict[int, WebSocket] = {}  # agent_id -> WebSocket
+agent_tokens: dict[int, str] = {}  # agent_id -> raw token (for HTTP calls)
+agent_info: dict[int, dict] = {}  # agent_id -> {hostname, httpPort, httpHost, os}
 
 # agent_id -> set of location_ids (for online check lookups)
-_agent_location_ids: dict[int, set[int]] = {}
+agent_location_ids: dict[int, set[int]] = {}
 
 # agent_id -> set of capability strings (e.g. "tsv_tree")
-_agent_capabilities: dict[int, set[str]] = {}
+agent_capabilities: dict[int, set[str]] = {}
 
 
 def get_agent_capabilities(agent_id: int) -> set[str]:
-    return _agent_capabilities.get(agent_id, set())
+    return agent_capabilities.get(agent_id, set())
 
 
 def get_agent_connection(agent_id: int) -> WebSocket | None:
-    return _agent_connections.get(agent_id)
+    return agent_connections.get(agent_id)
 
 
 def get_agent_token(agent_id: int) -> str | None:
-    return _agent_tokens.get(agent_id)
+    return agent_tokens.get(agent_id)
 
 
 def get_agent_info(agent_id: int) -> dict | None:
-    return _agent_info.get(agent_id)
+    return agent_info.get(agent_id)
 
 
 def get_online_agent_ids() -> list[int]:
-    return list(_agent_connections.keys())
+    return list(agent_connections.keys())
 
 
 def get_agent_location_ids() -> dict[int, set[int]]:
     """Return the agent_id -> location_ids mapping for all connected agents."""
-    return dict(_agent_location_ids)
+    return dict(agent_location_ids)
 
 
 async def send_to_agent(agent_id: int, msg: dict) -> bool:
     """Send a message to a connected agent. Returns False if not connected."""
-    ws = _agent_connections.get(agent_id)
+    ws = agent_connections.get(agent_id)
     if not ws:
         return False
     try:
@@ -72,13 +79,12 @@ async def send_to_agent(agent_id: int, msg: dict) -> bool:
         return False
 
 
-async def _adopt_orphaned_locations(agent_id: int):
+async def adopt_orphaned_locations(agent_id: int):
     """Find locations with agent_id IS NULL, assign them to this agent, and push to agent config.
 
     This handles existing local locations that predate the agent-only scanning model.
     Only the file data (files, folders) is preserved — no rescanning needed.
     """
-    from file_hunter.services.agent_ops import _resolve_agent
 
     async with read_db() as db:
         orphans = await db.execute_fetchall(
@@ -90,7 +96,7 @@ async def _adopt_orphaned_locations(agent_id: int):
     logger.info("Agent #%d: adopting %d orphaned locations", agent_id, len(orphans))
 
     # Update DB: set agent_id on all orphaned locations
-    async def _assign(conn, aid, ids):
+    async def assign(conn, aid, ids):
         placeholders = ",".join("?" * len(ids))
         await conn.execute(
             f"UPDATE locations SET agent_id = ? WHERE id IN ({placeholders})",
@@ -99,10 +105,10 @@ async def _adopt_orphaned_locations(agent_id: int):
         await conn.commit()
 
     orphan_ids = [o["id"] for o in orphans]
-    await execute_write(_assign, agent_id, orphan_ids)
+    await execute_write(assign, agent_id, orphan_ids)
 
     # Push each path to the agent's config via HTTP /locations/add
-    resolved = _resolve_agent(agent_id)
+    resolved = resolve_agent(agent_id)
     if not resolved:
         logger.warning(
             "Agent #%d not reachable via HTTP — orphaned locations assigned in DB "
@@ -114,9 +120,8 @@ async def _adopt_orphaned_locations(agent_id: int):
     host, port, token = resolved
     for o in orphans:
         try:
-            from file_hunter.services.agent_ops import _post
 
-            await _post(
+            await agent_post(
                 host,
                 port,
                 token,
@@ -138,22 +143,22 @@ async def _adopt_orphaned_locations(agent_id: int):
             )
 
     # Add orphan location IDs to the in-memory set
-    if agent_id in _agent_location_ids:
-        _agent_location_ids[agent_id].update(orphan_ids)
+    if agent_id in agent_location_ids:
+        agent_location_ids[agent_id].update(orphan_ids)
     else:
-        _agent_location_ids[agent_id] = set(orphan_ids)
+        agent_location_ids[agent_id] = set(orphan_ids)
 
     invalidate_stats_cache()
 
 
-async def _process_pending_deletes(
+async def process_pending_deletes(
     agent_id: int, agent_locations: list[dict]
 ) -> list[dict]:
     """Remove stale locations from agent config on reconnect.
 
     Checks pending_agent_deletes for this agent, tells the agent to drop
     each path, and filters them from the reported locations so
-    _sync_agent_locations won't re-create catalog records.
+    sync_agent_locations won't re-create catalog records.
     """
     async with read_db() as db:
         rows = await db.execute_fetchall(
@@ -163,7 +168,6 @@ async def _process_pending_deletes(
     if not rows:
         return agent_locations
 
-    from file_hunter.services.agent_ops import delete_agent_location
 
     pending_paths: set[str] = {r["root_path"] for r in rows}
     cleaned: set[str] = set()
@@ -197,13 +201,13 @@ async def _process_pending_deletes(
     return agent_locations
 
 
-async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
+async def sync_agent_locations(agent_id: int, agent_locations: list[dict]):
     """Create or update location records for an agent's configured locations."""
     location_ids = set()
 
-    async def _do_sync(conn, aid, locs):
+    async def do_sync(conn, aid, locs):
         nonlocal location_ids
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        now = utc_now()
 
         for loc in locs:
             name = loc.get("name", "")
@@ -236,17 +240,13 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
 
         await conn.commit()
 
-    await execute_write(_do_sync, agent_id, agent_locations)
-    _agent_location_ids[agent_id] = location_ids
+    await execute_write(do_sync, agent_id, agent_locations)
+    agent_location_ids[agent_id] = location_ids
     invalidate_stats_cache()
 
     # Build per-location path status from agent-reported online field
-    from file_hunter.services.online_check import (
-        _agent_location_path_status,
-        update_location_path_status,
-    )
 
-    prev_status = _agent_location_path_status.get(agent_id, {})
+    prev_status = agent_location_path_status.get(agent_id, {})
     path_status: dict[int, bool] = {}
     async with read_db() as db:
         for loc_id in location_ids:
@@ -271,7 +271,6 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
 
     # Drain any pending consolidation jobs and deferred file ops for online locations
     from file_hunter.services.consolidate import drain_pending_jobs
-    from file_hunter.services.deferred_ops import drain_pending_ops
 
     for loc_id, online in path_status.items():
         if not online:
@@ -316,7 +315,6 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
                 (loc_id, agent_id),
             )
         if ph_row and ph_row[0]["cnt"] > 0:
-            from file_hunter.services.dup_counts import drain_pending_hashes
 
             asyncio.create_task(drain_pending_hashes(agent_id, loc_id, loc_name))
 
@@ -328,271 +326,10 @@ async def _sync_agent_locations(agent_id: int, agent_locations: list[dict]):
                     (loc_id,),
                 )
             if bf_row and bf_row[0]["backfill_needed"]:
-                from file_hunter.services.hash_backfill import run_backfill
 
                 asyncio.create_task(run_backfill(agent_id, loc_id, loc_name))
 
     return location_ids
-
-
-async def _lookup_transcode_info(path: str) -> tuple[int | None, int | None]:
-    """Look up the file_id and op_id for a running transcode by source path."""
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT id, params FROM operation_queue "
-            "WHERE type = 'transcode' AND status = 'running' "
-            "AND json_extract(params, '$.path') = ?",
-            (path,),
-        )
-    if row:
-        params = json.loads(row[0]["params"])
-        return params.get("file_id"), row[0]["id"]
-    return None, None
-
-
-async def _handle_transcode_complete(agent_id: int, msg: dict):
-    """Create a catalog entry for a newly transcoded file, then broadcast."""
-    from file_hunter.core import classify_file
-    from file_hunter.helpers import post_op_stats
-    from file_hunter.stats_db import update_stats_for_files
-    from file_hunter_core.paths import norm_inode, safe_timestamp
-
-    output_path = msg.get("output", "")
-    filename = msg.get("filename", "")
-    size = msg.get("size", 0)
-    mtime = msg.get("mtime")
-    ctime = msg.get("ctime")
-    inode = norm_inode(msg.get("inode") or 0)
-
-    # Find the source file's location and folder from the output path
-    async with read_db() as db:
-        # Match by the directory — the source file is in the same folder
-        source_path = msg.get("path", "")
-        source_row = await db.execute_fetchall(
-            "SELECT id, location_id, folder_id, hidden, dup_exclude "
-            "FROM files WHERE full_path = ?",
-            (source_path,),
-        )
-    if not source_row:
-        logger.warning("Transcode complete but source file not in catalog: %s", source_path)
-        await broadcast({**msg, "agentId": agent_id})
-        return
-
-    src = source_row[0]
-    location_id = src["location_id"]
-    folder_id = src["folder_id"]
-
-    # Build rel_path from location root
-    async with read_db() as db:
-        loc_row = await db.execute_fetchall(
-            "SELECT root_path FROM locations WHERE id = ?", (location_id,)
-        )
-    if not loc_row:
-        await broadcast({**msg, "agentId": agent_id})
-        return
-
-    root_path = loc_row[0]["root_path"]
-    if output_path.startswith(root_path):
-        rel_path = output_path[len(root_path):].lstrip("/").lstrip("\\")
-    else:
-        rel_path = filename
-
-    file_type_high, file_type_low = classify_file(filename)
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    mtime_iso = safe_timestamp(mtime, rel_path) if mtime else now_iso
-    ctime_iso = safe_timestamp(ctime, rel_path) if ctime else now_iso
-
-    async def _insert(conn):
-        cursor = await conn.execute(
-            """INSERT INTO files
-               (filename, full_path, rel_path, location_id, folder_id,
-                file_type_high, file_type_low, file_size,
-                description,
-                created_date, modified_date, date_cataloged, date_last_seen,
-                stale, hidden, dup_exclude, inode)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?)""",
-            (
-                filename, output_path, rel_path, location_id, folder_id,
-                file_type_high, file_type_low, size,
-                ctime_iso, mtime_iso, now_iso, now_iso,
-                src["hidden"], src["dup_exclude"], inode,
-            ),
-        )
-        await conn.commit()
-        return cursor.lastrowid
-
-    import sqlite3 as _sqlite3
-
-    try:
-        file_id = await execute_write(_insert)
-    except _sqlite3.IntegrityError:
-        # Already cataloged (previous attempt committed the insert but
-        # crashed before resolve_pending ran, so the op was re-queued)
-        async with read_db() as db:
-            existing = await db.execute_fetchall(
-                "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
-                (location_id, rel_path),
-            )
-        if existing:
-            file_id = existing[0]["id"]
-            logger.info("Transcode output already cataloged: %s (file #%d)", filename, file_id)
-        else:
-            raise
-
-        # Stats were likely already updated by the previous attempt —
-        # skip to avoid double-counting
-    else:
-        # First successful insert — update stats
-        await update_stats_for_files(
-            location_id,
-            added=[(folder_id, size, file_type_high, src["hidden"])],
-        )
-
-    invalidate_stats_cache()
-    await post_op_stats(location_ids={location_id}, source="transcode")
-
-    from file_hunter.services.transcode import resolve_pending
-
-    await broadcast({
-        "type": "transcode_complete",
-        "agentId": agent_id,
-        "fileId": file_id,
-        "filename": filename,
-        "path": output_path,
-        "size": size,
-        "folderId": folder_id,
-        "locationId": location_id,
-    })
-    logger.info("Transcode cataloged: %s (file #%d)", filename, file_id)
-
-    # Unblock the queue handler so it can complete and free the agent slot
-    resolve_pending(msg.get("path", ""), {"type": "transcode_complete"})
-
-
-async def _lookup_rawconvert_info(path: str) -> tuple[int | None, int | None]:
-    """Look up the file_id and op_id for a running raw conversion by source path."""
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT id, params FROM operation_queue "
-            "WHERE type = 'raw_convert' AND status = 'running' "
-            "AND json_extract(params, '$.path') = ?",
-            (path,),
-        )
-    if row:
-        params = json.loads(row[0]["params"])
-        return params.get("file_id"), row[0]["id"]
-    return None, None
-
-
-async def _handle_rawconvert_complete(agent_id: int, msg: dict):
-    """Create a catalog entry for a newly converted raw file, then broadcast."""
-    from file_hunter.core import classify_file
-    from file_hunter.helpers import post_op_stats
-    from file_hunter.stats_db import update_stats_for_files
-    from file_hunter_core.paths import norm_inode, safe_timestamp
-
-    output_path = msg.get("output", "")
-    filename = msg.get("filename", "")
-    size = msg.get("size", 0)
-    mtime = msg.get("mtime")
-    ctime = msg.get("ctime")
-    inode = norm_inode(msg.get("inode") or 0)
-
-    # Find the source file's location and folder from the output path
-    async with read_db() as db:
-        source_path = msg.get("path", "")
-        source_row = await db.execute_fetchall(
-            "SELECT id, location_id, folder_id, hidden, dup_exclude "
-            "FROM files WHERE full_path = ?",
-            (source_path,),
-        )
-    if not source_row:
-        logger.warning("Raw convert complete but source file not in catalog: %s", source_path)
-        await broadcast({**msg, "agentId": agent_id})
-        return
-
-    src = source_row[0]
-    location_id = src["location_id"]
-    folder_id = src["folder_id"]
-
-    # Build rel_path from location root
-    async with read_db() as db:
-        loc_row = await db.execute_fetchall(
-            "SELECT root_path FROM locations WHERE id = ?", (location_id,)
-        )
-    if not loc_row:
-        await broadcast({**msg, "agentId": agent_id})
-        return
-
-    root_path = loc_row[0]["root_path"]
-    if output_path.startswith(root_path):
-        rel_path = output_path[len(root_path):].lstrip("/").lstrip("\\")
-    else:
-        rel_path = filename
-
-    file_type_high, file_type_low = classify_file(filename)
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    mtime_iso = safe_timestamp(mtime, rel_path) if mtime else now_iso
-    ctime_iso = safe_timestamp(ctime, rel_path) if ctime else now_iso
-
-    async def _insert(conn):
-        cursor = await conn.execute(
-            """INSERT INTO files
-               (filename, full_path, rel_path, location_id, folder_id,
-                file_type_high, file_type_low, file_size,
-                description,
-                created_date, modified_date, date_cataloged, date_last_seen,
-                stale, hidden, dup_exclude, inode)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?)""",
-            (
-                filename, output_path, rel_path, location_id, folder_id,
-                file_type_high, file_type_low, size,
-                ctime_iso, mtime_iso, now_iso, now_iso,
-                src["hidden"], src["dup_exclude"], inode,
-            ),
-        )
-        await conn.commit()
-        return cursor.lastrowid
-
-    import sqlite3 as _sqlite3
-
-    try:
-        file_id = await execute_write(_insert)
-    except _sqlite3.IntegrityError:
-        async with read_db() as db:
-            existing = await db.execute_fetchall(
-                "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
-                (location_id, rel_path),
-            )
-        if existing:
-            file_id = existing[0]["id"]
-            logger.info("Raw convert output already cataloged: %s (file #%d)", filename, file_id)
-        else:
-            raise
-    else:
-        await update_stats_for_files(
-            location_id,
-            added=[(folder_id, size, file_type_high, src["hidden"])],
-        )
-
-    invalidate_stats_cache()
-    await post_op_stats(location_ids={location_id}, source="raw_convert")
-
-    from file_hunter.services.rawconvert import resolve_pending
-
-    await broadcast({
-        "type": "rawconvert_complete",
-        "agentId": agent_id,
-        "fileId": file_id,
-        "filename": filename,
-        "path": output_path,
-        "size": size,
-        "folderId": folder_id,
-        "locationId": location_id,
-    })
-    logger.info("Raw convert cataloged: %s (file #%d)", filename, file_id)
-
-    resolve_pending(msg.get("path", ""), {"type": "rawconvert_complete"})
 
 
 async def agent_ws_endpoint(websocket: WebSocket):
@@ -627,7 +364,7 @@ async def agent_ws_endpoint(websocket: WebSocket):
         return
 
     # Validate token against agents table
-    auth_result = await _authenticate_agent(token)
+    auth_result = await authenticate_agent(token)
     if not auth_result:
         await websocket.send_text(
             json.dumps({"type": "error", "error": "Invalid agent token."})
@@ -643,11 +380,11 @@ async def agent_ws_endpoint(websocket: WebSocket):
     http_host = msg.get("httpHost", "0.0.0.0")
     client_ip = websocket.client.host if websocket.client else None
 
-    _agent_connections[agent_id] = websocket
-    _agent_tokens[agent_id] = token
+    agent_connections[agent_id] = websocket
+    agent_tokens[agent_id] = token
     capabilities = set(msg.get("capabilities", []))
-    _agent_capabilities[agent_id] = capabilities
-    _agent_info[agent_id] = {
+    agent_capabilities[agent_id] = capabilities
+    agent_info[agent_id] = {
         "hostname": hostname,
         "httpPort": http_port,
         "httpHost": http_host,
@@ -655,14 +392,13 @@ async def agent_ws_endpoint(websocket: WebSocket):
         "os": agent_os,
     }
 
-    from file_hunter.services.agent_ops import open_agent_client
 
     await open_agent_client(agent_id)
 
     # Update agent status in DB
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now("auto")
 
-    async def _set_online(conn, aid, h, a_os, hp, hh, ts):
+    async def set_online(conn, aid, h, a_os, hp, hh, ts):
         await conn.execute(
             "UPDATE agents SET status = 'online', hostname = ?, os = ?, "
             "http_port = ?, http_host = ?, date_last_seen = ? WHERE id = ?",
@@ -671,27 +407,23 @@ async def agent_ws_endpoint(websocket: WebSocket):
         await conn.commit()
 
     await execute_write(
-        _set_online, agent_id, hostname, agent_os, http_port, http_host, now
+        set_online, agent_id, hostname, agent_os, http_port, http_host, now
     )
 
     # Process any pending config cleanups from locations deleted while offline
     agent_locations = msg.get("locations", [])
-    agent_locations = await _process_pending_deletes(agent_id, agent_locations)
+    agent_locations = await process_pending_deletes(agent_id, agent_locations)
 
     # Auto-create/update locations from agent's configured location roots
     if agent_locations:
-        await _sync_agent_locations(agent_id, agent_locations)
-        from file_hunter.services.online_check import (
-            refresh_agent_location_ids_from_memory,
-        )
+        await sync_agent_locations(agent_id, agent_locations)
 
         refresh_agent_location_ids_from_memory(agent_name, agent_id)
 
     # Adopt any existing local locations that have no agent assigned
-    await _adopt_orphaned_locations(agent_id)
+    await adopt_orphaned_locations(agent_id)
 
     # Refresh again after adoption (new location IDs may have been added)
-    from file_hunter.services.online_check import load_agent_location_ids
 
     await load_agent_location_ids()
 
@@ -700,15 +432,14 @@ async def agent_ws_endpoint(websocket: WebSocket):
 
     # Broadcast status to UI browsers (include disk stats so bars render
     # even if the page loaded before agents connected)
-    raw_loc_ids = list(_agent_location_ids.get(agent_id, set()))
+    raw_loc_ids = list(agent_location_ids.get(agent_id, set()))
     loc_ids = [f"loc-{lid}" for lid in raw_loc_ids]
 
     disk_stats_map = {}
     if raw_loc_ids:
-        from file_hunter.services.locations import get_disk_stats
 
-        async with read_db() as _db:
-            loc_rows = await _db.execute_fetchall(
+        async with read_db() as db:
+            loc_rows = await db.execute_fetchall(
                 f"SELECT id, root_path FROM locations WHERE id IN ({','.join('?' for _ in raw_loc_ids)})",
                 raw_loc_ids,
             )
@@ -756,10 +487,6 @@ async def agent_ws_endpoint(websocket: WebSocket):
     )
 
     # Resume interrupted backfill if one was pending for this agent
-    from file_hunter.services.hash_backfill import (
-        pop_pending_backfill,
-        run_backfill,
-    )
 
     pending_bf = await pop_pending_backfill(agent_id)
     if pending_bf:
@@ -786,10 +513,7 @@ async def agent_ws_endpoint(websocket: WebSocket):
             if msg_type == "locations_updated":
                 agent_locations = msg.get("locations", [])
                 if agent_locations:
-                    await _sync_agent_locations(agent_id, agent_locations)
-                    from file_hunter.services.online_check import (
-                        refresh_agent_location_ids_from_memory,
-                    )
+                    await sync_agent_locations(agent_id, agent_locations)
 
                     refresh_agent_location_ids_from_memory(agent_name, agent_id)
                     await broadcast(
@@ -805,95 +529,8 @@ async def agent_ws_endpoint(websocket: WebSocket):
                         len(agent_locations),
                     )
 
-            elif msg_type == "transcode_complete":
-                try:
-                    await _handle_transcode_complete(agent_id, msg)
-                except Exception as e:
-                    logger.exception(
-                        "Agent #%d: transcode_complete handler failed: %s",
-                        agent_id, e,
-                    )
-                    # Unblock the queue so the operation can fail cleanly
-                    # rather than staying stuck as "running" forever
-                    from file_hunter.services.transcode import resolve_pending
-                    path = msg.get("path", "")
-                    resolve_pending(path, {
-                        "type": "transcode_error",
-                        "error": f"Catalog entry failed: {e}",
-                    })
-                    await broadcast({
-                        "type": "transcode_error",
-                        "agentId": agent_id,
-                        "path": path,
-                        "error": f"Catalog entry failed: {e}",
-                    })
-
-            elif msg_type == "transcode_progress":
-                # Enrich with file_id and update server-side activity
-                path = msg.get("path", "")
-                file_id, op_id = await _lookup_transcode_info(path)
-                if file_id:
-                    msg["fileId"] = file_id
-                if op_id:
-                    from file_hunter.services.activity import update
-                    pct = msg.get("percent")
-                    progress = f"{pct}%" if pct is not None else msg.get("status", "")
-                    update(f"op-{op_id}", progress=progress)
-                msg["agentId"] = agent_id
-                await broadcast(msg)
-
-            elif msg_type in ("transcode_error", "transcode_cancelled"):
-                from file_hunter.services.transcode import resolve_pending
-                path = msg.get("path", "")
-                file_id, _ = await _lookup_transcode_info(path)
-                if file_id:
-                    msg["fileId"] = file_id
-                resolve_pending(path, msg)
-                msg["agentId"] = agent_id
-                await broadcast(msg)
-
-            elif msg_type == "rawconvert_complete":
-                try:
-                    await _handle_rawconvert_complete(agent_id, msg)
-                except Exception as e:
-                    logger.exception(
-                        "Agent #%d: rawconvert_complete handler failed: %s",
-                        agent_id, e,
-                    )
-                    from file_hunter.services.rawconvert import resolve_pending as rc_resolve
-                    path = msg.get("path", "")
-                    rc_resolve(path, {
-                        "type": "rawconvert_error",
-                        "error": f"Catalog entry failed: {e}",
-                    })
-                    await broadcast({
-                        "type": "rawconvert_error",
-                        "agentId": agent_id,
-                        "path": path,
-                        "error": f"Catalog entry failed: {e}",
-                    })
-
-            elif msg_type == "rawconvert_progress":
-                path = msg.get("path", "")
-                file_id, op_id = await _lookup_rawconvert_info(path)
-                if file_id:
-                    msg["fileId"] = file_id
-                if op_id:
-                    from file_hunter.services.activity import update
-                    progress = msg.get("status", "converting")
-                    update(f"op-{op_id}", progress=progress)
-                msg["agentId"] = agent_id
-                await broadcast(msg)
-
-            elif msg_type == "rawconvert_error":
-                from file_hunter.services.rawconvert import resolve_pending as rc_resolve
-                path = msg.get("path", "")
-                file_id, _ = await _lookup_rawconvert_info(path)
-                if file_id:
-                    msg["fileId"] = file_id
-                rc_resolve(path, msg)
-                msg["agentId"] = agent_id
-                await broadcast(msg)
+            elif conversion := conversion_for(msg_type):
+                await conversion.on_agent_message(agent_id, msg_type, msg)
 
             else:
                 msg["agentId"] = agent_id
@@ -908,17 +545,12 @@ async def agent_ws_endpoint(websocket: WebSocket):
     finally:
         try:
             # Cancel any running hash backfill — capture state for re-queue
-            from file_hunter.services.hash_backfill import (
-                cancel_backfill,
-                get_active_backfill_info,
-                queue_pending_backfill,
-            )
 
             interrupted_backfill = get_active_backfill_info(agent_id)
             cancel_backfill(agent_id)
 
             # Only clean up if this websocket is still the registered one
-            replaced = _agent_connections.get(agent_id) is not websocket
+            replaced = agent_connections.get(agent_id) is not websocket
 
             if replaced:
                 logger.info(
@@ -927,33 +559,31 @@ async def agent_ws_endpoint(websocket: WebSocket):
                     agent_id,
                 )
             else:
-                from file_hunter.services.online_check import clear_location_path_status
 
                 clear_location_path_status(agent_id)
 
                 disc_loc_ids = [
-                    f"loc-{lid}" for lid in _agent_location_ids.get(agent_id, set())
+                    f"loc-{lid}" for lid in agent_location_ids.get(agent_id, set())
                 ]
 
-                from file_hunter.services.agent_ops import close_agent_client
 
                 await close_agent_client(agent_id)
 
-                _agent_connections.pop(agent_id, None)
-                _agent_tokens.pop(agent_id, None)
-                _agent_info.pop(agent_id, None)
-                _agent_location_ids.pop(agent_id, None)
+                agent_connections.pop(agent_id, None)
+                agent_tokens.pop(agent_id, None)
+                agent_info.pop(agent_id, None)
+                agent_location_ids.pop(agent_id, None)
 
-                now = datetime.now(timezone.utc).isoformat()
+                now = utc_now("auto")
 
-                async def _set_offline(conn, aid, ts):
+                async def set_offline(conn, aid, ts):
                     await conn.execute(
                         "UPDATE agents SET status = 'offline', date_last_seen = ? WHERE id = ?",
                         (ts, aid),
                     )
                     await conn.commit()
 
-                await execute_write(_set_offline, agent_id, now)
+                await execute_write(set_offline, agent_id, now)
 
                 await broadcast(
                     {
@@ -985,18 +615,17 @@ async def agent_ws_endpoint(websocket: WebSocket):
                 )
         except asyncio.CancelledError:
             # Shutdown cancelled the cleanup — in-memory state already torn down,
-            # DB will be corrected on next startup (_recover_interrupted)
+            # DB will be corrected on next startup (recover_interrupted)
             logger.info("Agent #%d cleanup skipped (shutdown)", agent_id)
-            from file_hunter.services.agent_ops import close_agent_client
 
             await close_agent_client(agent_id)
-            _agent_connections.pop(agent_id, None)
-            _agent_tokens.pop(agent_id, None)
-            _agent_info.pop(agent_id, None)
-            _agent_location_ids.pop(agent_id, None)
+            agent_connections.pop(agent_id, None)
+            agent_tokens.pop(agent_id, None)
+            agent_info.pop(agent_id, None)
+            agent_location_ids.pop(agent_id, None)
 
 
-async def _authenticate_agent(token: str) -> tuple[int, str] | None:
+async def authenticate_agent(token: str) -> tuple[int, str] | None:
     """Validate a token against all agents. Returns (agent_id, name) or None."""
     async with read_db() as db:
         cursor = await db.execute("SELECT id, name, token_hash FROM agents")

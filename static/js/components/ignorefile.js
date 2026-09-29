@@ -1,13 +1,7 @@
 import API from '../api.js';
+import { formatSize } from '../format.js';
+import { wireModal } from './modal.js';
 
-function formatSize(bytes) {
-    if (bytes === null || bytes === undefined) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    if (bytes < 1099511627776) return (bytes / 1073741824).toFixed(1) + ' GB';
-    return (bytes / 1099511627776).toFixed(1) + ' TB';
-}
 
 const IgnoreFileModal = {
     overlayEl: null,
@@ -26,21 +20,12 @@ const IgnoreFileModal = {
         this.locationLabelEl = document.getElementById('ignore-scope-location-label');
         this.onConfirm = onConfirm;
 
-        document.getElementById('ignore-file-cancel').addEventListener('click', () => this.close());
-        document.getElementById('ignore-file-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (this.overlayEl.classList.contains('hidden')) return;
-            if (e.key === 'Escape') {
-                this.close();
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                this.confirm();
-            }
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            enterFrom: 'dialog',
+            cancelBtn: document.getElementById('ignore-file-cancel'),
+            submitBtn: document.getElementById('ignore-file-submit'),
         });
     },
 

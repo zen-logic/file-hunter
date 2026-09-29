@@ -3,10 +3,9 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
-from file_hunter.db import execute_write
+from file_hunter.db import execute_write, folder_path
 from file_hunter.hashes_db import get_file_hashes, hashes_writer, read_hashes
 from file_hunter.helpers import (
     expand_to_duplicates,
@@ -15,13 +14,14 @@ from file_hunter.helpers import (
     parse_mtime,
     post_op_stats,
     resolve_target,
+    utc_now,
 )
 from file_hunter.hashes_db import mark_hashes_stale
 from file_hunter.services import fs
 from file_hunter.services.agent_ops import dispatch, location_agent_has_capability
 from file_hunter.ws.scan import broadcast
 from file_hunter.services.deferred_ops import queue_deferred_op
-from file_hunter.services.op_result_log import append_row, create_log
+from file_hunter.services.op_result_log import append_row, create_log, insert_written_file
 from file_hunter.stats_db import update_stats_for_files
 from file_hunter.services.dup_counts import batch_dup_counts
 from file_hunter.services.locations import check_location_online
@@ -33,6 +33,7 @@ from file_hunter.services.tags import (
     parse_tags,
     remove_file_tags,
 )
+from file_hunter.services.similarity import update_embedding_location
 
 logger = logging.getLogger("file_hunter")
 
@@ -75,13 +76,6 @@ async def list_files(
         dict with keys: items (list[dict]), folders (list[dict]), total (int),
         page (int), pageSize (int), breadcrumb (list[dict]).
         When focus_file_id is found, also includes focusFileId.
-
-    Side effects:
-        None — read-only. Hash data is fetched from the separate hashes.db via
-        get_file_hashes() and batch_dup_counts().
-
-    Called by:
-        Route handler files_list (GET /api/files).
     """
     col = SORT_COLUMNS.get(sort, "f.filename")
     direction = "DESC" if sort_dir == "desc" else "ASC"
@@ -258,16 +252,7 @@ async def list_files(
     elif folder_id.startswith("fld-"):
         fld_id = parse_folder_id(folder_id)
         # Walk ancestor chain
-        chain_rows = await db.execute_fetchall(
-            """WITH RECURSIVE chain(id, name, parent_id, depth) AS (
-                       SELECT id, name, parent_id, 0 FROM folders WHERE id = ?
-                       UNION ALL
-                       SELECT f.id, f.name, f.parent_id, c.depth + 1
-                       FROM folders f JOIN chain c ON f.id = c.parent_id
-                   )
-                   SELECT id, name FROM chain ORDER BY depth DESC""",
-            (fld_id,),
-        )
+        chain_rows = await folder_path(db, fld_id)
         # Prepend location
         loc_row = await db.execute_fetchall(
             "SELECT l.id, l.name FROM folders fld JOIN locations l ON l.id = fld.location_id WHERE fld.id = ?",
@@ -303,14 +288,6 @@ async def get_file_detail(db, file_id: int):
     Returns:
         dict with full file detail (id, name, path, hashes, duplicates, breadcrumb,
         online status, tags, etc.) or None if the file does not exist.
-
-    Side effects:
-        DB write — if the file is marked stale but the location is online and the
-        file exists on disk, the stale flag is cleared via execute_write().
-        Hash and duplicate data are read from hashes.db.
-
-    Called by:
-        Route handler file_detail (GET /api/files/{id}).
     """
     row = await db.execute_fetchall(
         """SELECT f.id, f.filename, f.full_path, f.rel_path, f.location_id,
@@ -393,30 +370,30 @@ async def get_file_detail(db, file_id: int):
         if stat is None:
             # File gone from disk
             if not stale:
-                async def _mark_stale(conn, fid):
+                async def mark_stale(conn, fid):
                     await conn.execute("UPDATE files SET stale = 1 WHERE id = ?", (fid,))
                     await conn.commit()
-                await execute_write(_mark_stale, file_id)
+                await execute_write(mark_stale, file_id)
                 await mark_hashes_stale([file_id])
                 stale = True
                 await broadcast({"type": "file_freshness", "fileId": file_id, "stale": True})
         else:
             # File exists — clear stale if it was marked
             if stale:
-                async def _clear_stale(conn, fid):
+                async def clear_stale(conn, fid):
                     await conn.execute("UPDATE files SET stale = 0 WHERE id = ?", (fid,))
                     await conn.commit()
-                await execute_write(_clear_stale, file_id)
+                await execute_write(clear_stale, file_id)
                 stale = False
                 await broadcast({"type": "file_freshness", "fileId": file_id, "stale": False})
             # Update size if changed
             if stat["size"] != f["file_size"]:
-                async def _update_size(conn, fid, new_size):
+                async def update_size(conn, fid, new_size):
                     await conn.execute(
                         "UPDATE files SET file_size = ? WHERE id = ?", (new_size, fid)
                     )
                     await conn.commit()
-                await execute_write(_update_size, file_id, stat["size"])
+                await execute_write(update_size, file_id, stat["size"])
                 f["file_size"] = stat["size"]
                 await broadcast({"type": "file_freshness", "fileId": file_id, "size": stat["size"]})
 
@@ -457,14 +434,14 @@ async def get_file_detail(db, file_id: int):
                 transcode_status = "converting" if s == "running" else "queued"
 
     # Check agent capabilities and queue status for camera raw files
-    _RAW_EXTENSIONS = {
+    RAW_EXTENSIONS = {
         "nef", "cr2", "cr3", "arw", "orf", "raf", "dng", "rw2",
         "pef", "srw", "nrw", "raw", "mrw", "dcr", "kdc", "erf",
         "3fr", "mef", "mos", "iiq",
     }
     can_raw_convert = False
     raw_convert_status = None
-    if (f["file_type_low"] or "").lower() in _RAW_EXTENSIONS and location_online:
+    if (f["file_type_low"] or "").lower() in RAW_EXTENSIONS and location_online:
         can_raw_convert = await location_agent_has_capability(
             f["location_id"], "dcraw"
         )
@@ -528,15 +505,6 @@ async def update_file(db, file_id: int, description: str = None, tags: list = No
     Returns:
         int: How many *other* files received a propagated tag. Zero when
         nothing was added or the file has no duplicates.
-
-    Side effects:
-        DB write + commit. Description writes to the files table. Tags are
-        diffed against the file's current set: newly added tags are also
-        applied to every active duplicate, removed tags are dropped from
-        this file only. No-op if both arguments are None.
-
-    Called by:
-        Route handler file_update (POST /api/files/{id}/update).
     """
     if description is None and tags is None:
         return 0
@@ -590,7 +558,7 @@ async def insert_file_copy(db, *, source_file_id, source_row, filename,
         int: The new file ID.
     """
     type_high, type_low = classify_file(filename)
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_iso = utc_now()
 
     cursor = await db.execute(
         """INSERT INTO files (filename, full_path, rel_path, location_id,
@@ -667,18 +635,6 @@ async def move_file(
     Raises:
         ValueError: File not found, destination not found, file missing on disk,
             or name collision on rename.
-
-    Side effects:
-        Disk I/O — file move/rename/copy via fs service.
-        DB write + commit — for moves: updates existing record. For copies:
-        inserts new file record and new hash record.
-        Reclassifies file type if extension changed.
-        Broadcasts updated stats via post_op_stats (unless skip_post_processing).
-        May queue a deferred_op if location is offline.
-
-    Called by:
-        Route handler file_move (POST /api/files/{id}/move).
-        batch_move() in batch.py (per-file, with skip_post_processing=True).
     """
     row = await db.execute_fetchall(
         """SELECT f.*, l.root_path AS location_root_path, l.name AS location_name,
@@ -708,7 +664,6 @@ async def move_file(
 
     if destination_folder_id:
         moved = True
-        # Resolve destination
         dest = await resolve_target(db, destination_folder_id)
         if not dest:
             raise ValueError("Destination not found.")
@@ -875,7 +830,6 @@ async def move_file(
                     "UPDATE file_hashes SET location_id = ? WHERE file_id = ?",
                     (final_location_id, file_id),
                 )
-            from file_hunter.services.similarity import update_embedding_location
             update_embedding_location(file_id, final_location_id)
 
         # Update folder/location stats if file changed folder
@@ -894,7 +848,7 @@ async def move_file(
 
         # Write .moved stub at source and log to CSV
         if moved and (cross_location or final_folder_id != f["folder_id"]):
-            now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            now_iso = utc_now()
             dest_loc_name = dest.get("location_name") or dest["name"]
 
             # Build and write stub at old path
@@ -957,28 +911,8 @@ async def move_file(
             )
 
             if owns_csv:
-                csv_filename = os.path.basename(csv_path)
-                csv_rel = os.path.relpath(csv_path, final_root)
-                st = await fs.file_stat(csv_path, final_location_id)
-                csv_size = st["size"] if st else 0
-                await db.execute(
-                    """INSERT OR IGNORE INTO files
-                       (filename, full_path, rel_path, location_id, folder_id,
-                        file_type_high, file_type_low, file_size,
-                        description, created_date, modified_date,
-                        date_cataloged, date_last_seen)
-                       VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?,
-                               '', ?, ?, ?, ?)""",
-                    (
-                        csv_filename, csv_path, csv_rel, final_location_id,
-                        final_folder_id, csv_size,
-                        now_iso, now_iso, now_iso, now_iso,
-                    ),
-                )
-                await db.commit()
-                await update_stats_for_files(
-                    final_location_id,
-                    added=[(final_folder_id, csv_size, "text", 0)],
+                await insert_written_file(
+                    db, csv_path, final_location_id, final_folder_id
                 )
 
         result_id = file_id

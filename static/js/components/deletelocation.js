@@ -1,3 +1,4 @@
+import { wireModal } from './modal.js';
 const DeleteLocationModal = {
     overlayEl: null,
     textEl: null,
@@ -9,21 +10,12 @@ const DeleteLocationModal = {
         this.textEl = document.getElementById('delete-location-text');
         this.onConfirm = onConfirm;
 
-        document.getElementById('delete-location-cancel').addEventListener('click', () => this.close());
-        document.getElementById('delete-location-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (this.overlayEl.classList.contains('hidden')) return;
-            if (e.key === 'Escape') {
-                this.close();
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                this.confirm();
-            }
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            enterFrom: 'dialog',
+            cancelBtn: document.getElementById('delete-location-cancel'),
+            submitBtn: document.getElementById('delete-location-submit'),
         });
     },
 

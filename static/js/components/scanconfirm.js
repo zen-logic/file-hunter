@@ -1,3 +1,4 @@
+import { wireModal } from './modal.js';
 const ScanConfirm = {
     overlayEl: null,
     textEl: null,
@@ -14,17 +15,11 @@ const ScanConfirm = {
         this.similarityEl = document.getElementById('scan-confirm-similarity');
         this.onConfirm = onConfirm;
 
-        document.getElementById('scan-confirm-cancel').addEventListener('click', () => this.close());
-        document.getElementById('scan-confirm-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this.close();
-            }
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            cancelBtn: document.getElementById('scan-confirm-cancel'),
+            submitBtn: document.getElementById('scan-confirm-submit'),
         });
     },
 

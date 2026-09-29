@@ -1,10 +1,10 @@
 import sqlite3
-from datetime import datetime, timezone
+from file_hunter.helpers import utc_now
 
 
 async def add_ignore_rule(db, filename, file_size, location_id=None):
     """Insert an ignore rule. Returns the new rule dict or raises on duplicate."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now("auto")
     try:
         cursor = await db.execute(
             """INSERT INTO ignored_files (filename, file_size, location_id, date_created)

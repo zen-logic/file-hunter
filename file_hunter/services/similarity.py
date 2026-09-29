@@ -8,24 +8,47 @@ import sys
 
 import httpx
 
+from file_hunter.core import BadRequest
+from file_hunter.services import settings as settings_svc
+from file_hunter import text_db
+from file_hunter.db import execute_write, read_db
+from file_hunter.services import fs
+from file_hunter.services.content_proxy import fetch_agent_bytes
+from file_hunter.services.op_result_log import add_to_catalog
+from file_hunter.ws.scan import broadcast
+
 logger = logging.getLogger(__name__)
 
-_chromadb_available: bool | None = None
-_chroma_client = None
+chromadb_available: bool | None = None
+chroma_client = None
 
 SIMILARITY_DB_DIR = "data/similarity"
 
 
 def is_chromadb_available() -> bool:
     """Check whether chromadb is importable."""
-    global _chromadb_available
-    if _chromadb_available is None:
+    global chromadb_available
+    if chromadb_available is None:
         try:
             import chromadb  # noqa: F401
-            _chromadb_available = True
+            chromadb_available = True
         except ImportError:
-            _chromadb_available = False
-    return _chromadb_available
+            chromadb_available = False
+    return chromadb_available
+
+
+def require_chromadb():
+    """BadRequest unless chromadb is available."""
+    if not is_chromadb_available():
+        raise BadRequest("Similarity search is not available.")
+
+
+async def embedding_url(db) -> str:
+    """The configured embedding service URL; BadRequest if there isn't one."""
+    url = await settings_svc.get_setting(db, "similaritySearchUrl")
+    if not url:
+        raise BadRequest("Embedding service URL not configured.")
+    return url
 
 
 def get_embedding_counts() -> dict | None:
@@ -53,33 +76,33 @@ def ensure_chromadb() -> bool:
     except subprocess.CalledProcessError as e:
         logger.error("Failed to install chromadb: %s", e)
         return False
-    global _chromadb_available
-    _chromadb_available = True
+    global chromadb_available
+    chromadb_available = True
     logger.info("chromadb installed")
     return True
 
 
-def _get_client():
-    global _chroma_client
+def get_client():
+    global chroma_client
     if not ensure_chromadb():
         raise RuntimeError("chromadb is not available and could not be installed")
     import chromadb
     os.makedirs(SIMILARITY_DB_DIR, exist_ok=True)
-    if _chroma_client is None:
-        _chroma_client = chromadb.PersistentClient(path=SIMILARITY_DB_DIR)
-    return _chroma_client
+    if chroma_client is None:
+        chroma_client = chromadb.PersistentClient(path=SIMILARITY_DB_DIR)
+    return chroma_client
 
 
 def get_collection():
     """Get or create the image embeddings collection."""
-    return _get_client().get_or_create_collection(
+    return get_client().get_or_create_collection(
         name="image_embeddings", metadata={"hnsw:space": "cosine"}
     )
 
 
 def get_document_collection():
     """Get or create the document chunk embeddings collection."""
-    return _get_client().get_or_create_collection(
+    return get_client().get_or_create_collection(
         name="document_embeddings", metadata={"hnsw:space": "cosine"}
     )
 
@@ -93,7 +116,6 @@ async def remove_embeddings(file_ids: list[int]):
     """
     if not file_ids:
         return
-    from file_hunter import text_db
     await text_db.delete_files(file_ids)
     if not is_chromadb_available():
         return
@@ -151,18 +173,13 @@ def update_embedding_location(file_id: int, new_location_id: int):
 
 async def mark_embedded(file_id: int, embedded: bool):
     """Set or clear the embedded flag on a single file."""
-    from file_hunter.db import execute_write
-    async def do_update(db, fid, val):
-        await db.execute("UPDATE files SET embedded = ? WHERE id = ?", (val, fid))
-        await db.commit()
-    await execute_write(do_update, file_id, 1 if embedded else 0)
+    await mark_embedded_batch([file_id], embedded)
 
 
 async def mark_embedded_batch(file_ids: list[int], embedded: bool):
     """Set or clear the embedded flag on a batch of files."""
     if not file_ids:
         return
-    from file_hunter.db import execute_write
     async def do_update(db, ids, val):
         placeholders = ",".join("?" for _ in ids)
         await db.execute(f"UPDATE files SET embedded = ? WHERE id IN ({placeholders})", [val] + ids)
@@ -338,10 +355,55 @@ async def fetch_document_embeddings(
         return None
 
 
+def scan_label(embed_types, name):
+    """The label a similarity scan of name is shown with."""
+    kind = (
+        "Image similarity" if embed_types == "image"
+        else "Document content" if embed_types == "document"
+        else "Similarity"
+    )
+    return f"{kind}: {name}"
+
+
+async def store_images(items):
+    """Store image embeddings, items being (file_id, location_id, full_path,
+    embedding), and mark the files embedded."""
+    file_ids, location_ids, paths, embeddings = zip(*items)
+    get_collection().upsert(
+        ids=[str(fid) for fid in file_ids],
+        embeddings=list(embeddings),
+        documents=list(paths),
+        metadatas=[
+            {"file_id": fid, "location_id": loc}
+            for fid, loc in zip(file_ids, location_ids)
+        ],
+    )
+    await mark_embedded_batch(list(file_ids), True)
+
+
+async def store_document(file_id, location_id, chunks):
+    """Store a document's chunk embeddings and chunk text, and mark it
+    embedded."""
+    get_document_collection().upsert(
+        ids=[f"{file_id}_chunk{i}" for i in range(len(chunks))],
+        embeddings=[c["embedding"] for c in chunks],
+        documents=[c["text"] for c in chunks],
+        metadatas=[
+            {
+                "file_id": file_id,
+                "location_id": location_id,
+                "chunk_index": i,
+                "meta": c.get("meta", ""),
+            }
+            for i, c in enumerate(chunks)
+        ],
+    )
+    await text_db.store_chunks(file_id, chunks)
+    await mark_embedded(file_id, True)
+
+
 async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
     """Embed a single file — image or document — runs as a queued operation."""
-    from file_hunter.services.content_proxy import fetch_agent_bytes
-    from file_hunter.ws.scan import broadcast
 
     file_id = params["file_id"]
     filename = params["filename"]
@@ -349,6 +411,11 @@ async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
     location_id = params["location_id"]
     embed_url = params["embed_url"]
     embed_type = params.get("type", "document")
+
+    async def finish(**fields):
+        await broadcast(
+            {"type": "embed_completed", "fileId": file_id, "filename": filename, **fields}
+        )
 
     await broadcast({
         "type": "embed_started",
@@ -358,99 +425,33 @@ async def run_embed_file(op_id: int, agent_id: int | None, params: dict):
 
     file_bytes = await fetch_agent_bytes(full_path, location_id)
     if file_bytes is None:
-        await broadcast({
-            "type": "embed_completed",
-            "fileId": file_id,
-            "filename": filename,
-            "error": "File not available (agent offline)",
-        })
+        await finish(error="File not available (agent offline)")
         return
 
     if embed_type == "image":
         try:
             embedding = await fetch_embedding(embed_url, file_bytes, full_path)
         except ConnectionError:
-            await broadcast({
-                "type": "embed_completed",
-                "fileId": file_id,
-                "filename": filename,
-                "error": "Embedding service unavailable",
-            })
+            await finish(error="Embedding service unavailable")
             return
         if embedding is None:
-            await broadcast({
-                "type": "embed_completed",
-                "fileId": file_id,
-                "filename": filename,
-                "error": "Could not generate image embedding",
-            })
+            await finish(error="Could not generate image embedding")
             return
-
-        collection = get_collection()
-        collection.upsert(
-            ids=[str(file_id)],
-            embeddings=[embedding],
-            documents=[full_path],
-            metadatas=[{"file_id": file_id, "location_id": location_id}],
-        )
-        await mark_embedded(file_id, True)
+        await store_images([(file_id, location_id, full_path, embedding)])
         logger.info("Embedded image %s", filename)
-        await broadcast({
-            "type": "embed_completed",
-            "fileId": file_id,
-            "filename": filename,
-            "chunks": 1,
-        })
+        await finish(chunks=1)
     else:
         try:
             chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
         except ConnectionError:
-            await broadcast({
-                "type": "embed_completed",
-                "fileId": file_id,
-                "filename": filename,
-                "error": "Embedding service unavailable",
-            })
+            await finish(error="Embedding service unavailable")
             return
         if chunks is None or len(chunks) == 0:
-            await broadcast({
-                "type": "embed_completed",
-                "fileId": file_id,
-                "filename": filename,
-                "error": "No content could be extracted",
-            })
+            await finish(error="No content could be extracted")
             return
-
-        collection = get_document_collection()
-        chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
-        embeddings = [c["embedding"] for c in chunks]
-        documents = [c["text"] for c in chunks]
-        metadatas = [
-            {
-                "file_id": file_id,
-                "location_id": location_id,
-                "chunk_index": i,
-                "meta": c.get("meta", ""),
-            }
-            for i, c in enumerate(chunks)
-        ]
-        collection.upsert(
-            ids=chunk_ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas,
-        )
-        from file_hunter import text_db
-        await text_db.store_chunks(file_id, chunks)
-        await mark_embedded(file_id, True)
-
+        await store_document(file_id, location_id, chunks)
         logger.info("Embedded %s: %d chunks", filename, len(chunks))
-        await broadcast({
-            "type": "embed_completed",
-            "fileId": file_id,
-            "filename": filename,
-            "chunks": len(chunks),
-        })
+        await finish(chunks=len(chunks))
 
 
 async def fetch_markdown(embed_url: str, file_bytes: bytes, filename: str) -> str:
@@ -490,27 +491,21 @@ async def run_extract_markdown(op_id: int, agent_id: int | None, params: dict):
     Every outcome ends in an extract_completed broadcast, with an error the
     user can act on if it failed.
     """
-    from file_hunter.ws.scan import broadcast
 
     file_id = params["file_id"]
     filename = params["filename"]
 
     await broadcast({"type": "extract_started", "fileId": file_id, "filename": filename})
     try:
-        result = await _extract_markdown(params)
+        result = await extract_markdown(params)
     except Exception:
         logger.exception("Markdown extraction failed for %s", filename)
         result = {"error": "Something went wrong. The server log has the details."}
     await broadcast({"type": "extract_completed", "fileId": file_id, "filename": filename, **result})
 
 
-async def _extract_markdown(params: dict) -> dict:
+async def extract_markdown(params: dict) -> dict:
     """Do the extraction. Returns the completion fields, or {"error": message}."""
-    from file_hunter.db import read_db
-    from file_hunter.services import fs
-    from file_hunter.services.content_proxy import fetch_agent_bytes
-    from file_hunter.services.op_result_log import add_to_catalog
-
     file_id = params["file_id"]
     filename = params["filename"]
     full_path = params["path"]
@@ -550,9 +545,6 @@ async def _extract_markdown(params: dict) -> dict:
 
 async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     """Walk catalogued images and documents and index their embeddings."""
-    from file_hunter.db import read_db
-    from file_hunter.services.content_proxy import fetch_agent_bytes
-    from file_hunter.ws.scan import broadcast
 
     location_id = params["location_id"]
     location_name = params["location_name"]
@@ -562,32 +554,27 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     embed_url = params["embed_url"]
     embed_types = params.get("embed_types")  # "image", "document", or None (all)
 
-    if embed_types == "image":
-        scan_label = f"Image similarity: {location_name}"
-    elif embed_types == "document":
-        scan_label = f"Document content: {location_name}"
-    else:
-        scan_label = f"Similarity: {location_name}"
+    label = scan_label(embed_types, location_name)
 
     await broadcast({
         "type": "scan_started",
         "locationId": location_id,
-        "location": scan_label,
+        "location": label,
     })
 
-    _EMBEDDABLE_IMAGE_SUBTYPES = {"jpg", "png", "gif", "bmp", "webp", "tiff"}
-    _MIN_IMAGE_SIZE = 10000  # skip images under 10KB (thumbnails, icons)
+    EMBEDDABLE_IMAGE_SUBTYPES = {"jpg", "png", "gif", "bmp", "webp", "tiff"}
+    MIN_IMAGE_SIZE = 10000  # skip images under 10KB (thumbnails, icons)
 
     if embed_types == "image":
-        _EMBEDDABLE_TYPES = ("image",)
+        EMBEDDABLE_TYPES = ("image",)
     elif embed_types == "document":
-        _EMBEDDABLE_TYPES = ("document", "text")
+        EMBEDDABLE_TYPES = ("document", "text")
     else:
-        _EMBEDDABLE_TYPES = ("image", "document", "text")
+        EMBEDDABLE_TYPES = ("image", "document", "text")
 
     # Find all embeddable files in the catalogue for this scope
-    type_placeholders = ",".join("?" for _ in _EMBEDDABLE_TYPES)
-    type_params = list(_EMBEDDABLE_TYPES)
+    type_placeholders = ",".join("?" for _ in EMBEDDABLE_TYPES)
+    type_params = list(EMBEDDABLE_TYPES)
 
     async with read_db() as db:
         if recursive:
@@ -622,8 +609,8 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
                 )
 
     images_to_process = [r for r in rows if r["file_type_high"] == "image"
-                         and (r["file_type_low"] or "") in _EMBEDDABLE_IMAGE_SUBTYPES
-                         and (r["file_size"] or 0) >= _MIN_IMAGE_SIZE]
+                         and (r["file_type_low"] or "") in EMBEDDABLE_IMAGE_SUBTYPES
+                         and (r["file_size"] or 0) >= MIN_IMAGE_SIZE]
     docs_to_process = [r for r in rows if r["file_type_high"] in ("document", "text")]
     to_process_count = len(images_to_process) + len(docs_to_process)
     logger.info(
@@ -635,44 +622,55 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
         await broadcast({
             "type": "scan_completed",
             "locationId": location_id,
-            "location": scan_label,
+            "location": label,
             "filesFound": 0,
         })
         return
 
-    img_collection = get_collection()
-    doc_collection = get_document_collection()
+    # open both collections up front: a ChromaDB that can't open fails the
+    # scan here, before any file is processed
+    get_collection()
+    get_document_collection()
 
     done = 0
     errors = 0
-    _BATCH_SIZE = 100
+    BATCH_SIZE = 100
 
-    # Process images — accumulate and upsert in batches
-    batch_ids = []
-    batch_file_ids = []
-    batch_embeddings = []
-    batch_documents = []
-    batch_metadatas = []
+    # Images are stored in batches of (file_id, location_id, path, embedding)
+    pending_images = []
 
-    async def _flush_img_batch():
-        nonlocal batch_ids, batch_file_ids, batch_embeddings, batch_documents, batch_metadatas
-        if not batch_ids:
+    async def flush_img_batch():
+        nonlocal pending_images
+        if not pending_images:
             return
         try:
-            img_collection.upsert(
-                ids=batch_ids,
-                embeddings=batch_embeddings,
-                documents=batch_documents,
-                metadatas=batch_metadatas,
-            )
-            await mark_embedded_batch(batch_file_ids, True)
+            await store_images(pending_images)
         except Exception as e:
-            logger.warning("ChromaDB batch upsert failed (%d images): %s", len(batch_ids), e)
-        batch_ids = []
-        batch_file_ids = []
-        batch_embeddings = []
-        batch_documents = []
-        batch_metadatas = []
+            logger.warning(
+                "ChromaDB batch upsert failed (%d images): %s", len(pending_images), e
+            )
+        pending_images = []
+
+    async def report_progress():
+        if done % 10 == 0 or done == to_process_count:
+            await broadcast({
+                "type": "scan_progress",
+                "locationId": location_id,
+                "location": label,
+                "phase": "cataloging",
+                "catalogDone": done,
+                "catalogTotal": to_process_count,
+            })
+
+    async def abort_unavailable():
+        logger.warning("Embedding service unavailable — aborting scan")
+        await flush_img_batch()
+        await broadcast({
+            "type": "scan_completed",
+            "locationId": location_id,
+            "location": label,
+            "error": "Embedding service unavailable",
+        })
 
     for row in images_to_process:
         file_id = row["id"]
@@ -687,43 +685,23 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
         try:
             embedding = await fetch_embedding(embed_url, file_bytes, full_path)
         except ConnectionError:
-            logger.warning("Embedding service unavailable — aborting scan")
-            await _flush_img_batch()
-            await broadcast({
-                "type": "scan_completed",
-                "locationId": location_id,
-                "location": scan_label,
-                "error": "Embedding service unavailable",
-            })
+            await abort_unavailable()
             return
         if embedding is None:
             errors += 1
             done += 1
             continue
 
-        batch_ids.append(str(file_id))
-        batch_file_ids.append(file_id)
-        batch_embeddings.append(embedding)
-        batch_documents.append(full_path)
-        batch_metadatas.append({"file_id": file_id, "location_id": location_id})
-
-        if len(batch_ids) >= _BATCH_SIZE:
-            await _flush_img_batch()
+        pending_images.append((file_id, location_id, full_path, embedding))
+        if len(pending_images) >= BATCH_SIZE:
+            await flush_img_batch()
 
         done += 1
-        if done % 10 == 0 or done == to_process_count:
-            await broadcast({
-                "type": "scan_progress",
-                "locationId": location_id,
-                "location": scan_label,
-                "phase": "cataloging",
-                "catalogDone": done,
-                "catalogTotal": to_process_count,
-            })
+        await report_progress()
 
-    await _flush_img_batch()
+    await flush_img_batch()
 
-    # Process documents — already batched per file (multiple chunks per upsert)
+    # Documents: each file's chunks are stored together
     for row in docs_to_process:
         file_id = row["id"]
         full_path = row["full_path"]
@@ -738,13 +716,7 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
         try:
             chunks = await fetch_document_embeddings(embed_url, file_bytes, filename)
         except ConnectionError:
-            logger.warning("Embedding service unavailable — aborting scan")
-            await broadcast({
-                "type": "scan_completed",
-                "locationId": location_id,
-                "location": scan_label,
-                "error": "Embedding service unavailable",
-            })
+            await abort_unavailable()
             return
         if chunks is None or len(chunks) == 0:
             errors += 1
@@ -752,41 +724,13 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
             continue
 
         try:
-            chunk_ids = [f"{file_id}_chunk{i}" for i in range(len(chunks))]
-            embeddings = [c["embedding"] for c in chunks]
-            documents = [c["text"] for c in chunks]
-            metadatas = [
-                {
-                    "file_id": file_id,
-                    "location_id": location_id,
-                    "chunk_index": i,
-                    "meta": c.get("meta", ""),
-                }
-                for i, c in enumerate(chunks)
-            ]
-            doc_collection.upsert(
-                ids=chunk_ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas,
-            )
-            from file_hunter import text_db
-            await text_db.store_chunks(file_id, chunks)
-            await mark_embedded(file_id, True)
+            await store_document(file_id, location_id, chunks)
         except Exception as e:
             logger.warning("ChromaDB upsert failed for document %d: %s", file_id, e)
             errors += 1
 
         done += 1
-        if done % 10 == 0 or done == to_process_count:
-            await broadcast({
-                "type": "scan_progress",
-                "locationId": location_id,
-                "location": scan_label,
-                "phase": "cataloging",
-                "catalogDone": done,
-                "catalogTotal": to_process_count,
-            })
+        await report_progress()
 
     logger.info(
         "Similarity scan complete: %d indexed, %d errors",
@@ -795,6 +739,6 @@ async def run_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     await broadcast({
         "type": "scan_completed",
         "locationId": location_id,
-        "location": scan_label,
+        "location": label,
         "filesFound": done - errors,
     })

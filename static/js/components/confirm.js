@@ -1,3 +1,4 @@
+import { wireModal } from './modal.js';
 const ConfirmModal = {
     overlayEl: null,
     titleEl: null,
@@ -13,21 +14,12 @@ const ConfirmModal = {
         this.submitEl = document.getElementById('confirm-modal-submit');
         this.cancelEl = document.getElementById('confirm-modal-cancel');
 
-        this.cancelEl.addEventListener('click', () => this.complete(false));
-        this.submitEl.addEventListener('click', () => this.complete(true));
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.complete(false);
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (this.overlayEl.classList.contains('hidden')) return;
-            if (e.key === 'Escape') {
-                this.complete(false);
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                this.complete(true);
-            }
+        wireModal(this.overlayEl, {
+            close: () => this.complete(false),
+            submit: () => this.complete(true),
+            enterFrom: 'dialog',
+            cancelBtn: this.cancelEl,
+            submitBtn: this.submitEl,
         });
     },
 

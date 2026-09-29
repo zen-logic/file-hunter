@@ -9,19 +9,14 @@ populates it from the existing catalog. The app works with it empty —
 dup_count reads return 0 until migration runs.
 """
 
-import asyncio
-import sqlite3
-from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiosqlite
 
-from file_hunter.config import load_config
+from file_hunter.db import id_batches
+from file_hunter.sqlite_store import create_database, SqliteStore, catalog_path
 
-_write_db = None
-_write_lock = asyncio.Lock()
 
-_SCHEMA = """
+SCHEMA = """
 CREATE TABLE IF NOT EXISTS file_hashes (
     file_id INTEGER PRIMARY KEY,
     location_id INTEGER NOT NULL,
@@ -53,7 +48,7 @@ CREATE VIEW IF NOT EXISTS active_hashes AS
     SELECT * FROM file_hashes WHERE excluded = 0 AND stale = 0;
 """
 
-_MIGRATIONS = [
+MIGRATIONS = [
     "ALTER TABLE file_hashes ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
     # Recreate view to include stale filter
     "DROP VIEW IF EXISTS active_hashes",
@@ -61,112 +56,36 @@ _MIGRATIONS = [
 ]
 
 
-def _hashes_db_path() -> Path:
-    config = load_config()
-    catalog_path = Path(config.get("database", "data/file_hunter.db"))
-    if not catalog_path.is_absolute():
-        catalog_path = Path(__file__).resolve().parent.parent / catalog_path
-    return catalog_path.parent / "hashes.db"
+def hashes_db_path() -> Path:
+    return catalog_path("data/file_hunter.db").parent / "hashes.db"
+
+
+store = SqliteStore(
+    hashes_db_path,
+    read_pragmas=("PRAGMA journal_mode=WAL",),
+    write_pragmas=("PRAGMA journal_mode=WAL",),
+)
+hashes_writer = store.writer
+open_hashes_connection = store.open_reader
+read_hashes = store.reader
+close_hashes_db = store.close
 
 
 async def init_hashes_db():
-    """Create hashes.db and schema if it doesn't exist.
-
-    Called during app startup. Fast — just CREATE TABLE IF NOT EXISTS.
-    No data migration.
-    """
-    db_path = _hashes_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = await aiosqlite.connect(db_path)
-    try:
-        await conn.execute("PRAGMA journal_mode=WAL")
-        for stmt in _SCHEMA.split(";"):
-            stmt = stmt.strip()
-            if stmt:
-                await conn.execute(stmt)
-        await conn.commit()
-
-        # Column migration (idempotent)
-        for migration in [
+    """Create hashes.db and its schema if they don't exist, and bring an
+    older database up to date. Called during app startup."""
+    await create_database(
+        hashes_db_path(),
+        SCHEMA,
+        migrations=[
             "ALTER TABLE file_hashes ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE file_hashes ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
-        ]:
-            try:
-                await conn.execute(migration)
-                await conn.commit()
-            except sqlite3.OperationalError:
-                pass  # column already exists
-
-        # Recreate view to include stale filter
-        await conn.execute("DROP VIEW IF EXISTS active_hashes")
-        await conn.execute(
+            # recreate the view to include the stale filter
+            "DROP VIEW IF EXISTS active_hashes",
             "CREATE VIEW IF NOT EXISTS active_hashes AS "
-            "SELECT * FROM file_hashes WHERE excluded = 0 AND stale = 0"
-        )
-        await conn.commit()
-    finally:
-        await conn.close()
-
-
-async def _get_write_db() -> aiosqlite.Connection:
-    """Lazy-init the single hashes write connection."""
-    global _write_db
-    if _write_db is None:
-        db_path = _hashes_db_path()
-        _write_db = await aiosqlite.connect(db_path)
-        _write_db.row_factory = aiosqlite.Row
-        await _write_db.execute("PRAGMA journal_mode=WAL")
-    return _write_db
-
-
-@asynccontextmanager
-async def hashes_writer():
-    """Acquire exclusive write access to the hashes database.
-
-    Same pattern as catalog db_writer() — own lock, own connection.
-    Auto-commits on clean exit; rolls back on exception.
-    """
-    async with _write_lock:
-        db = await _get_write_db()
-        try:
-            yield db
-            await db.commit()
-        except BaseException:
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-            raise
-
-
-async def open_hashes_connection() -> aiosqlite.Connection:
-    """Open a read-only hashes DB connection (caller must close it).
-
-    For long-running read operations that need their own transaction
-    lifetime.
-    """
-    db_path = _hashes_db_path()
-    conn = await aiosqlite.connect(db_path)
-    conn.row_factory = aiosqlite.Row
-    await conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-
-@asynccontextmanager
-async def read_hashes():
-    """Open a hashes read connection, yield it, close on exit.
-
-    WAL mode allows unlimited concurrent readers.
-
-    Usage:
-        async with read_hashes() as db:
-            rows = await db.execute_fetchall("SELECT ...")
-    """
-    conn = await open_hashes_connection()
-    try:
-        yield conn
-    finally:
-        await conn.close()
+            "SELECT * FROM file_hashes WHERE excluded = 0 AND stale = 0",
+        ],
+    )
 
 
 async def get_file_hashes(file_ids: list[int]) -> dict[int, dict]:
@@ -179,9 +98,7 @@ async def get_file_hashes(file_ids: list[int]) -> dict[int, dict]:
         return {}
     result: dict[int, dict] = {}
     async with read_hashes() as hdb:
-        for i in range(0, len(file_ids), 500):
-            batch = file_ids[i : i + 500]
-            ph = ",".join("?" for _ in batch)
+        for batch, ph in id_batches(file_ids):
             rows = await hdb.execute_fetchall(
                 f"SELECT file_id, hash_partial, hash_fast, hash_strong, dup_count "
                 f"FROM file_hashes WHERE file_id IN ({ph})",
@@ -206,9 +123,7 @@ async def remove_file_hashes(file_ids: list[int]):
     """
     if not file_ids:
         return
-    for i in range(0, len(file_ids), 500):
-        batch = file_ids[i : i + 500]
-        ph = ",".join("?" for _ in batch)
+    for batch, ph in id_batches(file_ids):
         async with hashes_writer() as wdb:
             await wdb.execute(
                 f"DELETE FROM file_hashes WHERE file_id IN ({ph})",
@@ -224,9 +139,7 @@ async def mark_hashes_stale(file_ids: list[int]):
     """
     if not file_ids:
         return
-    for i in range(0, len(file_ids), 500):
-        batch = file_ids[i : i + 500]
-        ph = ",".join("?" for _ in batch)
+    for batch, ph in id_batches(file_ids):
         async with hashes_writer() as wdb:
             await wdb.execute(
                 f"UPDATE file_hashes SET stale = 1 WHERE file_id IN ({ph})",
@@ -238,9 +151,7 @@ async def clear_hashes_stale(file_ids: list[int]):
     """Clear stale flag — file recovered, hashes active again."""
     if not file_ids:
         return
-    for i in range(0, len(file_ids), 500):
-        batch = file_ids[i : i + 500]
-        ph = ",".join("?" for _ in batch)
+    for batch, ph in id_batches(file_ids):
         async with hashes_writer() as wdb:
             await wdb.execute(
                 f"UPDATE file_hashes SET stale = 0 WHERE file_id IN ({ph})",
@@ -254,6 +165,58 @@ async def remove_location_hashes(location_id: int):
         await wdb.execute(
             "DELETE FROM file_hashes WHERE location_id = ?",
             (location_id,),
+        )
+
+
+async def hashes_of_files(file_ids):
+    """(strong hashes, fast hashes, ids of the files that are duplicates).
+    Each file contributes its strong hash, or its fast hash if it has no
+    strong one."""
+    strong, fast, dup_ids = set(), set(), set()
+    async with read_hashes() as hdb:
+        for batch, ph in id_batches(file_ids):
+            rows = await hdb.execute_fetchall(
+                f"SELECT file_id, hash_strong, hash_fast, dup_count "
+                f"FROM file_hashes WHERE file_id IN ({ph})",
+                batch,
+            )
+            for r in rows:
+                if r["hash_strong"]:
+                    strong.add(r["hash_strong"])
+                elif r["hash_fast"]:
+                    fast.add(r["hash_fast"])
+                if (r["dup_count"] or 0) > 0:
+                    dup_ids.add(r["file_id"])
+    return strong, fast, dup_ids
+
+
+async def set_file_hashes(
+    file_id, location_id, file_size, hash_partial, hash_fast, hash_strong
+):
+    """Write a file's hashes, replacing any it had."""
+    async with hashes_writer() as hdb:
+        await hdb.execute(
+            "INSERT INTO file_hashes "
+            "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(file_id) DO UPDATE SET "
+            "hash_partial=excluded.hash_partial, "
+            "hash_fast=excluded.hash_fast, "
+            "hash_strong=excluded.hash_strong",
+            (file_id, location_id, file_size, hash_partial, hash_fast, hash_strong),
+        )
+
+
+async def register_file_sizes(location_id, id_sizes):
+    """Add rows with no hashes yet for (file_id, file_size) pairs; a file
+    that already has a row only gets the new size."""
+    async with hashes_writer() as hdb:
+        await hdb.executemany(
+            "INSERT INTO file_hashes "
+            "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(file_id) DO UPDATE SET file_size=excluded.file_size",
+            [(fid, location_id, size, None, None, None) for fid, size in id_sizes],
         )
 
 
@@ -280,11 +243,3 @@ async def update_file_hash(file_id: int, **kwargs):
             f"UPDATE file_hashes SET {', '.join(sets)} WHERE file_id = ?",
             vals,
         )
-
-
-async def close_hashes_db():
-    """Close the hashes write connection. Called on shutdown."""
-    global _write_db
-    if _write_db is not None:
-        await _write_db.close()
-        _write_db = None

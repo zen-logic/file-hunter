@@ -2,13 +2,13 @@ import asyncio
 
 from starlette.requests import Request
 
-from file_hunter.core import json_ok, json_error
-from file_hunter.db import read_db
+from file_hunter.core import BadRequest, NotFound, json_error, json_ok, parse_bool, parse_int, parse_int_array, parse_node_id, parse_str, read_body
+from file_hunter.db import file_row, read_db, id_batches
 from file_hunter.hashes_db import get_file_hashes, open_hashes_connection
 from file_hunter.helpers import get_effective_hashes
 from file_hunter.services import fs
 from file_hunter.services.consolidate import (
-    _resolve_folder_path_with_loc,
+    resolve_folder_path_with_loc,
     run_copy,
     run_consolidation,
     is_consolidation_running,
@@ -16,58 +16,65 @@ from file_hunter.services.consolidate import (
 from file_hunter.services.queue_manager import enqueue
 
 
+def check_mode(is_copy, mode, dest_folder_id):
+    """BadRequest unless the mode and destination fit a copy or a move."""
+    if is_copy:
+        if not dest_folder_id:
+            raise BadRequest("destination_folder_id is required for copy.")
+    else:
+        if mode not in ("keep_here", "move_to"):
+            raise BadRequest("mode must be 'keep_here' or 'move_to'.")
+        if mode == "move_to" and not dest_folder_id:
+            raise BadRequest("destination_folder_id is required for move_to mode.")
+
+
+async def check_destination(dest_folder_id):
+    """NotFound if the destination folder doesn't exist, BadRequest if it's
+    offline."""
+    async with read_db() as db:
+        dest_path, dest_loc_id = await resolve_folder_path_with_loc(
+            db, dest_folder_id
+        )
+    if dest_path is None:
+        raise NotFound("Destination folder not found.")
+    if not await fs.dir_exists(dest_path, dest_loc_id):
+        raise BadRequest("Destination is offline.")
+
+
 async def consolidate(request: Request):
     """POST /api/consolidate — start a copy or move consolidation background task."""
-    body = await request.json()
+    body = await read_body(request)
 
-    file_id = body.get("file_id")
-    mode = body.get("mode")
-    consolidate_mode = body.get("consolidateMode", "move")
-    dest_folder_id = body.get("destination_folder_id")
+    file_id = parse_int(body.get("file_id"), "file_id", None)
+    mode = parse_str(body.get("mode"), "mode", None)
+    consolidate_mode = parse_str(body.get("consolidateMode"), "consolidateMode", "move")
+    dest_folder_id = parse_node_id(
+        body.get("destination_folder_id"), "destination_folder_id", None
+    )
 
     if not file_id or not mode:
         return json_error("file_id and mode are required.", 400)
 
     is_copy = consolidate_mode == "copy"
+    check_mode(is_copy, mode, dest_folder_id)
 
-    if is_copy:
-        if not dest_folder_id:
-            return json_error("destination_folder_id is required for copy.", 400)
-    else:
-        if mode not in ("keep_here", "move_to"):
-            return json_error("mode must be 'keep_here' or 'move_to'.", 400)
-        if mode == "move_to" and not dest_folder_id:
-            return json_error("destination_folder_id is required for move_to mode.", 400)
+    file = await file_row(file_id, "filename")
 
-    async with read_db() as db:
-        rows = await db.execute_fetchall(
-            "SELECT id, filename FROM files WHERE id = ?",
-            (file_id,),
-        )
-        if not rows:
-            return json_error("File not found.", 404)
+    h_map = await get_file_hashes([file_id])
+    h = h_map.get(file_id, {})
+    effective_hash = h.get("hash_strong") or h.get("hash_fast")
+    if not effective_hash:
+        return json_error("File has no hash — scan it first.", 400)
 
-        h_map = await get_file_hashes([file_id])
-        h = h_map.get(file_id, {})
-        effective_hash = h.get("hash_strong") or h.get("hash_fast")
-        if not effective_hash:
-            return json_error("File has no hash — scan it first.", 400)
+    if is_consolidation_running(effective_hash):
+        return json_error("Operation already in progress for this file.", 409)
 
-        if is_consolidation_running(effective_hash):
-            return json_error("Operation already in progress for this file.", 409)
+    # Verify destination is online (both copy and move_to need it)
+    if dest_folder_id:
+        await check_destination(dest_folder_id)
 
-        # Verify destination is online (both copy and move_to need it)
-        if dest_folder_id:
-            dest_path, dest_loc_id = await _resolve_folder_path_with_loc(
-                db, dest_folder_id
-            )
-            if dest_path is None:
-                return json_error("Destination folder not found.", 404)
-            if not await fs.dir_exists(dest_path, dest_loc_id):
-                return json_error("Destination is offline.", 400)
-
-    filename_match_only = body.get("filename_match_only", False)
-    stub_file_ids = body.get("stub_file_ids")
+    filename_match_only = parse_bool(body.get("filename_match_only"), "filename_match_only")
+    stub_file_ids = parse_int_array(body.get("stub_file_ids"), "stub_file_ids")
 
     if is_copy:
         asyncio.create_task(
@@ -84,45 +91,32 @@ async def consolidate(request: Request):
             )
         )
 
-    return json_ok({"message": f"Consolidation started for '{rows[0]['filename']}'"})
+    return json_ok({"message": f"Consolidation started for '{file['filename']}'"})
 
 
 async def batch_consolidate(request: Request):
     """POST /api/batch/consolidate — batch copy or move consolidation in background."""
-    body = await request.json()
+    body = await read_body(request)
 
-    file_ids = body.get("file_ids", [])
-    mode = body.get("mode")
-    consolidate_mode = body.get("consolidateMode", "move")
-    dest_folder_id = body.get("destination_folder_id")
+    file_ids = parse_int_array(body.get("file_ids"), "file_ids")
+    mode = parse_str(body.get("mode"), "mode", None)
+    consolidate_mode = parse_str(body.get("consolidateMode"), "consolidateMode", "move")
+    dest_folder_id = parse_node_id(
+        body.get("destination_folder_id"), "destination_folder_id", None
+    )
 
     if not file_ids:
         return json_error("No files specified.", 400)
 
     is_copy = consolidate_mode == "copy"
-
-    if is_copy:
-        if not dest_folder_id:
-            return json_error("destination_folder_id is required for copy.", 400)
-    else:
-        if not mode or mode not in ("keep_here", "move_to"):
-            return json_error("mode must be 'keep_here' or 'move_to'.", 400)
-        if mode == "move_to" and not dest_folder_id:
-            return json_error("destination_folder_id is required for move_to mode.", 400)
+    check_mode(is_copy, mode, dest_folder_id)
 
     # Validate destination once upfront
     if dest_folder_id:
-        async with read_db() as db:
-            dest_path, dest_loc_id = await _resolve_folder_path_with_loc(
-                db, dest_folder_id
-            )
-        if dest_path is None:
-            return json_error("Destination folder not found.", 404)
-        if not await fs.dir_exists(dest_path, dest_loc_id):
-            return json_error("Destination is offline.", 400)
+        await check_destination(dest_folder_id)
 
-    filename_match_only = body.get("filename_match_only", False)
-    stub_file_ids = body.get("stub_file_ids")
+    filename_match_only = parse_bool(body.get("filename_match_only"), "filename_match_only")
+    stub_file_ids = parse_int_array(body.get("stub_file_ids"), "stub_file_ids")
     await enqueue("batch_consolidate", None, {
         "file_ids": file_ids,
         "mode": mode,
@@ -144,17 +138,15 @@ async def consolidate_preview(request: Request):
     location/agent/path for all copies (including source files, since the
     merge step needs to show them for move operations).
     """
-    body = await request.json()
-    file_ids = body.get("file_ids", [])
+    body = await read_body(request)
+    file_ids = parse_int_array(body.get("file_ids"), "file_ids")
     if not file_ids:
         return json_ok({"total_dups": 0, "filename_matched_dups": 0, "duplicates": []})
 
     # Get filenames and effective hashes for all selected files
     filename_by_id = {}
     async with read_db() as db:
-        for i in range(0, len(file_ids), 500):
-            batch = file_ids[i : i + 500]
-            ph = ",".join("?" for _ in batch)
+        for batch, ph in id_batches(file_ids):
             rows = await db.execute_fetchall(
                 f"SELECT id, filename FROM files WHERE id IN ({ph})",
                 batch,
@@ -202,9 +194,7 @@ async def consolidate_preview(request: Request):
     if all_dup_ids:
         dup_id_list = list(all_dup_ids)
         async with read_db() as db:
-            for i in range(0, len(dup_id_list), 500):
-                batch = dup_id_list[i : i + 500]
-                dph = ",".join("?" for _ in batch)
+            for batch, dph in id_batches(dup_id_list):
                 rows = await db.execute_fetchall(
                     f"SELECT f.id, f.filename, f.rel_path, f.location_id, "
                     f"l.name as location_name, a.name as agent_name "

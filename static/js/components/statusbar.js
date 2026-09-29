@@ -1,14 +1,6 @@
 import API from '../api.js';
+import { formatSize, esc } from '../format.js';
 
-function formatSize(bytes) {
-    if (bytes === null || bytes === undefined) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    if (bytes < 1099511627776) return (bytes / 1073741824).toFixed(1) + ' GB';
-    if (bytes < 1125899906842624) return (bytes / 1099511627776).toFixed(1) + ' TB';
-    return (bytes / 1125899906842624).toFixed(1) + ' PB';
-}
 
 const StatusBar = {
     statsEl: null,
@@ -103,7 +95,7 @@ const StatusBar = {
             this.scanningLocationId = locationId || null;
             this.activityEl.innerHTML = `
                 <span class="status-activity-text scanning">
-                    ${detail || '...'}
+                    ${esc(detail || '...')}
                     ${locationId ? this.renderQueueBadge() : ''}
                     ${locationId ? '<span class="status-cancel" title="Cancel">✕</span>' : ''}
                 </span>
@@ -112,7 +104,6 @@ const StatusBar = {
             if (cancelEl) {
                 cancelEl.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    const { default: API } = await import('../api.js');
                     await API.post('/api/scan/cancel', { location_id: locationId });
                 });
             }
@@ -165,7 +156,7 @@ const StatusBar = {
         const label = connected ? 'Connected' : 'Disconnected';
         this.connectionEl.innerHTML = `
             <span class="${dotClass}"></span>
-            <span>${label}</span>
+            <span>${esc(label)}</span>
         `;
     },
 
@@ -216,8 +207,8 @@ const StatusBar = {
             return;
         }
         this.loadDropdown.innerHTML = this.activities.map(a => {
-            const progress = a.progress ? `<span class="load-progress">${a.progress}</span>` : '';
-            return `<div class="load-dropdown-item"><span class="load-label">${a.label}</span>${progress}</div>`;
+            const progress = a.progress ? `<span class="load-progress">${esc(a.progress)}</span>` : '';
+            return `<div class="load-dropdown-item"><span class="load-label">${esc(a.label)}</span>${progress}</div>`;
         }).join('');
     },
 };

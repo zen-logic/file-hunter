@@ -1,4 +1,5 @@
 import FSBrowser from './fsbrowser.js';
+import { wireModal, setDialogError } from './modal.js';
 
 const AddLocationModal = {
     overlayEl: null,
@@ -15,8 +16,6 @@ const AddLocationModal = {
         this.onAdd = onAdd;
 
         document.getElementById('btn-add-location').addEventListener('click', () => this.open());
-        document.getElementById('add-loc-cancel').addEventListener('click', () => this.close());
-        document.getElementById('add-loc-submit').addEventListener('click', () => this.doSubmit());
         FSBrowser.init();
         document.getElementById('add-loc-browse').addEventListener('click', () => {
             FSBrowser.open(this.pathInput.value.trim() || null, (path) => {
@@ -24,30 +23,19 @@ const AddLocationModal = {
             });
         });
 
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this.close();
-            }
-        });
-
-        this.overlayEl.querySelectorAll('input').forEach(el => {
-            el.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') this.doSubmit();
-            });
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.doSubmit(),
+            enterFrom: this.overlayEl.querySelectorAll('input'),
+            cancelBtn: document.getElementById('add-loc-cancel'),
+            submitBtn: document.getElementById('add-loc-submit'),
         });
     },
 
     open() {
         this.nameInput.value = '';
         this.pathInput.value = '';
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
         this.overlayEl.classList.remove('hidden');
         this.nameInput.focus();
     },
@@ -61,18 +49,12 @@ const AddLocationModal = {
         const path = this.pathInput.value.trim();
         if (!name || !path) return;
 
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
 
         if (this.onAdd) {
             const result = await this.onAdd({ name, path });
             if (result && result.error) {
-                if (this.errorEl) {
-                    this.errorEl.textContent = result.error;
-                    this.errorEl.classList.remove('hidden');
-                }
+                setDialogError(this.errorEl, result.error);
                 return;
             }
         }

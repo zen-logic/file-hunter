@@ -32,6 +32,8 @@ import RepairCatalog from './components/repaircatalog.js';
 import ScanConfirm from './components/scanconfirm.js';
 import Keyboard from './keyboard.js';
 import WS from './ws.js';
+import { wireModal } from './components/modal.js';
+import { esc } from './format.js';
 
 let currentUser = null;
 let selectedNode = null;
@@ -59,6 +61,46 @@ async function reloadTreeAndFileList(focusFileId) {
     }
 }
 
+/** Run a search from its first page and show the results; onError(message)
+ *  if it fails. */
+async function runSearch(params, onError) {
+    params.set('page', '0');
+    FileList.showLoading();
+    Detail.el.innerHTML = '';
+    const res = await API.get(`/api/search?${params.toString()}`);
+    if (res.ok) {
+        // Pass search params so FileList can re-fetch for paging/sorting
+        const searchParams = {};
+        for (const [k, v] of params.entries()) {
+            if (k !== 'page' && k !== 'sort' && k !== 'sortDir') searchParams[k] = v;
+        }
+        FileList.showSearchResults(res.data, searchParams);
+        Detail.renderSearchResults(res.data, searchParams);
+    } else {
+        FileList.renderEmpty();
+        onError(res.error);
+    }
+}
+
+/** After files or folders move: reload the tree, the open folder's list,
+ *  the stats and the details panel. */
+async function reloadAfterMove() {
+    const currentFolderId = selectedNode ? selectedNode.id : null;
+    await Tree.reload();
+    if (currentFolderId) {
+        selectedNode = Tree.findNode(currentFolderId);
+        await FileList.showFolder(currentFolderId);
+    }
+    await StatusBar.loadStats();
+    await refreshDetailPanel();
+}
+
+function clearFileSelection() {
+    selectedFile = null;
+    selectedFileDups = [];
+    consolidateBtn.disabled = true;
+}
+
 async function refreshDetailPanel() {
     // Don't overwrite search results detail panel with folder/location view
     if (FileList.searchMode && !selectedFile) return;
@@ -67,53 +109,117 @@ async function refreshDetailPanel() {
         selectedFileDups = Detail.getFileDups();
         consolidateBtn.disabled = selectedFileDups.length === 0;
         if (selectedFile.type === 'folder') {
-            wireMergeBtn(selectedFile);
-            wireNewFolderBtn(selectedFile);
-            wireDownloadZipBtn(selectedFile);
-            wireRenameFolderBtn(selectedFile);
-            wireMoveFolder(selectedFile);
-            wireDeleteFolderBtn(selectedFile);
+            wireListFolderBtns(selectedFile);
         } else {
-            wireDeleteFileBtn();
-            wireRenameFileBtn();
-            wireMoveFileBtn();
-            wireIgnoreFileBtn();
-            wireTranscodeBtn();
-            wireRawConvertBtn();
-            wireEmbeddingBtns();
+            wireFileBtns();
             wireFileSlideshowBtn(selectedFile);
         }
         if (result) updateLocationOnline(result.locationId, result.locationOnline);
     } else if (selectedNode) {
-        if (selectedNode.type === 'location') {
-            const result = await Detail.renderLocation(selectedNode);
-            wireDeleteLocationBtn();
-            wireRenameLocationBtn();
-            wireNewFolderBtn();
-            wireDownloadZipBtn();
-            wireMergeBtn();
-            wireTreemapBtn();
-            wireResetStaleBtn();
-            wireFavouriteBtn();
-            if (result && result.online !== undefined && result.online !== selectedNode.online) {
-                Tree.updateOnlineStatus([selectedNode.id], result.online);
-            }
-        } else {
-            const result = await Detail.renderFolder(selectedNode);
-            wireNewFolderBtn();
-            wireDownloadZipBtn();
-            wireMergeBtn();
-            wireTreemapBtn();
-            wireRenameFolderBtn();
-            wireMoveFolder();
-            wireDeleteFolderBtn();
-            wireResetStaleBtn();
-            wireFavouriteBtn();
-            if (result) updateLocationOnline(result.locationId, result.locationOnline);
-        }
+        await renderNodeDetail(selectedNode);
     } else {
         await Detail.renderDashboard();
     }
+}
+
+/** Wire the details panel's buttons for a single file. */
+function wireFileBtns() {
+    wireDeleteFileBtn();
+    wireRenameFileBtn();
+    wireMoveFileBtn();
+    wireIgnoreFileBtn();
+    wireTranscodeBtn();
+    wireRawConvertBtn();
+    wireEmbeddingBtns();
+}
+
+/** Wire the details panel's buttons for a folder selected in the file list. */
+function wireListFolderBtns(folder) {
+    wireMergeBtn(folder);
+    wireNewFolderBtn(folder);
+    wireDownloadZipBtn(folder);
+    wireRenameFolderBtn(folder);
+    wireMoveFolder(folder);
+    wireDeleteFolderBtn(folder);
+}
+
+/**
+ * Wire the details panel's buttons for the selected location or folder,
+ * and bring the tree's online state in line with what rendering it found.
+ */
+function wireNodeBtns(isLocation, node, result) {
+    wireNewFolderBtn();
+    wireDownloadZipBtn();
+    wireMergeBtn();
+    wireTreemapBtn();
+    wireResetStaleBtn();
+    wireFavouriteBtn();
+    if (isLocation) {
+        wireDeleteLocationBtn();
+        wireRenameLocationBtn();
+        if (result && result.online !== undefined && node && result.online !== node.online) {
+            Tree.updateOnlineStatus([node.id], result.online);
+        }
+    } else {
+        wireRenameFolderBtn();
+        wireMoveFolder();
+        wireDeleteFolderBtn();
+        if (result) updateLocationOnline(result.locationId, result.locationOnline);
+    }
+}
+
+/** Render the details panel for a location or folder node. */
+async function renderNodeDetail(node) {
+    const isLocation = node.type === 'location';
+    const result = isLocation
+        ? await Detail.renderLocation(node)
+        : await Detail.renderFolder(node);
+    wireNodeBtns(isLocation, node, result);
+}
+
+/** Show a location or folder: its files in the list, its details panel. */
+async function showNode(isLocation, node, detailNode, folderId) {
+    const [, result] = await Promise.all([
+        FileList.showFolder(folderId),
+        isLocation ? Detail.renderLocation(detailNode) : Detail.renderFolder(detailNode),
+    ]);
+    wireNodeBtns(isLocation, node, result);
+    wireSlideshowBtn();
+}
+
+/** Show one file (from the treemap or a link in the details panel) in its folder. */
+async function revealFile(fileId) {
+    Search.close();
+    const res = await API.get(`/api/files/${fileId}`);
+    if (!res.ok) return;
+    const detail = res.data;
+    const folderId = detail.folderId || detail.locationId;
+    if (folderId) {
+        const node = await Tree.revealNode(folderId);
+        if (node) {
+            selectedNode = node;
+            scanBtn.disabled = false;
+            Upload.updateState(node);
+        }
+    }
+    const fileItem = {
+        id: detail.id,
+        name: detail.name,
+        typeHigh: detail.typeHigh,
+        typeLow: detail.typeLow,
+        size: detail.size,
+        date: detail.date,
+        dups: (detail.duplicates || []).length,
+        hashStrong: detail.hashStrong,
+        hashFast: detail.hashFast,
+    };
+    FileList.showSingleFile(fileItem);
+    selectedFile = fileItem;
+    await Detail.renderFile(fileItem);
+    selectedFileDups = Detail.getFileDups();
+    consolidateBtn.disabled = selectedFileDups.length === 0;
+    wireFileBtns();
+    if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
 }
 
 function updateLocationOnline(locationId, online) {
@@ -422,7 +528,6 @@ function wireBatchActions(items) {
         return parseInt(String(i.id).replace('fld-', ''), 10);
     });
 
-    // Batch delete
     const deleteBtn = document.getElementById('batch-delete-btn');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', () => {
@@ -435,7 +540,6 @@ function wireBatchActions(items) {
         });
     }
 
-    // Batch move
     const moveBtn = document.getElementById('batch-move-btn');
     if (moveBtn) {
         moveBtn.addEventListener('click', () => {
@@ -471,7 +575,6 @@ function wireBatchActions(items) {
     const clearBtn = document.getElementById('batch-clear-btn');
     if (clearBtn) clearBtn.addEventListener('click', () => FileList.deselectAll());
 
-    // Batch rehash
     const rehashBtn = document.getElementById('batch-rehash-btn');
     if (rehashBtn && fileIds.length > 0) {
         rehashBtn.addEventListener('click', async () => {
@@ -488,7 +591,6 @@ function wireBatchActions(items) {
         });
     }
 
-    // Batch tag
     const tagAddBtn = document.getElementById('batch-tag-add');
     const tagInput = document.getElementById('batch-tag-input');
     if (tagAddBtn && tagInput) {
@@ -527,41 +629,7 @@ function startApp(user) {
     Keyboard.setSearchToggle(() => Search.toggle());
     Treemap.init({
         async onFileClick(fileId) {
-            Search.close();
-            const res = await API.get(`/api/files/${fileId}`);
-            if (!res.ok) return;
-            const detail = res.data;
-            const folderId = detail.folderId || detail.locationId;
-            if (folderId) {
-                const node = await Tree.revealNode(folderId);
-                if (node) {
-                    selectedNode = node;
-                    scanBtn.disabled = false;
-                    Upload.updateState(node);
-                }
-            }
-            const fileItem = {
-                id: detail.id,
-                name: detail.name,
-                typeHigh: detail.typeHigh,
-                typeLow: detail.typeLow,
-                size: detail.size,
-                date: detail.date,
-                dups: (detail.duplicates || []).length,
-            };
-            FileList.showSingleFile(fileItem);
-            selectedFile = fileItem;
-            await Detail.renderFile(fileItem);
-            selectedFileDups = Detail.getFileDups();
-            consolidateBtn.disabled = selectedFileDups.length === 0;
-            wireDeleteFileBtn();
-            wireRenameFileBtn();
-            wireMoveFileBtn();
-            wireIgnoreFileBtn();
-            wireTranscodeBtn();
-            wireRawConvertBtn();
-            wireEmbeddingBtns();
-            if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
+            await revealFile(fileId);
         },
     });
     Keyboard.setSelectAllHandler(() => FileList.selectAll());
@@ -594,14 +662,9 @@ function startApp(user) {
     // Scan warnings dialog
     const scanWarningsModal = document.getElementById('scan-warnings-modal');
     const closeScanWarnings = () => scanWarningsModal.classList.add('hidden');
-    document.getElementById('scan-warnings-close').addEventListener('click', closeScanWarnings);
-    scanWarningsModal.addEventListener('click', (e) => {
-        if (e.target === scanWarningsModal) closeScanWarnings();
-    });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && !scanWarningsModal.classList.contains('hidden')) {
-            closeScanWarnings();
-        }
+    wireModal(scanWarningsModal, {
+        close: closeScanWarnings,
+        cancelBtn: document.getElementById('scan-warnings-close'),
     });
 
     // Apply server name to title + check similarity availability
@@ -712,7 +775,7 @@ DeleteLocationModal.init(async (node) => {
     const locId = node.id.replace('loc-', '');
     const res = await API.delete(`/api/locations/${locId}`);
     if (res.ok) {
-        ActivityLog.add(`Location deleted: <b>${node.label}</b>`);
+        ActivityLog.add(`Location deleted: <b>${esc(node.label)}</b>`);
         Toast.success(`Location deleted: ${node.label}`);
         selectedNode = null;
         selectedFile = null;
@@ -743,9 +806,7 @@ DeleteFileModal.init(async (item) => {
         if (res.ok) {
             ActivityLog.add(`Folder deleted: <b>${item.name || item.label}</b> (${res.data.file_count} files)`);
             Toast.success(`Deleted folder: ${item.name || item.label}`);
-            selectedFile = null;
-            selectedFileDups = [];
-            consolidateBtn.disabled = true;
+            clearFileSelection();
             if (selectedNode && (selectedNode.id === item.id || selectedNode.id === `fld-${folderId}`)) {
                 selectedNode = null;
                 scanBtn.disabled = true;
@@ -765,15 +826,13 @@ DeleteFileModal.init(async (item) => {
         const res = await API.delete(url);
         if (res.ok) {
             if (item.deleteAllDuplicates && res.data.deleted_count > 1) {
-                ActivityLog.add(`File deleted: <b>${item.name}</b> and ${res.data.deleted_count - 1} duplicate(s)`);
+                ActivityLog.add(`File deleted: <b>${esc(item.name)}</b> and ${res.data.deleted_count - 1} duplicate(s)`);
                 Toast.success(`Deleted ${item.name} and ${res.data.deleted_count - 1} duplicate(s)`);
             } else {
-                ActivityLog.add(`File deleted: <b>${item.name}</b>`);
+                ActivityLog.add(`File deleted: <b>${esc(item.name)}</b>`);
                 Toast.success(`Deleted: ${item.name}`);
             }
-            selectedFile = null;
-            selectedFileDups = [];
-            consolidateBtn.disabled = true;
+            clearFileSelection();
             if (selectedNode) {
                 await FileList.showFolder(selectedNode.id);
             }
@@ -800,23 +859,13 @@ RenameLocationModal.init(async (node, newName) => {
     if (!res.ok) {
         return { error: res.error || 'Rename failed.' };
     }
-    ActivityLog.add(`Location renamed: <b>${node.label}</b> &rarr; <b>${newName}</b>`);
+    ActivityLog.add(`Location renamed: <b>${esc(node.label)}</b> &rarr; <b>${newName}</b>`);
     Toast.success(`Location renamed to ${newName}`);
     if (selectedNode && selectedNode.id === node.id) {
         selectedNode.label = newName;
     }
     await Tree.reload();
-    if (selectedNode) {
-        await Detail.renderLocation(selectedNode);
-        wireDeleteLocationBtn();
-        wireRenameLocationBtn();
-        wireNewFolderBtn();
-        wireDownloadZipBtn();
-        wireMergeBtn();
-        wireTreemapBtn();
-        wireResetStaleBtn();
-        wireFavouriteBtn();
-    }
+    if (selectedNode) await renderNodeDetail(selectedNode);
     return { ok: true };
 });
 
@@ -825,7 +874,7 @@ NewFolderModal.init(async (parentNode, name) => {
     if (!res.ok) {
         return { error: res.error || 'Failed to create folder.' };
     }
-    ActivityLog.add(`Folder created: <b>${name}</b>`);
+    ActivityLog.add(`Folder created: <b>${esc(name)}</b>`);
     Toast.success(`Folder created: ${name}`);
     await Tree.reload();
     if (selectedNode) {
@@ -840,7 +889,7 @@ RenameFileModal.init(async (file, newName) => {
     if (!res.ok) {
         return { error: res.error || 'Rename failed.' };
     }
-    ActivityLog.add(`File renamed: <b>${file.name}</b> &rarr; <b>${newName}</b>`);
+    ActivityLog.add(`File renamed: <b>${esc(file.name)}</b> &rarr; <b>${newName}</b>`);
     Toast.success(`File renamed to ${newName}`);
     if (selectedNode) {
         await FileList.showFolder(selectedNode.id);
@@ -883,17 +932,8 @@ MoveFileModal.init(async (item, destinationFolderId, copy) => {
         const d = res.data;
         ActivityLog.add(`Batch ${verb}: <b>${d.moved_files} files, ${d.moved_folders} folders</b>`);
         Toast.success(`${Verb} ${d.moved_files} files, ${d.moved_folders} folders`);
-        selectedFile = null;
-        selectedFileDups = [];
-        consolidateBtn.disabled = true;
-        const currentFolderId = selectedNode ? selectedNode.id : null;
-        await Tree.reload();
-        if (currentFolderId) {
-            selectedNode = Tree.findNode(currentFolderId);
-            await FileList.showFolder(currentFolderId);
-        }
-        await StatusBar.loadStats();
-        await refreshDetailPanel();
+        clearFileSelection();
+        await reloadAfterMove();
         return { ok: true };
     }
 
@@ -909,15 +949,8 @@ MoveFileModal.init(async (item, destinationFolderId, copy) => {
         }
         ActivityLog.add(`Folder ${verb}: <b>${item.name || item.label}</b>`);
         Toast.success(`Folder ${verb}: ${item.name || item.label}`);
-        selectedFile = null;
-        selectedFileDups = [];
-        consolidateBtn.disabled = true;
-        await Tree.reload();
-        if (selectedNode) {
-            await FileList.showFolder(selectedNode.id);
-        }
-        await StatusBar.loadStats();
-        await refreshDetailPanel();
+        clearFileSelection();
+        await reloadAfterMove();
         return { ok: true };
     }
 
@@ -928,17 +961,10 @@ MoveFileModal.init(async (item, destinationFolderId, copy) => {
     if (!res.ok) {
         return { error: res.error || `${noun} failed.` };
     }
-    ActivityLog.add(`File ${verb}: <b>${item.name}</b>`);
+    ActivityLog.add(`File ${verb}: <b>${esc(item.name)}</b>`);
     Toast.success(`File ${verb}: ${item.name}`);
-    selectedFile = null;
-    selectedFileDups = [];
-    consolidateBtn.disabled = true;
-    await Tree.reload();
-    if (selectedNode) {
-        await FileList.showFolder(selectedNode.id);
-    }
-    await StatusBar.loadStats();
-    await refreshDetailPanel();
+    clearFileSelection();
+    await reloadAfterMove();
     return { ok: true };
 });
 
@@ -950,10 +976,8 @@ function wireFileSlideshowBtn(file) {
     const searchId = FileList.searchId;
     if (!folderId && !searchId) return;
     slot.innerHTML = `<button class="btn btn-sm" id="detail-file-slideshow" style="margin-top:0.4rem">Slideshow</button>`;
-    document.getElementById('detail-file-slideshow').addEventListener('click', async () => {
-        const btn = document.getElementById('detail-file-slideshow');
-        btn.disabled = true;
-        btn.textContent = 'Loading…';
+    const btn = document.getElementById('detail-file-slideshow');
+    btn.addEventListener('click', () => {
         const params = {
             mode: 'slideshow',
             startAt: file.id,
@@ -967,11 +991,7 @@ function wireFileSlideshowBtn(file) {
             params.type = 'folder';
             params.folderId = folderId;
         }
-        await Detail.startSlideshow(params);
-        if (Detail.slideshowTotal === 0) {
-            btn.textContent = 'No images';
-            setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
-        }
+        Detail.startFromButton(btn, params, 'No images');
     });
 }
 
@@ -988,29 +1008,18 @@ function wireSlideshowBtn() {
     if (hasImages) html += `<button class="btn btn-sm" id="detail-slideshow">Slideshow</button>`;
     if (hasVideo) html += `<button class="btn btn-sm" id="detail-playlist">Playlist</button>`;
     slot.innerHTML = html;
+    const folderParams = (mode) => ({
+        type: 'folder', folderId, mode, sort: FileList.sortKey, sortDir: FileList.sortDirStr(),
+    });
     if (hasImages) {
-        document.getElementById('detail-slideshow').addEventListener('click', async () => {
-            const btn = document.getElementById('detail-slideshow');
-            btn.disabled = true;
-            btn.textContent = 'Loading\u2026';
-            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'slideshow', sort: FileList.sortKey, sortDir: FileList.sortDirStr() });
-            if (Detail.slideshowTotal === 0) {
-                btn.textContent = 'No images available';
-                setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
-            }
-        });
+        const btn = document.getElementById('detail-slideshow');
+        btn.addEventListener('click', () => Detail.startFromButton(
+            btn, folderParams('slideshow'), 'No images available'));
     }
     if (hasVideo) {
-        document.getElementById('detail-playlist').addEventListener('click', async () => {
-            const btn = document.getElementById('detail-playlist');
-            btn.disabled = true;
-            btn.textContent = 'Loading\u2026';
-            await Detail.startSlideshow({ type: 'folder', folderId, mode: 'playlist', sort: FileList.sortKey, sortDir: FileList.sortDirStr() });
-            if (Detail.slideshowTotal === 0) {
-                btn.textContent = 'No videos available';
-                setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);
-            }
-        });
+        const btn = document.getElementById('detail-playlist');
+        btn.addEventListener('click', () => Detail.startFromButton(
+            btn, folderParams('playlist'), 'No videos available'));
     }
 }
 
@@ -1086,37 +1095,7 @@ Tree.init(async (node) => {
         contentSearchPanel.classList.add('hidden');
         contentSearchBtn.classList.remove('btn-active');
     }
-    const detailPromise = node.type === 'location'
-        ? Detail.renderLocation(node)
-        : Detail.renderFolder(node);
-    const [, result] = await Promise.all([
-        FileList.showFolder(node.id),
-        detailPromise,
-    ]);
-    if (node.type === 'location') {
-        wireDeleteLocationBtn();
-        wireRenameLocationBtn();
-        wireNewFolderBtn();
-        wireDownloadZipBtn();
-        wireMergeBtn();
-        wireTreemapBtn();
-        wireResetStaleBtn();
-        wireFavouriteBtn();
-        if (result && result.online !== undefined && result.online !== node.online) {
-            Tree.updateOnlineStatus([node.id], result.online);
-        }
-    } else {
-        wireNewFolderBtn();
-        wireDownloadZipBtn();
-        wireMergeBtn();
-        wireRenameFolderBtn();
-        wireMoveFolder();
-        wireDeleteFolderBtn();
-        wireResetStaleBtn();
-        wireFavouriteBtn();
-        if (result) updateLocationOnline(result.locationId, result.locationOnline);
-    }
-    wireSlideshowBtn();
+    await showNode(node.type === 'location', node, node, node.id);
 }, () => {
     selectedNode = null;
     setLocationHash(null);
@@ -1141,9 +1120,7 @@ document.getElementById('tree-header-label').addEventListener('click', () => {
 FileList.init(async (file) => {
     // Favourite items are folder/location nodes — select in tree and show detail panel
     if (file.type === 'folder' && (String(file.id).startsWith('fld-') || String(file.id).startsWith('loc-'))) {
-        selectedFile = null;
-        selectedFileDups = [];
-        consolidateBtn.disabled = true;
+        clearFileSelection();
         const node = await Tree.revealNode(file.id);
         if (node) {
             selectedNode = node;
@@ -1159,20 +1136,9 @@ FileList.init(async (file) => {
     selectedFileDups = Detail.getFileDups();
     consolidateBtn.disabled = selectedFileDups.length === 0;
     if (file.type === 'folder') {
-        wireMergeBtn(file);
-        wireNewFolderBtn(file);
-        wireDownloadZipBtn(file);
-        wireRenameFolderBtn(file);
-        wireMoveFolder(file);
-        wireDeleteFolderBtn(file);
+        wireListFolderBtns(file);
     } else {
-        wireDeleteFileBtn();
-        wireRenameFileBtn();
-        wireMoveFileBtn();
-        wireIgnoreFileBtn();
-        wireTranscodeBtn();
-        wireRawConvertBtn();
-        wireEmbeddingBtns();
+        wireFileBtns();
         wireFileSlideshowBtn(file);
     }
     if (result) {
@@ -1187,9 +1153,7 @@ FileList.init(async (file) => {
         }
     }
 }, async (folder) => {
-    selectedFile = null;
-    selectedFileDups = [];
-    consolidateBtn.disabled = true;
+    clearFileSelection();
     const isLocation = String(folder.id).startsWith('loc-');
     const node = await Tree.revealNode(folder.id);
     if (node) {
@@ -1200,69 +1164,11 @@ FileList.init(async (file) => {
         Search.setScopeContext(node);
         updateSimilarityScope(node);
     }
-    if (isLocation) {
-        const [, result] = await Promise.all([
-            FileList.showFolder(folder.id),
-            Detail.renderLocation(node || folder),
-        ]);
-        wireDeleteLocationBtn();
-        wireRenameLocationBtn();
-        wireNewFolderBtn();
-        wireDownloadZipBtn();
-        wireMergeBtn();
-        wireTreemapBtn();
-        wireResetStaleBtn();
-        wireFavouriteBtn();
-        if (result && result.online !== undefined && node && result.online !== node.online) {
-            Tree.updateOnlineStatus([node.id], result.online);
-        }
-        wireSlideshowBtn();
-    } else {
-        const [, result] = await Promise.all([
-            FileList.showFolder(folder.id),
-            Detail.renderFolder(folder),
-        ]);
-        wireNewFolderBtn();
-        wireDownloadZipBtn();
-        wireMergeBtn();
-        wireRenameFolderBtn();
-        wireMoveFolder();
-        wireDeleteFolderBtn();
-        wireResetStaleBtn();
-        wireFavouriteBtn();
-        if (result) updateLocationOnline(result.locationId, result.locationOnline);
-        wireSlideshowBtn();
-    }
+    await showNode(isLocation, node, isLocation ? (node || folder) : folder, folder.id);
 }, async () => {
-    selectedFile = null;
-    selectedFileDups = [];
-    consolidateBtn.disabled = true;
+    clearFileSelection();
     if (selectedNode) {
-        if (selectedNode.type === 'location') {
-            const result = await Detail.renderLocation(selectedNode);
-            wireDeleteLocationBtn();
-            wireRenameLocationBtn();
-            wireNewFolderBtn();
-            wireDownloadZipBtn();
-            wireMergeBtn();
-            wireTreemapBtn();
-            wireResetStaleBtn();
-            wireFavouriteBtn();
-            if (result && result.online !== undefined && result.online !== selectedNode.online) {
-                Tree.updateOnlineStatus([selectedNode.id], result.online);
-            }
-        } else {
-            const result = await Detail.renderFolder(selectedNode);
-            wireNewFolderBtn();
-            wireDownloadZipBtn();
-            wireMergeBtn();
-            wireRenameFolderBtn();
-            wireMoveFolder();
-            wireDeleteFolderBtn();
-            wireResetStaleBtn();
-            wireFavouriteBtn();
-            if (result) updateLocationOnline(result.locationId, result.locationOnline);
-        }
+        await renderNodeDetail(selectedNode);
     } else {
         await Detail.renderDashboard();
     }
@@ -1306,42 +1212,7 @@ Detail.init({
         FileList.showDuplicateGroup(hash, fileId);
     },
     async onNavigateToFile(fileId) {
-        Search.close();
-        const res = await API.get(`/api/files/${fileId}`);
-        if (!res.ok) return;
-        const detail = res.data;
-        const folderId = detail.folderId || detail.locationId;
-        if (folderId) {
-            const node = await Tree.revealNode(folderId);
-            if (node) {
-                selectedNode = node;
-                scanBtn.disabled = false;
-                Upload.updateState(node);
-            }
-        }
-        const fileItem = {
-            id: detail.id,
-            name: detail.name,
-            typeHigh: detail.typeHigh,
-            typeLow: detail.typeLow,
-            size: detail.size,
-            date: detail.date,
-            dups: (detail.duplicates || []).length,
-            hashStrong: detail.hashStrong,
-        };
-        FileList.showSingleFile(fileItem);
-        selectedFile = fileItem;
-        await Detail.renderFile(fileItem);
-        selectedFileDups = Detail.getFileDups();
-        consolidateBtn.disabled = selectedFileDups.length === 0;
-        wireDeleteFileBtn();
-        wireRenameFileBtn();
-        wireMoveFileBtn();
-        wireIgnoreFileBtn();
-        wireTranscodeBtn();
-        wireRawConvertBtn();
-        wireEmbeddingBtns();
-        if (detail.locationId) updateLocationOnline(detail.locationId, detail.locationOnline);
+        await revealFile(fileId);
     },
 });
 
@@ -1350,7 +1221,7 @@ AddLocationModal.init(async ({ name, path }) => {
     if (!res.ok) {
         return { error: res.error || 'Failed to add location.' };
     }
-    ActivityLog.add(`Location added: <b>${name}</b>`);
+    ActivityLog.add(`Location added: <b>${esc(name)}</b>`);
     Toast.success(`Location added: ${name}`);
     await Tree.reload();
     return { ok: true };
@@ -1428,27 +1299,12 @@ Search.init({
             params.set('scopeType', values.scopeType);
             params.set('scopeId', values.scopeId);
         }
-        params.set('page', '0');
-        FileList.showLoading();
-        Detail.el.innerHTML = '';
-        const res = await API.get(`/api/search?${params.toString()}`);
-        if (res.ok) {
-            // Pass search params so FileList can re-fetch for paging/sorting
-            const searchParams = {};
-            for (const [k, v] of params.entries()) {
-                if (k !== 'page' && k !== 'sort' && k !== 'sortDir') searchParams[k] = v;
-            }
-            FileList.showSearchResults(res.data, searchParams);
-            Detail.renderSearchResults(res.data, searchParams);
-        } else {
-            FileList.renderEmpty();
-            ConfirmModal.open({
-                title: 'Search Error',
-                message: res.error || 'Search failed.',
-                confirmLabel: 'OK',
-                alert: true,
-            });
-        }
+        await runSearch(params, (error) => ConfirmModal.open({
+            title: 'Search Error',
+            message: error || 'Search failed.',
+            confirmLabel: 'OK',
+            alert: true,
+        }));
     },
     onClear() {
         if (selectedNode) {
@@ -1806,21 +1662,7 @@ document.getElementById('content-search-go').addEventListener('click', async () 
         const csLocIds = csLoc.getIds();
         if (csLocIds) params.set('semanticLocations', csLocIds.join(','));
     }
-    params.set('page', '0');
-    FileList.showLoading();
-    Detail.el.innerHTML = '';
-    const res = await API.get(`/api/search?${params.toString()}`);
-    if (res.ok) {
-        const searchParams = {};
-        for (const [k, v] of params.entries()) {
-            if (k !== 'page' && k !== 'sort' && k !== 'sortDir') searchParams[k] = v;
-        }
-        FileList.showSearchResults(res.data, searchParams);
-        Detail.renderSearchResults(res.data, searchParams);
-    } else {
-        FileList.renderEmpty();
-        Toast.error(res.error || 'Content search failed.');
-    }
+    await runSearch(params, (error) => Toast.error(error || 'Content search failed.'));
 });
 
 document.getElementById('content-search-clear').addEventListener('click', () => {
@@ -1886,7 +1728,7 @@ WS.on('scan_started', (msg) => {
         label: `Scanning: ${msg.location}`,
         detail: 'starting...',
         locationId: msg.locationId,
-        log: `Scan started: <b>${msg.location}</b>`,
+        log: `Scan started: <b>${esc(msg.location)}</b>`,
     });
     updateLocationOnline(msg.locationId, true);
     Tree.setScanningLocation(msg.locationId);
@@ -1972,7 +1814,7 @@ WS.on('location_children', async (msg) => {
 WS.on('scan_completed', async (msg) => {
     let logText;
     if (msg.error) {
-        logText = `Scan failed: <b>${msg.location}</b> — ${msg.error}`;
+        logText = `Scan failed: <b>${esc(msg.location)}</b> — ${esc(msg.error)}`;
         Toast.error(`Scan failed: ${msg.location} — ${msg.error}`);
         Activity.completed('scan-' + msg.locationId, { log: logText });
         Tree.clearScanningLocation(msg.locationId);
@@ -1986,12 +1828,12 @@ WS.on('scan_completed', async (msg) => {
         if (msg.newFolders) parts.push(`${msg.newFolders} new folders`);
         if (msg.recoveredFiles) parts.push(`${msg.recoveredFiles} recovered`);
         const detail = parts.length ? parts.join(', ') : 'no changes';
-        logText = `Quick scan completed: <b>${msg.location}</b> — ${detail}`;
+        logText = `Quick scan completed: <b>${esc(msg.location)}</b> — ${detail}`;
         if (parts.length) Toast.success(`Quick scan completed: ${msg.location} — ${detail}`);
     } else {
         const skippedPart = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
         const stalePart = msg.staleFiles ? `, ${msg.staleFiles.toLocaleString()} stale` : '';
-        logText = `Scan completed: <b>${msg.location}</b> — ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedPart}, ${(msg.duplicatesFound || 0).toLocaleString()} duplicates${stalePart}`;
+        logText = `Scan completed: <b>${esc(msg.location)}</b> — ${(msg.filesHashed || 0).toLocaleString()} hashed${skippedPart}, ${(msg.duplicatesFound || 0).toLocaleString()} duplicates${stalePart}`;
         Toast.success(`Scan completed: ${msg.location}`);
     }
     Activity.completed('scan-' + msg.locationId, { log: logText });
@@ -2010,7 +1852,7 @@ WS.on('scan_completed', async (msg) => {
         const list = document.getElementById('scan-warnings-list');
         summary.textContent = `${msg.location} — ${warnings.length} warning${warnings.length === 1 ? '' : 's'}`;
         list.innerHTML = warnings.map(w =>
-            `<div class="scan-warning-line">${w.path}<br><span class="settings-hint">${w.message}</span></div>`
+            `<div class="scan-warning-line">${esc(w.path)}<br><span class="settings-hint">${esc(w.message)}</span></div>`
         ).join('');
         overlay.classList.remove('hidden');
     }
@@ -2019,7 +1861,7 @@ WS.on('scan_completed', async (msg) => {
 WS.on('scan_finalizing', (msg) => {
     Activity.progress('scan-' + msg.locationId, {
         detail: 'finalizing...',
-        log: `Scan finalizing: <b>${msg.location}</b> — marking stale files`,
+        log: `Scan finalizing: <b>${esc(msg.location)}</b> — marking stale files`,
     });
     Tree.clearScanningLocation(msg.locationId);
 });
@@ -2027,7 +1869,7 @@ WS.on('scan_finalizing', (msg) => {
 WS.on('scan_cancelled', async (msg) => {
     const skippedPart = msg.filesSkipped ? `, ${msg.filesSkipped.toLocaleString()} skipped` : '';
     Activity.completed('scan-' + msg.locationId, {
-        log: `Scan cancelled: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} hashed${skippedPart} before cancel`,
+        log: `Scan cancelled: <b>${esc(msg.location)}</b> — ${msg.filesHashed.toLocaleString()} hashed${skippedPart} before cancel`,
     });
     Toast.info(`Scan cancelled: ${msg.location}`);
     Tree.clearScanningLocation(msg.locationId);
@@ -2037,7 +1879,7 @@ WS.on('scan_cancelled', async (msg) => {
 
 WS.on('scan_interrupted', async (msg) => {
     Activity.error('scan-' + msg.locationId, {
-        log: `Scan interrupted: <b>${msg.location}</b> — agent disconnected, will resume automatically`,
+        log: `Scan interrupted: <b>${esc(msg.location)}</b> — agent disconnected, will resume automatically`,
     });
     Toast.info(`Scan interrupted: ${msg.location} — will resume when agent reconnects`);
     Tree.clearScanningLocation(msg.locationId);
@@ -2045,7 +1887,7 @@ WS.on('scan_interrupted', async (msg) => {
 
 WS.on('scan_error', (msg) => {
     Activity.error('scan-' + msg.locationId, {
-        log: `Scan error: <b>${msg.location}</b> — ${msg.error}`,
+        log: `Scan error: <b>${esc(msg.location)}</b> — ${esc(msg.error)}`,
     });
     Tree.clearScanningLocation(msg.locationId);
     Toast.error(`Scan error: ${msg.error}`);
@@ -2122,12 +1964,12 @@ WS.on('scan_queued', (msg) => {
     } else if (q && q.running_location_ids && q.running_location_ids.length > 0) {
         reason = ' (waiting for current operation to finish)';
     }
-    ActivityLog.add(`Scan queued: <b>${msg.entry.name}</b>${reason}`);
+    ActivityLog.add(`Scan queued: <b>${esc(msg.entry.name)}</b>${reason}`);
 });
 
 WS.on('scan_dequeued', (msg) => {
     syncQueuedLocations(msg.queue);
-    ActivityLog.add(`Scan dequeued: <b>${msg.entry.name}</b>`);
+    ActivityLog.add(`Scan dequeued: <b>${esc(msg.entry.name)}</b>`);
     Toast.info(`Scan dequeued: ${msg.entry.name}`);
 });
 
@@ -2137,7 +1979,7 @@ WS.on('scan_queue_updated', (msg) => {
 
 WS.on('scan_queue_skipped', (msg) => {
     syncQueuedLocations(msg.queue);
-    ActivityLog.add(`Scan skipped (${msg.reason}): <b>${msg.entry.name}</b>`);
+    ActivityLog.add(`Scan skipped (${msg.reason}): <b>${esc(msg.entry.name)}</b>`);
     Toast.info(`Scan skipped: ${msg.entry.name} — ${msg.reason}`);
 });
 
@@ -2150,7 +1992,7 @@ WS.on('queue_paused', (msg) => {
         ActivityLog.add(`Operations paused: ${verb.toLowerCase()} folder ${prep} duplicates`);
         startDupExcludePoll();
     } else {
-        ActivityLog.add(`Operations paused: importing <b>${msg.location}</b>`);
+        ActivityLog.add(`Operations paused: importing <b>${esc(msg.location)}</b>`);
     }
 });
 
@@ -2171,7 +2013,7 @@ WS.on('backfill_started', (msg) => {
         label: `Hashing: ${msg.location}`,
         detail: statusDetail,
         locationId: msg.locationId,
-        log: `Hash backfill started: <b>${msg.location}</b> — ${logDetail}`,
+        log: `Hash backfill started: <b>${esc(msg.location)}</b> — ${logDetail}`,
     });
     Tree.setBackfillingLocation(msg.locationId);
 });
@@ -2190,7 +2032,7 @@ WS.on('backfill_progress', (msg) => {
         detail = `${msg.filesHashed.toLocaleString()}/${msg.totalFiles.toLocaleString()}`;
     }
     const log = !msg.phase
-        ? `Hash backfill: <b>${msg.location}</b> — ${msg.filesHashed.toLocaleString()} / ${msg.totalFiles.toLocaleString()} files`
+        ? `Hash backfill: <b>${esc(msg.location)}</b> — ${msg.filesHashed.toLocaleString()} / ${msg.totalFiles.toLocaleString()} files`
         : undefined;
     Activity.progress('backfill-' + msg.locationId, { detail, log });
     Tree.setBackfillingLocation(msg.locationId);
@@ -2204,7 +2046,7 @@ WS.on('backfill_completed', async (msg) => {
         : 'no matches found';
     const label = msg.cancelled ? 'Hash backfill cancelled' : 'Hash backfill completed';
     Activity.completed('backfill-' + msg.locationId, {
-        log: `${label}: <b>${msg.location}</b> — ${summary}`,
+        log: `${esc(label)}: <b>${esc(msg.location)}</b> — ${summary}`,
     });
     Tree.clearBackfillingLocation(msg.locationId);
     await StatusBar.loadStats();
@@ -2357,7 +2199,7 @@ WS.on('location_changed', async (msg) => {
 WS.on('import_completed', async (msg) => {
     Tree.clearScanningLocation(msg.locationId);
     Activity.completed('import-' + msg.locationId, {
-        log: `Location imported: <b>${msg.location}</b>`,
+        log: `Location imported: <b>${esc(msg.location)}</b>`,
     });
     Toast.success(`Import completed: ${msg.location}`);
     await Tree.reload();
@@ -2367,7 +2209,7 @@ WS.on('import_completed', async (msg) => {
 });
 
 WS.on('location_deleting', (msg) => {
-    ActivityLog.add(`Deleting location: <b>${msg.name}</b>...`);
+    ActivityLog.add(`Deleting location: <b>${esc(msg.name)}</b>...`);
     Tree.setDeletingLocation(msg.locationId);
     // If viewing the deleting location, clear panels
     if (selectedNode && selectedNode.id === msg.locationId) {
@@ -2381,7 +2223,7 @@ WS.on('location_deleting', (msg) => {
 });
 
 WS.on('location_deleted', async (msg) => {
-    ActivityLog.add(`Location deleted: <b>${msg.name}</b>`);
+    ActivityLog.add(`Location deleted: <b>${esc(msg.name)}</b>`);
     Toast.success(`Location deleted: ${msg.name}`);
     Tree.clearDeletingLocation(msg.locationId);
     if (selectedNode && selectedNode.id === msg.locationId) {
@@ -2420,9 +2262,7 @@ WS.on('repair_failed', () => {
 
 WS.on('file_deleted', async (msg) => {
     if (selectedFile && selectedFile.id === msg.fileId) {
-        selectedFile = null;
-        selectedFileDups = [];
-        consolidateBtn.disabled = true;
+        clearFileSelection();
     }
     await StatusBar.loadStats();
     if (selectedNode) await FileList.showFolder(selectedNode.id);
@@ -2443,24 +2283,15 @@ WS.on('folder_moved', async (msg) => {
 
 WS.on('file_moved', async (msg) => {
     if (selectedFile && selectedFile.id === msg.fileId) {
-        selectedFile = null;
-        selectedFileDups = [];
-        consolidateBtn.disabled = true;
+        clearFileSelection();
     }
-    const currentFolderId = selectedNode ? selectedNode.id : null;
-    await Tree.reload();
-    if (currentFolderId) {
-        selectedNode = Tree.findNode(currentFolderId);
-        await FileList.showFolder(currentFolderId);
-    }
-    await StatusBar.loadStats();
-    await refreshDetailPanel();
+    await reloadAfterMove();
 });
 
 WS.on('deferred_op_created', async (msg) => {
     const label = msg.opType === 'delete' ? 'deletion' : msg.opType === 'move' ? 'move' : msg.opType;
     Toast.info(`${msg.filename}: ${label} queued for when location comes online`);
-    ActivityLog.add(`Deferred ${label}: <b>${msg.filename}</b>`);
+    ActivityLog.add(`Deferred ${esc(label)}: <b>${esc(msg.filename)}</b>`);
     await StatusBar.loadStats();
     if (selectedNode) await FileList.showFolder(selectedNode.id);
     await refreshDetailPanel();
@@ -2526,16 +2357,17 @@ WS.on('stale_reset_error', (msg) => {
 });
 
 WS.on('transcode_started', (msg) => {
-    ActivityLog.add(`Queued for conversion: <b>${msg.filename}</b>`);
+    ActivityLog.add(`Queued for conversion: <b>${esc(msg.filename)}</b>`);
 });
 
 WS.on('transcode_progress', () => {
     // Progress shown via server_activity — nothing to do here
 });
 
-WS.on('transcode_complete', async (msg) => {
-    ActivityLog.add(`Conversion complete: <b>${msg.filename}</b>`);
-    Toast.success(`Conversion complete: ${msg.filename}`);
+/** A transcode or raw conversion finished: its output is in the folder. */
+async function conversionComplete(label, msg) {
+    ActivityLog.add(`${esc(label)} complete: <b>${esc(msg.filename)}</b>`);
+    Toast.success(`${label} complete: ${msg.filename}`);
     const viewingFolder = FileList.currentFolder === `fld-${msg.folderId}`
         || FileList.currentFolder === `loc-${msg.locationId}`;
     if (viewingFolder) {
@@ -2544,7 +2376,9 @@ WS.on('transcode_complete', async (msg) => {
         await refreshDetailPanel();
     }
     await StatusBar.loadStats();
-});
+}
+
+WS.on('transcode_complete', (msg) => conversionComplete('Conversion', msg));
 
 WS.on('transcode_error', (msg) => {
     Toast.error(`Conversion failed: ${msg.error}`);
@@ -2557,25 +2391,14 @@ WS.on('transcode_cancelled', (msg) => {
 });
 
 WS.on('rawconvert_started', (msg) => {
-    ActivityLog.add(`Queued for raw conversion: <b>${msg.filename}</b>`);
+    ActivityLog.add(`Queued for raw conversion: <b>${esc(msg.filename)}</b>`);
 });
 
 WS.on('rawconvert_progress', () => {
     // Progress shown via server_activity — nothing to do here
 });
 
-WS.on('rawconvert_complete', async (msg) => {
-    ActivityLog.add(`Raw conversion complete: <b>${msg.filename}</b>`);
-    Toast.success(`Raw conversion complete: ${msg.filename}`);
-    const viewingFolder = FileList.currentFolder === `fld-${msg.folderId}`
-        || FileList.currentFolder === `loc-${msg.locationId}`;
-    if (viewingFolder) {
-        if (msg.fileId) FileList.pendingFocusFile = msg.fileId;
-        await FileList.refreshFolder();
-        await refreshDetailPanel();
-    }
-    await StatusBar.loadStats();
-});
+WS.on('rawconvert_complete', (msg) => conversionComplete('Raw conversion', msg));
 
 WS.on('rawconvert_error', (msg) => {
     Toast.error(`Raw conversion failed: ${msg.error}`);
@@ -2583,15 +2406,15 @@ WS.on('rawconvert_error', (msg) => {
 });
 
 WS.on('embed_started', (msg) => {
-    ActivityLog.add(`Embedding: <b>${msg.filename}</b>`);
+    ActivityLog.add(`Embedding: <b>${esc(msg.filename)}</b>`);
 });
 
 WS.on('embed_completed', (msg) => {
     if (msg.error) {
-        ActivityLog.add(`Embedding failed: <b>${msg.filename}</b> — ${msg.error}`);
+        ActivityLog.add(`Embedding failed: <b>${esc(msg.filename)}</b> — ${esc(msg.error)}`);
         Toast.error(`Embedding failed: ${msg.filename}`);
     } else {
-        ActivityLog.add(`Embedded: <b>${msg.filename}</b> (${msg.chunks} chunks)`);
+        ActivityLog.add(`Embedded: <b>${esc(msg.filename)}</b> (${msg.chunks} chunks)`);
         Toast.success(`Embedded: ${msg.filename} (${msg.chunks} chunks)`);
         // Update embed button if this file is currently selected
         if (Detail.lastDetail && Detail.lastDetail.id === msg.fileId) {
@@ -2603,16 +2426,16 @@ WS.on('embed_completed', (msg) => {
 });
 
 WS.on('extract_started', (msg) => {
-    ActivityLog.add(`Extracting to markdown: <b>${msg.filename}</b>`);
+    ActivityLog.add(`Extracting to markdown: <b>${esc(msg.filename)}</b>`);
 });
 
 WS.on('extract_completed', async (msg) => {
     if (msg.error) {
-        ActivityLog.add(`Extraction failed: <b>${msg.filename}</b> — ${msg.error}`);
+        ActivityLog.add(`Extraction failed: <b>${esc(msg.filename)}</b> — ${esc(msg.error)}`);
         Toast.error(`Extraction failed: ${msg.filename}. ${msg.error}`);
         return;
     }
-    ActivityLog.add(`Extracted: <b>${msg.filename}</b> to <b>${msg.newFilename}</b>`);
+    ActivityLog.add(`Extracted: <b>${esc(msg.filename)}</b> to <b>${msg.newFilename}</b>`);
     Toast.success(`Extracted: ${msg.newFilename}`);
     const viewingFolder = FileList.currentFolder === `fld-${msg.folderId}`
         || FileList.currentFolder === `loc-${msg.locationId}`;
@@ -2652,7 +2475,7 @@ WS.on('batch_tag_completed', async (msg) => {
     const verb = (msg.add_tags || []).length ? 'Tagged' : 'Untagged';
     // Additions propagate to duplicates; removals apply only to the selection.
     const extra = dups > 0 ? ` + ${dups} duplicate${dups !== 1 ? 's' : ''}` : '';
-    ActivityLog.add(`${verb} <b>${n} file${n !== 1 ? 's' : ''}${extra}</b> with ${label}`);
+    ActivityLog.add(`${verb} <b>${n} file${n !== 1 ? 's' : ''}${extra}</b> with ${esc(label)}`);
     Toast.success(`${verb} ${n} file${n !== 1 ? 's' : ''}${extra}`);
     await refreshDetailPanel();
 });
@@ -2677,19 +2500,10 @@ WS.on('zip_progress', (msg) => {
 
 WS.on('zip_ready', (msg) => {
     Activity.completed('zip-' + msg.jobId, {
-        log: `ZIP ready: <b>${msg.filename}</b>`,
+        log: `ZIP ready: <b>${esc(msg.filename)}</b>`,
     });
     Toast.success(`ZIP ready: ${msg.filename}`);
-    // Trigger download via direct link
-    const token = localStorage.getItem('fh-token');
-    let url = `/api/zip/${msg.jobId}/download`;
-    if (token) url += `?token=${encodeURIComponent(token)}`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = msg.filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    API.download(`/api/zip/${msg.jobId}/download`, msg.filename);
     if (pendingZipBtn) {
         pendingZipBtn.disabled = false;
         pendingZipBtn.textContent = pendingZipOrigText;
@@ -2699,7 +2513,7 @@ WS.on('zip_ready', (msg) => {
 
 WS.on('zip_error', (msg) => {
     Activity.error('zip-' + msg.jobId, {
-        log: `ZIP build failed: <b>${msg.filename}</b>`,
+        log: `ZIP build failed: <b>${esc(msg.filename)}</b>`,
     });
     Toast.error(`ZIP build failed: ${msg.filename}`);
     if (pendingZipBtn) {
@@ -2728,7 +2542,7 @@ WS.on('consolidate_started', (msg) => {
     Activity.started('consolidate', {
         label: 'Consolidating',
         detail: msg.filename,
-        log: `Consolidation started: <b>${msg.filename}</b>`,
+        log: `Consolidation started: <b>${esc(msg.filename)}</b>`,
     });
     if (msg.locationId) Tree.setMergingLocation(msg.locationId, 'consolidating...');
 });
@@ -2749,12 +2563,10 @@ WS.on('consolidate_completed', async (msg) => {
     if (msg.destLocationId) Tree.clearMergingLocation(msg.destLocationId);
     if (msg.batch) return; // batch_consolidate_completed handles UI
     Activity.completed('consolidate', {
-        log: `Consolidation completed: <b>${msg.filename}</b> — ${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued`,
+        log: `Consolidation completed: <b>${esc(msg.filename)}</b> — ${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued`,
     });
     Toast.success(`Consolidation completed: ${msg.filename}`);
-    selectedFile = null;
-    selectedFileDups = [];
-    consolidateBtn.disabled = true;
+    clearFileSelection();
     await StatusBar.loadStats();
     await reloadTreeAndFileList();
     await refreshDetailPanel();
@@ -2767,7 +2579,7 @@ WS.on('consolidate_error', (msg) => {
         detail += ` (${msg.stubsWritten} stubs written, ${msg.stubsQueued} queued before error)`;
     }
     Activity.error('consolidate', {
-        log: `Consolidation error: <b>${msg.filename}</b> — ${detail}`,
+        log: `Consolidation error: <b>${esc(msg.filename)}</b> — ${esc(detail)}`,
     });
     Toast.error(`Consolidation error: ${msg.error}`);
 });
@@ -2839,7 +2651,7 @@ WS.on('upload_started', (msg) => {
     Activity.started('upload', {
         label: `Uploading: ${msg.location}`,
         detail: `${msg.fileCount} file(s)...`,
-        log: `Upload started: <b>${msg.location}</b> — ${msg.fileCount} file(s)`,
+        log: `Upload started: <b>${esc(msg.location)}</b> — ${msg.fileCount} file(s)`,
     });
 });
 
@@ -2849,12 +2661,12 @@ WS.on('upload_progress', (msg) => {
 
 WS.on('upload_duplicate', (msg) => {
     Toast.info(`Duplicate: ${msg.filename} — already in ${msg.existingLocation}`);
-    ActivityLog.add(`Upload duplicate: <b>${msg.filename}</b> — exists in ${msg.existingLocation}`);
+    ActivityLog.add(`Upload duplicate: <b>${esc(msg.filename)}</b> — exists in ${msg.existingLocation}`);
 });
 
 WS.on('upload_file_error', (msg) => {
     Toast.error(`Upload error: ${msg.filename} — ${msg.error}`);
-    ActivityLog.add(`Upload error: <b>${msg.filename}</b> — ${msg.error}`);
+    ActivityLog.add(`Upload error: <b>${esc(msg.filename)}</b> — ${esc(msg.error)}`);
 });
 
 WS.on('file_freshness', (msg) => {
@@ -2883,7 +2695,7 @@ WS.on('file_added', (msg) => {
 
 WS.on('upload_completed', async (msg) => {
     Activity.completed('upload', {
-        log: `Upload completed: <b>${msg.location}</b> — ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`,
+        log: `Upload completed: <b>${esc(msg.location)}</b> — ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`,
     });
     Toast.success(`Upload completed: ${msg.cataloged} cataloged, ${msg.duplicates} duplicates`);
     await StatusBar.loadStats();
@@ -2896,7 +2708,7 @@ WS.on('merge_started', (msg) => {
     Activity.started('merge', {
         label: `${verb}: ${msg.source} → ${msg.destination}`,
         detail: 'starting...',
-        log: `${verb} started: <b>${msg.source}</b> → <b>${msg.destination}</b>`,
+        log: `${verb} started: <b>${esc(msg.source)}</b> → <b>${esc(msg.destination)}</b>`,
     });
     const badge = msg.mode === 'copy' ? 'copying...' : 'merging...';
     if (msg.srcLocationId) Tree.setMergingLocation(msg.srcLocationId, badge);
@@ -2921,7 +2733,7 @@ WS.on('merge_completed', async (msg) => {
     if (msg.filesSkipped > 0) parts.push(`${msg.filesSkipped} skipped`);
     const verb = msg.mode === 'copy' ? 'Copy' : 'Merge';
     Activity.completed('merge', {
-        log: `${verb} completed: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${parts.join(', ')}`,
+        log: `${verb} completed: <b>${esc(msg.source)}</b> → <b>${esc(msg.destination)}</b> — ${parts.join(', ')}`,
     });
     Toast.success(`${verb} completed: ${parts.join(', ')}`);
     await StatusBar.loadStats();
@@ -2937,7 +2749,7 @@ WS.on('merge_cancelled', async (msg) => {
     if (msg.duplicate > 0) parts.push(`${msg.duplicate} duplicate`);
     const detail = parts.length > 0 ? ` — ${parts.join(', ')} before cancel` : '';
     Activity.completed('merge', {
-        log: `Merge cancelled: <b>${msg.source}</b> → <b>${msg.destination}</b>${detail}`,
+        log: `Merge cancelled: <b>${esc(msg.source)}</b> → <b>${esc(msg.destination)}</b>${detail}`,
     });
     Toast.info(`Merge cancelled: ${msg.source} → ${msg.destination}`);
     await StatusBar.loadStats();
@@ -2949,7 +2761,7 @@ WS.on('merge_error', (msg) => {
     if (msg.srcLocationId) Tree.clearMergingLocation(msg.srcLocationId);
     if (msg.destLocationId) Tree.clearMergingLocation(msg.destLocationId);
     Activity.error('merge', {
-        log: `Merge error: <b>${msg.source}</b> → <b>${msg.destination}</b> — ${msg.error}`,
+        log: `Merge error: <b>${esc(msg.source)}</b> → <b>${esc(msg.destination)}</b> — ${esc(msg.error)}`,
     });
     Toast.error(`Merge error: ${msg.error}`);
 });

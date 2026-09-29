@@ -1,5 +1,7 @@
 import API from '../api.js';
 import icons from '../icons.js';
+import { wireModal } from './modal.js';
+import { revealExpanded } from './folderpicker.js';
 
 const FSBrowser = {
     overlay: null,
@@ -20,16 +22,12 @@ const FSBrowser = {
         this.cancelBtn = document.getElementById('fs-browser-cancel');
         this.selectBtn = document.getElementById('fs-browser-select');
 
-        this.cancelBtn.addEventListener('click', () => this.close());
-        this.overlay.addEventListener('click', (e) => {
-            if (e.target === this.overlay) this.close();
+        wireModal(this.overlay, {
+            close: () => this.close(),
+            submit: () => this.doSelect(),
+            cancelBtn: this.cancelBtn,
+            submitBtn: this.selectBtn,
         });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlay.classList.contains('hidden')) {
-                this.close();
-            }
-        });
-        this.selectBtn.addEventListener('click', () => this.doSelect());
     },
 
     async open(initialPath, onSelect, browseUrl) {
@@ -110,7 +108,6 @@ const FSBrowser = {
         icon.innerHTML = depth === 0 ? icons.location : icons.folder;
         div.appendChild(icon);
 
-        // Label
         const label = document.createElement('span');
         label.className = 'ct-label';
         label.textContent = entry.name;
@@ -131,17 +128,7 @@ const FSBrowser = {
                     this.renderTree(); // show spinner immediately
                     await this.loadEntries(entry.path);
                     this.renderTree(); // replace spinner with children
-                    const sel = this.treeContainer.querySelector('.ct-selected');
-                    if (sel) {
-                        const selDepth = sel.querySelectorAll('.ct-indent').length;
-                        let last = sel;
-                        let sib = sel.nextElementSibling;
-                        while (sib && sib.querySelectorAll('.ct-indent').length > selDepth) {
-                            last = sib;
-                            sib = sib.nextElementSibling;
-                        }
-                        if (last !== sel) last.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-                    }
+                    revealExpanded(this.treeContainer);
                     return;
                 }
             } else {

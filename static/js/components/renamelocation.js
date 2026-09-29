@@ -1,3 +1,4 @@
+import { wireModal, setDialogError } from './modal.js';
 const RenameLocationModal = {
     overlayEl: null,
     nameInput: null,
@@ -11,31 +12,19 @@ const RenameLocationModal = {
         this.errorEl = document.getElementById('rename-loc-error');
         this.onConfirm = onConfirm;
 
-        document.getElementById('rename-loc-cancel').addEventListener('click', () => this.close());
-        document.getElementById('rename-loc-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this.close();
-            }
-        });
-
-        this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.confirm();
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            enterFrom: [this.nameInput],
+            cancelBtn: document.getElementById('rename-loc-cancel'),
+            submitBtn: document.getElementById('rename-loc-submit'),
         });
     },
 
     open(node) {
         this.node = node;
         this.nameInput.value = node.label;
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
         this.overlayEl.classList.remove('hidden');
         this.nameInput.focus();
         this.nameInput.select();
@@ -51,17 +40,11 @@ const RenameLocationModal = {
         if (!newName) return;
         if (!this.node || !this.onConfirm) return;
 
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
 
         const result = await this.onConfirm(this.node, newName);
         if (result && result.error) {
-            if (this.errorEl) {
-                this.errorEl.textContent = result.error;
-                this.errorEl.classList.remove('hidden');
-            }
+            setDialogError(this.errorEl, result.error);
             return;
         }
         this.close();

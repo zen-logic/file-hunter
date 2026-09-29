@@ -12,25 +12,25 @@ starts mid-batch.
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 
+from file_hunter.core import cancel_task
 from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import open_hashes_connection, remove_location_hashes
-from file_hunter.helpers import post_op_stats
-from file_hunter.services.activity import register as _act_reg, unregister as _act_unreg
+from file_hunter.helpers import post_op_stats, utc_now
+from file_hunter.services.activity import register as act_reg, unregister as act_unreg
 from file_hunter.services.agent_ops import delete_agent_location, invalidate_loc_cache
 from file_hunter.services.dup_counts import post_ingest_dup_processing
-from file_hunter.services.location_delete import _collect_affected_hashes
-from file_hunter.services.queue_manager import _running_ops, _paused
+from file_hunter.services.location_delete import collect_affected_hashes
+from file_hunter.services.queue_manager import running_ops, paused
 from file_hunter.stats_db import remove_location_stats
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
 
-_running = False
-_task: asyncio.Task | None = None
+running = False
+loop_task: asyncio.Task | None = None
 
-_SCHEMA = """
+SCHEMA = """
 CREATE TABLE IF NOT EXISTS housekeeping_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
@@ -50,7 +50,7 @@ PURGE_BATCH = 500
 async def init_schema():
     """Create the housekeeping table if it doesn't exist."""
     async with db_writer() as db:
-        await db.executescript(_SCHEMA)
+        await db.executescript(SCHEMA)
 
 
 async def enqueue(task_type: str, agent_id: int | None, params: dict):
@@ -59,48 +59,40 @@ async def enqueue(task_type: str, agent_id: int | None, params: dict):
         await db.execute(
             "INSERT INTO housekeeping_queue (type, agent_id, params, created_at) "
             "VALUES (?, ?, ?, ?)",
-            (task_type, agent_id, json.dumps(params), _now()),
+            (task_type, agent_id, json.dumps(params), utc_now()),
         )
 
 
 def start():
     """Start the housekeeping background loop."""
-    global _running, _task
-    _running = True
-    _task = asyncio.create_task(_run())
+    global running, loop_task
+    running = True
+    loop_task = asyncio.create_task(run())
 
 
 async def stop():
     """Stop the housekeeping loop gracefully."""
-    global _running, _task
-    _running = False
-    if _task and not _task.done():
-        _task.cancel()
-        try:
-            await _task
-        except (asyncio.CancelledError, Exception):
-            pass
-    _task = None
+    global running, loop_task
+    running = False
+    await cancel_task(loop_task)
+    loop_task = None
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-
-def _is_idle() -> bool:
+def is_idle() -> bool:
     """Check if the system is idle — no user operations running."""
     # Queue is paused = import has exclusive access
-    if _paused:
+    if paused:
         return False
 
     # Any queue operations running
-    if _running_ops:
+    if running_ops:
         return False
 
     return True
 
 
-async def _has_pending_primary_ops() -> bool:
+async def has_pending_primary_ops() -> bool:
     """Check if primary queue has pending operations."""
     async with read_db() as db:
         rows = await db.execute_fetchall(
@@ -109,7 +101,7 @@ async def _has_pending_primary_ops() -> bool:
     return rows[0]["c"] > 0
 
 
-async def _recover_interrupted():
+async def recover_interrupted():
     """On startup, reset any 'running' housekeeping tasks back to 'pending'."""
     async with db_writer() as db:
         cursor = await db.execute(
@@ -153,20 +145,20 @@ async def _recover_interrupted():
             )
 
 
-async def _run():
+async def run():
     """Main loop — poll for housekeeping tasks, run when idle."""
-    await _recover_interrupted()
-    await _enqueue_dup_candidates()
+    await recover_interrupted()
+    await enqueue_dup_candidates()
 
-    while _running:
+    while running:
         try:
             # Only run when system is idle
-            if not _is_idle():
+            if not is_idle():
                 await asyncio.sleep(2)
                 continue
 
             # Check for pending primary ops too
-            if await _has_pending_primary_ops():
+            if await has_pending_primary_ops():
                 await asyncio.sleep(2)
                 continue
 
@@ -191,7 +183,7 @@ async def _run():
                 await db.execute(
                     "UPDATE housekeeping_queue SET status = 'running', started_at = ? "
                     "WHERE id = ?",
-                    (_now(), task_id),
+                    (utc_now(), task_id),
                 )
 
             act_label = f"Housekeeping: {task_type}"
@@ -201,16 +193,16 @@ async def _run():
             await broadcast({"type": "activity", "message": act_label})
             logger.info("Housekeeping: starting %s (id=%d) %s", task_type, task_id, params)
 
-            _act_reg(f"housekeeping-{task_id}", act_label)
+            act_reg(f"housekeeping-{task_id}", act_label)
 
             try:
-                await _execute(task_type, task_id, task["agent_id"], params)
+                await execute(task_type, task_id, task["agent_id"], params)
 
                 async with db_writer() as db:
                     await db.execute(
                         "UPDATE housekeeping_queue SET status = 'completed', "
                         "completed_at = ? WHERE id = ?",
-                        (_now(), task_id),
+                        (utc_now(), task_id),
                     )
                 logger.info("Housekeeping: completed %s (id=%d)", task_type, task_id)
 
@@ -220,10 +212,10 @@ async def _run():
                     await db.execute(
                         "UPDATE housekeeping_queue SET status = 'failed', "
                         "completed_at = ?, error = ? WHERE id = ?",
-                        (_now(), str(e), task_id),
+                        (utc_now(), str(e), task_id),
                     )
             finally:
-                _act_unreg(f"housekeeping-{task_id}")
+                act_unreg(f"housekeeping-{task_id}")
 
             # Check if queue is now empty
             async with read_db() as db:
@@ -241,17 +233,17 @@ async def _run():
             await asyncio.sleep(5)
 
 
-async def _execute(task_type: str, task_id: int, agent_id: int | None, params: dict):
+async def execute(task_type: str, task_id: int, agent_id: int | None, params: dict):
     """Dispatch a housekeeping task to its handler."""
     if task_type == "purge_location":
-        await _run_purge_location(task_id, agent_id, params)
+        await run_purge_location(task_id, agent_id, params)
     elif task_type == "process_dup_candidates":
-        await _run_dup_candidates(task_id, agent_id, params)
+        await run_dup_candidates(task_id, agent_id, params)
     else:
         raise ValueError(f"Unknown housekeeping task type: {task_type}")
 
 
-async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
+async def run_purge_location(task_id: int, agent_id: int | None, params: dict):
     """Purge a deleted location's data from all three databases.
 
     Batched at PURGE_BATCH rows, with idle check between batches.
@@ -281,12 +273,12 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
                     (
                         agent_id,
                         root_path,
-                        datetime.now(timezone.utc).isoformat(),
+                        utc_now("auto"),
                     ),
                 )
 
     # Collect affected hashes before deletion (for dup recount after)
-    affected_fast, affected_strong = await _collect_affected_hashes(location_id)
+    affected_fast, affected_strong = await collect_affected_hashes(location_id)
     logger.info(
         "Housekeeping purge #%d: %d affected hash_fast, %d affected hash_strong",
         location_id,
@@ -300,7 +292,7 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
 
     # Batch-delete files — check idle between batches
     while True:
-        if not _is_idle():
+        if not is_idle():
             await asyncio.sleep(2)
             continue
 
@@ -317,7 +309,7 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
 
     # Batch-delete folders
     while True:
-        if not _is_idle():
+        if not is_idle():
             await asyncio.sleep(2)
             continue
 
@@ -365,7 +357,7 @@ async def _run_purge_location(task_id: int, agent_id: int | None, params: dict):
     )
 
 
-async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
+async def run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
     """Process unprocessed dup candidates for a location."""
     location_id = params["location_id"]
     location_name = params.get("location_name", f"location {location_id}")
@@ -415,7 +407,7 @@ async def _run_dup_candidates(task_id: int, agent_id: int | None, params: dict):
     )
 
 
-async def _enqueue_dup_candidates():
+async def enqueue_dup_candidates():
     """On startup, check for locations with unprocessed dup candidates and enqueue."""
     hconn = await open_hashes_connection()
     try:

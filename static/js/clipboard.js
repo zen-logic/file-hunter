@@ -28,7 +28,7 @@ export async function copyText(text, btn) {
     if (btn) {
         if (!btn.dataset.label) btn.dataset.label = btn.textContent;
         btn.textContent = 'Copied';
-        clearTimeout(btn._copiedTimer);
-        btn._copiedTimer = setTimeout(() => { btn.textContent = btn.dataset.label; }, 2000);
+        clearTimeout(btn.copiedTimer);
+        btn.copiedTimer = setTimeout(() => { btn.textContent = btn.dataset.label; }, 2000);
     }
 }

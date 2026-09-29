@@ -1,9 +1,16 @@
 """Shared helper functions — eliminates repeated patterns across services."""
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
+from file_hunter.db import in_folder_tree, id_batches
 from file_hunter.hashes_db import get_file_hashes, read_hashes
+
+
+def utc_now(timespec: str = "seconds") -> str:
+    """The current UTC time as ISO 8601, to the second by default.
+    Pass "auto" for full precision (what datetime.isoformat() gives)."""
+    return datetime.now(timezone.utc).isoformat(timespec=timespec)
 
 
 def parse_mtime(value) -> float | None:
@@ -162,9 +169,7 @@ async def expand_to_duplicates(file_ids: list[int]) -> set[int]:
     async with read_hashes() as hdb:
         for column, hashes in by_column.items():
             hash_list = list(hashes)
-            for i in range(0, len(hash_list), 500):
-                batch = hash_list[i : i + 500]
-                placeholders = ",".join("?" for _ in batch)
+            for batch, placeholders in id_batches(hash_list):
                 rows = await hdb.execute_fetchall(
                     f"SELECT file_id FROM active_hashes "
                     f"WHERE {column} IN ({placeholders})",
@@ -234,3 +239,36 @@ async def resolve_target(db, prefixed_id: str) -> dict | None:
         "name": fld["name"],
         "location_name": fld["location_name"],
     }
+
+
+async def catalog_rel_paths(db, location_id: int, folder_id=None) -> set[str]:
+    """Lower-cased rel_paths of the live files in a location, for unique_rel_name.
+
+    With folder_id, only that folder and its descendants.
+    """
+    if folder_id:
+        rows = await db.execute_fetchall(
+            f"""SELECT fi.rel_path FROM files fi
+               WHERE fi.location_id = ? AND fi.stale = 0
+                 AND {in_folder_tree("fi.folder_id")}""",
+            (location_id, folder_id),
+        )
+    else:
+        rows = await db.execute_fetchall(
+            "SELECT rel_path FROM files WHERE location_id = ? AND stale = 0",
+            (location_id,),
+        )
+    return {r["rel_path"].lower() for r in rows}
+
+
+def unique_rel_name(taken: set[str], rel_dir: str, filename: str) -> str:
+    """filename, or name_1.ext, name_2.ext... if rel_dir/filename is in taken.
+
+    taken is from catalog_rel_paths; the comparison is case-insensitive.
+    """
+    base, ext = os.path.splitext(filename)
+    name, counter = filename, 1
+    while os.path.join(rel_dir, name).lower() in taken:
+        name = f"{base}_{counter}{ext}"
+        counter += 1
+    return name

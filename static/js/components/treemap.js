@@ -1,13 +1,7 @@
 import API from '../api.js';
+import { formatSize, esc } from '../format.js';
+import { wireModal } from './modal.js';
 
-function formatSize(bytes) {
-    if (bytes === null || bytes === undefined || bytes === 0) return '0 B';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    if (bytes < 1099511627776) return (bytes / 1073741824).toFixed(1) + ' GB';
-    return (bytes / 1099511627776).toFixed(1) + ' TB';
-}
 
 const Treemap = {
     modal: null,
@@ -25,14 +19,9 @@ const Treemap = {
         this.breadcrumbEl = document.getElementById('treemap-breadcrumb');
         this.container = document.getElementById('treemap-container');
 
-        this.closeBtn.addEventListener('click', () => this.close());
-        this.modal.addEventListener('click', (e) => {
-            if (e.target === this.modal) this.close();
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.modal.classList.contains('hidden')) {
-                this.close();
-            }
+        wireModal(this.modal, {
+            close: () => this.close(),
+            cancelBtn: this.closeBtn,
         });
     },
 
@@ -79,11 +68,11 @@ const Treemap = {
         const segments = breadcrumb.map((entry, i) => {
             const isLast = i === breadcrumb.length - 1;
             if (isLast) {
-                return `<span class="treemap-bc-segment treemap-bc-current">${entry.name}</span>`;
+                return `<span class="treemap-bc-segment treemap-bc-current">${esc(entry.name)}</span>`;
             }
             const dataId = typeof entry.id === 'string' && entry.id.startsWith('loc-')
                 ? 'null' : entry.id;
-            return `<span class="treemap-bc-segment treemap-bc-link" data-parent-id="${dataId}">${entry.name}</span>`;
+            return `<span class="treemap-bc-segment treemap-bc-link" data-parent-id="${dataId}">${esc(entry.name)}</span>`;
         });
         this.breadcrumbEl.innerHTML = segments.join('<span class="treemap-bc-sep">/</span>');
 

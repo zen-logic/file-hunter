@@ -1,3 +1,4 @@
+import { wireModal, setDialogError } from './modal.js';
 const RenameFileModal = {
     overlayEl: null,
     nameInput: null,
@@ -11,21 +12,12 @@ const RenameFileModal = {
         this.errorEl = document.getElementById('rename-file-error');
         this.onConfirm = onConfirm;
 
-        document.getElementById('rename-file-cancel').addEventListener('click', () => this.close());
-        document.getElementById('rename-file-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this.close();
-            }
-        });
-
-        this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.confirm();
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            enterFrom: [this.nameInput],
+            cancelBtn: document.getElementById('rename-file-cancel'),
+            submitBtn: document.getElementById('rename-file-submit'),
         });
     },
 
@@ -33,10 +25,7 @@ const RenameFileModal = {
         this.file = file;
         const name = file.name || '';
         this.nameInput.value = name;
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
         this.overlayEl.classList.remove('hidden');
         this.nameInput.focus();
         // Select filename without extension
@@ -58,17 +47,11 @@ const RenameFileModal = {
         if (!newName) return;
         if (!this.file || !this.onConfirm) return;
 
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
 
         const result = await this.onConfirm(this.file, newName);
         if (result && result.error) {
-            if (this.errorEl) {
-                this.errorEl.textContent = result.error;
-                this.errorEl.classList.remove('hidden');
-            }
+            setDialogError(this.errorEl, result.error);
             return;
         }
         this.close();

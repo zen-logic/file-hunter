@@ -1,9 +1,9 @@
 """Agent registry — CRUD and token management."""
 
 import secrets
-from datetime import datetime, timezone
 
 from file_hunter.services.auth import hash_password
+from file_hunter.helpers import utc_now
 
 
 async def create_agent(db, name: str) -> dict:
@@ -11,7 +11,7 @@ async def create_agent(db, name: str) -> dict:
     token = secrets.token_hex(32)
     token_hash = hash_password(token)
     token_prefix = token[:8]
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now("auto")
 
     cursor = await db.execute(
         "INSERT INTO agents (name, token_hash, token_prefix, date_created) VALUES (?, ?, ?, ?)",
@@ -64,7 +64,6 @@ async def update_agent(db, agent_id: int, name: str):
 
 
 async def delete_agent(db, agent_id: int):
-    """Delete an agent."""
     await db.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
     await db.commit()
 

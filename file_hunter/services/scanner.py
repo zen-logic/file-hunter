@@ -11,7 +11,7 @@ from file_hunter.hashes_db import mark_hashes_stale
 log = logging.getLogger("file_hunter")
 
 
-async def _mark_stale_files(
+async def mark_stale_files(
     db, location_id: int, scan_id: int, scan_prefix: str | None = None
 ) -> int:
     """Mark files not seen in this scan as stale. Returns count.
@@ -53,7 +53,7 @@ async def _mark_stale_files(
     return cursor.rowcount
 
 
-async def _ensure_folder_hierarchy(
+async def ensure_folder_hierarchy(
     db, location_id: int, rel_dir_path: str, folder_cache: dict[str, tuple]
 ) -> tuple[int, int]:
     """Create/find folder records for a full relative directory path.
@@ -107,96 +107,7 @@ async def _ensure_folder_hierarchy(
     return parent_id, leaf_dup_exclude
 
 
-async def _upsert_file(
-    db,
-    *,
-    location_id: int,
-    scan_id: int,
-    filename: str,
-    full_path: str,
-    rel_path: str,
-    folder_id: int | None,
-    file_size: int,
-    created_date: str,
-    modified_date: str,
-    file_type_high: str,
-    file_type_low: str,
-    now_iso: str,
-    hidden: int = 0,
-    dup_exclude: int = 0,
-    inode: int = 0,
-) -> int:
-    """Insert or update a file record. Preserves description on update.
-
-    Tags are untouched — they live in file_tags, keyed on the file id this
-    returns, so an update never disturbs them.
-
-    Hashes are NOT written here — they belong in hashes.db only.
-    """
-    row = await db.execute_fetchall(
-        "SELECT id FROM files WHERE location_id = ? AND rel_path = ?",
-        (location_id, rel_path),
-    )
-    if row:
-        file_id = row[0]["id"]
-        await db.execute(
-            """UPDATE files SET
-                filename=?, full_path=?, folder_id=?,
-                file_type_high=?, file_type_low=?, file_size=?,
-                created_date=?, modified_date=?,
-                date_last_seen=?, scan_id=?, stale=0, hidden=?, dup_exclude=?,
-                inode=?
-               WHERE id=?""",
-            (
-                filename,
-                full_path,
-                folder_id,
-                file_type_high,
-                file_type_low,
-                file_size,
-                created_date,
-                modified_date,
-                now_iso,
-                scan_id,
-                hidden,
-                dup_exclude,
-                inode,
-                file_id,
-            ),
-        )
-        return file_id
-    else:
-        cursor = await db.execute(
-            """INSERT INTO files
-               (filename, full_path, rel_path, location_id, folder_id,
-                file_type_high, file_type_low, file_size,
-                description,
-                created_date, modified_date, date_cataloged, date_last_seen,
-                scan_id, stale, hidden, dup_exclude, inode)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
-            (
-                filename,
-                full_path,
-                rel_path,
-                location_id,
-                folder_id,
-                file_type_high,
-                file_type_low,
-                file_size,
-                created_date,
-                modified_date,
-                now_iso,
-                now_iso,
-                scan_id,
-                hidden,
-                dup_exclude,
-                inode,
-            ),
-        )
-        return cursor.lastrowid
-
-
-async def _mark_stale_folders(
+async def mark_stale_folders(
     db, location_id: int, seen_rel_paths: set[str], scan_prefix: str | None = None
 ) -> int:
     """Mark folders not seen on disk as stale. Clear stale on folders that are back.
@@ -225,9 +136,3 @@ async def _mark_stale_folders(
             stale_count += 1
     return stale_count
 
-
-# Public aliases for pro/extension reuse (keep _-prefixed originals intact)
-ensure_folder_hierarchy = _ensure_folder_hierarchy
-upsert_file = _upsert_file
-mark_stale_files = _mark_stale_files
-mark_stale_folders = _mark_stale_folders

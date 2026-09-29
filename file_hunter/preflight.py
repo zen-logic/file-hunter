@@ -14,9 +14,10 @@ from file_hunter.config import load_config
 from file_hunter.db import close_db, get_db
 from file_hunter.services.agents import ensure_local_agent
 from file_hunter.services.settings import get_setting
+from file_hunter.services.similarity import ensure_chromadb
 
 
-async def _run(base_dir: Path):
+async def run(base_dir: Path):
     # Ensure data directory exists
     data_dir = base_dir / "data"
     data_dir.mkdir(exist_ok=True)
@@ -46,7 +47,6 @@ async def _run(base_dir: Path):
 
     # Install chromadb if similarity search is enabled
     if await get_setting(db, "similaritySearchEnabled") == "1":
-        from file_hunter.services.similarity import ensure_chromadb
         ensure_chromadb()
 
     await close_db()
@@ -56,7 +56,7 @@ async def _run(base_dir: Path):
 
 def main():
     base_dir = Path(__file__).resolve().parent.parent
-    has_agent = asyncio.run(_run(base_dir))
+    has_agent = asyncio.run(run(base_dir))
     sys.exit(0 if has_agent else 1)
 
 

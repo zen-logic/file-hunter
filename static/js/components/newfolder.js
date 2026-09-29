@@ -1,3 +1,4 @@
+import { wireModal, setDialogError } from './modal.js';
 const NewFolderModal = {
     overlayEl: null,
     nameInput: null,
@@ -11,31 +12,19 @@ const NewFolderModal = {
         this.errorEl = document.getElementById('new-folder-error');
         this.onConfirm = onConfirm;
 
-        document.getElementById('new-folder-cancel').addEventListener('click', () => this.close());
-        document.getElementById('new-folder-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this.close();
-            }
-        });
-
-        this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.confirm();
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            enterFrom: [this.nameInput],
+            cancelBtn: document.getElementById('new-folder-cancel'),
+            submitBtn: document.getElementById('new-folder-submit'),
         });
     },
 
     open(parentNode) {
         this.parentNode = parentNode;
         this.nameInput.value = '';
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
         this.overlayEl.classList.remove('hidden');
         this.nameInput.focus();
     },
@@ -57,10 +46,7 @@ const NewFolderModal = {
         if (result && result.error) {
             this.open(parentNode);
             this.nameInput.value = name;
-            if (this.errorEl) {
-                this.errorEl.textContent = result.error;
-                this.errorEl.classList.remove('hidden');
-            }
+            setDialogError(this.errorEl, result.error);
         }
     },
 };

@@ -8,30 +8,31 @@ are serialized. All state is in the DB — survives restarts.
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 
 import httpx
 
+from file_hunter.core import cancel_task
 from file_hunter.db import db_writer, read_db
 from file_hunter.services.activity import op_label, register, unregister
 from file_hunter.services.dup_counts import run_hash_file
 from file_hunter.ws.scan import broadcast
+from file_hunter.helpers import utc_now
 
 logger = logging.getLogger("file_hunter")
 
-_running = False
-_task: asyncio.Task | None = None
-_paused = False
+running = False
+loop_task: asyncio.Task | None = None
+paused = False
 
 # Event that running operations await between iterations.
 # Set = running normally. Cleared = suspended (pause active).
-_pause_event: asyncio.Event = asyncio.Event()
-_pause_event.set()  # start in running state
+pause_event: asyncio.Event = asyncio.Event()
+pause_event.set()  # start in running state
 
 # Running operations: op_id -> (agent_id, asyncio.Task)
-_running_ops: dict[int, tuple[int | None, asyncio.Task]] = {}
+running_ops: dict[int, tuple[int | None, asyncio.Task]] = {}
 # Running operation types: op_id -> op_type string
-_running_op_types: dict[int, str] = {}
+running_op_types: dict[int, str] = {}
 
 
 async def enqueue(op_type: str, agent_id: int | None, params: dict) -> int:
@@ -47,22 +48,16 @@ async def enqueue(op_type: str, agent_id: int | None, params: dict) -> int:
     Returns:
         int: The auto-generated operation ID (operation_queue.id).
 
-    Side effects:
-        Writes to operation_queue table via db_writer. Broadcasts
-        scan_queue_updated to all connected browsers.
-
     Notes:
-        Called from HTTP endpoints (scan, backfill) and internal services.
-        The queue manager main loop picks up pending ops automatically.
     """
     async with db_writer() as db:
         cursor = await db.execute(
             "INSERT INTO operation_queue (type, agent_id, params, created_at) "
             "VALUES (?, ?, ?, ?)",
-            (op_type, agent_id, json.dumps(params), _now()),
+            (op_type, agent_id, json.dumps(params), utc_now("auto")),
         )
         op_id = cursor.lastrowid
-    await _broadcast_queue_state()
+    await broadcast_queue_state()
     return op_id
 
 
@@ -73,21 +68,21 @@ async def cancel(op_id: int) -> bool:
     Running: cancels the executing task (triggers CancelledError in the handler).
     Returns True if the operation was found and cancelled.
     """
-    if op_id in _running_ops:
-        _, task = _running_ops[op_id]
+    if op_id in running_ops:
+        _, task = running_ops[op_id]
         task.cancel()
-        # broadcast happens when _reap_finished picks up the CancelledError
+        # broadcast happens when reap_finished picks up the CancelledError
         return True
 
     async with db_writer() as db:
         cursor = await db.execute(
             "UPDATE operation_queue SET status = 'cancelled', completed_at = ? "
             "WHERE id = ? AND status = 'pending'",
-            (_now(), op_id),
+            (utc_now("auto"), op_id),
         )
         changed = cursor.rowcount
     if changed > 0:
-        await _broadcast_queue_state()
+        await broadcast_queue_state()
         return True
     return False
 
@@ -96,7 +91,7 @@ async def cancel_by_location(location_id: int) -> bool:
     """Cancel a running or pending operation for a location. Returns True if found."""
     async with read_db() as db:
         # Check running ops first
-        for op_id, (_, task) in list(_running_ops.items()):
+        for op_id, (_, task) in list(running_ops.items()):
             row = await db.execute_fetchall(
                 "SELECT params FROM operation_queue WHERE id = ?", (op_id,)
             )
@@ -104,7 +99,7 @@ async def cancel_by_location(location_id: int) -> bool:
                 params = json.loads(row[0]["params"] or "{}")
                 if params.get("location_id") == location_id:
                     task.cancel()
-                    # broadcast happens when _reap_finished picks up the CancelledError
+                    # broadcast happens when reap_finished picks up the CancelledError
                     return True
 
         # Check pending ops
@@ -118,9 +113,9 @@ async def cancel_by_location(location_id: int) -> bool:
                 await wdb.execute(
                     "UPDATE operation_queue SET status = 'cancelled', completed_at = ? "
                     "WHERE id = ?",
-                    (_now(), row["id"]),
+                    (utc_now("auto"), row["id"]),
                 )
-            await _broadcast_queue_state()
+            await broadcast_queue_state()
             return True
 
     return False
@@ -175,49 +170,49 @@ def is_location_running(location_id: int) -> bool:
     Inspects in-memory running ops only (no DB access). Used by
     extensions.is_agent_scanning as a fallback.
     """
-    for op_id, (_, task) in _running_ops.items():
+    for op_id, (_, task) in running_ops.items():
         if task.done():
             continue
         # We don't have params in memory, but we can check the DB
         # synchronously is not possible. Use a cached approach instead.
         pass
-    # Fall back to checking _running_locations cache
-    return location_id in _running_locations
+    # Fall back to checking running_locations cache
+    return location_id in running_locations
 
 
-# Cache of location_ids with running operations (updated by _set_running)
-_running_locations: set[int] = set()
+# Cache of location_ids with running operations (updated by set_running)
+running_locations: set[int] = set()
 
 
-def _track_location(op_id: int, location_id: int | None):
+def track_location(op_id: int, location_id: int | None):
     """Track that a location has a running operation."""
     if location_id is not None:
-        _running_locations.add(location_id)
+        running_locations.add(location_id)
 
 
-def _untrack_location(location_id: int | None):
+def untrack_location(location_id: int | None):
     """Remove location from running set."""
     if location_id is not None:
-        _running_locations.discard(location_id)
+        running_locations.discard(location_id)
 
 
 def start():
     """Start the queue manager background loop."""
-    global _running, _task
-    if _running:
+    global running, loop_task
+    if running:
         return
-    _running = True
-    _task = asyncio.create_task(_run())
+    running = True
+    loop_task = asyncio.create_task(run())
     logger.info("Queue manager started")
 
 
 async def stop():
     """Stop the queue manager and wait for running operations to finish."""
-    global _running, _task
-    _running = False
+    global running, loop_task
+    running = False
 
     # Wait for running operations to complete gracefully
-    running_tasks = [task for _, task in _running_ops.values()]
+    running_tasks = [task for _, task in running_ops.values()]
     if running_tasks:
         logger.info("Waiting for %d operation(s) to complete...", len(running_tasks))
         done, pending = await asyncio.wait(running_tasks, timeout=10)
@@ -236,19 +231,14 @@ async def stop():
                 except BaseException:
                     pass
 
-    if _task and not _task.done():
-        _task.cancel()
-        try:
-            await _task
-        except (asyncio.CancelledError, Exception):
-            pass
-    _task = None
+    await cancel_task(loop_task)
+    loop_task = None
 
     # Clean up activity registrations for any ops that were still running
-    for op_id in list(_running_ops):
+    for op_id in list(running_ops):
         unregister(f"op-{op_id}")
-    _running_ops.clear()
-    _running_op_types.clear()
+    running_ops.clear()
+    running_op_types.clear()
 
     logger.info("Queue manager stopped")
 
@@ -256,15 +246,15 @@ async def stop():
 async def pause():
     """Suspend all running operations and prevent new ones from dispatching.
 
-    Clears _pause_event so running ops block at their next checkpoint.
+    Clears pause_event so running ops block at their next checkpoint.
     Waits briefly for ops to reach a checkpoint, then returns.
     """
-    global _paused
-    if _paused:
+    global paused
+    if paused:
         return
-    _paused = True
-    _pause_event.clear()
-    logger.info("Queue manager: suspending %d running op(s)", len(_running_ops))
+    paused = True
+    pause_event.clear()
+    logger.info("Queue manager: suspending %d running op(s)", len(running_ops))
     # Give running ops time to hit their checkpoint and block
     await asyncio.sleep(0.5)
     logger.info("Queue manager: paused")
@@ -272,17 +262,17 @@ async def pause():
 
 def resume():
     """Resume the queue manager — unblock suspended operations."""
-    global _paused
-    if not _paused:
+    global paused
+    if not paused:
         return
-    _paused = False
-    _pause_event.set()
+    paused = False
+    pause_event.set()
     logger.info("Queue manager: resumed, operations unblocked")
 
 
 async def wait_if_paused():
     """Checkpoint for long-running operations. Blocks while queue is paused."""
-    await _pause_event.wait()
+    await pause_event.wait()
 
 
 class paused_queue:
@@ -314,7 +304,7 @@ class paused_queue:
         return False
 
 
-async def _recover_interrupted():
+async def recover_interrupted():
     """On startup, reset any 'running' operations back to 'pending'
     and mark orphaned scan records as 'interrupted'."""
     async with db_writer() as db:
@@ -347,22 +337,22 @@ async def _recover_interrupted():
             )
 
 
-async def _run():
+async def run():
     """Main loop — poll for pending operations and start them per-agent."""
-    await _recover_interrupted()
+    await recover_interrupted()
 
-    while _running:
+    while running:
         try:
-            await _reap_finished()
+            await reap_finished()
 
             # When paused, don't dispatch new ops
-            if _paused:
+            if paused:
                 await asyncio.sleep(1)
                 continue
 
-            busy_agents = {aid for aid, _ in _running_ops.values()}
+            busy_agents = {aid for aid, _ in running_ops.values()}
 
-            ops = await _next_pending_ops(busy_agents)
+            ops = await next_pending_ops(busy_agents)
             if not ops:
                 await asyncio.sleep(1)
                 continue
@@ -375,18 +365,18 @@ async def _run():
 
                 loc_id = params.get("location_id")
                 loc_name = params.get("location_name", "")
-                await _set_running(op_id)
-                _track_location(op_id, loc_id)
+                await set_running(op_id)
+                track_location(op_id, loc_id)
                 logger.info("Queue manager: starting %s (id=%d)", op_type, op_id)
 
                 register(f"op-{op_id}", op_label(op_type, loc_name))
 
-                task = asyncio.create_task(_execute(op_type, op_id, agent_id, params))
-                _running_ops[op_id] = (agent_id, task)
-                _running_op_types[op_id] = op_type
+                task = asyncio.create_task(execute(op_type, op_id, agent_id, params))
+                running_ops[op_id] = (agent_id, task)
+                running_op_types[op_id] = op_type
 
             # Broadcast updated queue state (pending→running transitions)
-            await _broadcast_queue_state()
+            await broadcast_queue_state()
 
         except asyncio.CancelledError:
             break
@@ -397,17 +387,17 @@ async def _run():
     # Running ops are handled by stop() — don't cancel here
 
 
-async def _reap_finished():
+async def reap_finished():
     """Check running tasks for completion and update their status."""
     reaped = False
-    for op_id in list(_running_ops):
-        agent_id, task = _running_ops[op_id]
+    for op_id in list(running_ops):
+        agent_id, task = running_ops[op_id]
         if not task.done():
             continue
 
         reaped = True
-        del _running_ops[op_id]
-        _running_op_types.pop(op_id, None)
+        del running_ops[op_id]
+        running_op_types.pop(op_id, None)
 
         unregister(f"op-{op_id}")
 
@@ -418,14 +408,14 @@ async def _reap_finished():
             )
         if row:
             loc_id = json.loads(row[0]["params"] or "{}").get("location_id")
-            _untrack_location(loc_id)
+            untrack_location(loc_id)
 
         try:
             task.result()
-            await _set_completed(op_id)
+            await set_completed(op_id)
             logger.info("Queue manager: completed (id=%d)", op_id)
         except asyncio.CancelledError:
-            await _set_status(op_id, "cancelled")
+            await set_status(op_id, "cancelled")
             logger.info("Queue manager: cancelled (id=%d)", op_id)
         except (ConnectionError, OSError, httpx.ConnectError, httpx.TransportError) as e:
             logger.warning(
@@ -433,26 +423,26 @@ async def _reap_finished():
                 op_id,
                 e,
             )
-            await _set_status_pending(op_id)
+            await set_status_pending(op_id)
         except Exception as e:
             logger.exception("Queue manager: failed (id=%d)", op_id)
-            await _set_failed(op_id, str(e))
+            await set_failed(op_id, str(e))
 
     if reaped:
-        await _broadcast_queue_state()
+        await broadcast_queue_state()
 
 
 # Op types that write to a shared resource (ChromaDB) and must not run
 # concurrently with each other, regardless of which agent they belong to.
-_SERIALISE_GROUP = {"similarity_scan", "embed_file", "extract_markdown"}
+SERIALISE_GROUP = {"similarity_scan", "embed_file", "extract_markdown"}
 
 # Op types that run independently on the agent and can proceed even when
 # the agent is busy with another operation (e.g. a long-running scan).
 # The agent enforces its own concurrency limits for these.
-_CONCURRENT_OPS = {"transcode", "raw_convert"}
+CONCURRENT_OPS = {"transcode", "raw_convert"}
 
 
-async def _next_pending_ops(busy_agents: set) -> list[dict]:
+async def next_pending_ops(busy_agents: set) -> list[dict]:
     """Fetch pending operations for agents that are online and not busy."""
     from file_hunter.ws.agent import get_online_agent_ids
 
@@ -460,8 +450,8 @@ async def _next_pending_ops(busy_agents: set) -> list[dict]:
 
     # Check if a serialised op is already running
     serialised_running = any(
-        op_type in _SERIALISE_GROUP
-        for op_type in _running_op_types.values()
+        op_type in SERIALISE_GROUP
+        for op_type in running_op_types.values()
     )
 
     async with read_db() as db:
@@ -477,12 +467,12 @@ async def _next_pending_ops(busy_agents: set) -> list[dict]:
         aid = row["agent_id"]
         if aid is not None and aid not in online_agents:
             continue
-        concurrent = row["type"] in _CONCURRENT_OPS
+        concurrent = row["type"] in CONCURRENT_OPS
         if not concurrent:
             if aid in busy_agents or aid in seen_agents:
                 continue
         # Serialised ops: skip if one is already running or already picked
-        if row["type"] in _SERIALISE_GROUP:
+        if row["type"] in SERIALISE_GROUP:
             if serialised_running or serialised_seen:
                 continue
             serialised_seen = True
@@ -501,33 +491,33 @@ async def update_params(op_id: int, params: dict):
         )
 
 
-async def _set_running(op_id: int):
+async def set_running(op_id: int):
     async with db_writer() as db:
         await db.execute(
             "UPDATE operation_queue SET status = 'running', started_at = ? WHERE id = ?",
-            (_now(), op_id),
+            (utc_now("auto"), op_id),
         )
 
 
-async def _set_completed(op_id: int):
+async def set_completed(op_id: int):
     async with db_writer() as db:
         await db.execute(
             "UPDATE operation_queue SET status = 'completed', completed_at = ? "
             "WHERE id = ?",
-            (_now(), op_id),
+            (utc_now("auto"), op_id),
         )
 
 
-async def _set_failed(op_id: int, error: str):
+async def set_failed(op_id: int, error: str):
     async with db_writer() as db:
         await db.execute(
             "UPDATE operation_queue SET status = 'failed', completed_at = ?, error = ? "
             "WHERE id = ?",
-            (_now(), error, op_id),
+            (utc_now("auto"), error, op_id),
         )
 
 
-async def _set_status_pending(op_id: int):
+async def set_status_pending(op_id: int):
     async with db_writer() as db:
         await db.execute(
             "UPDATE operation_queue SET status = 'pending', started_at = NULL WHERE id = ?",
@@ -535,29 +525,29 @@ async def _set_status_pending(op_id: int):
         )
 
 
-async def _set_status(op_id: int, status: str):
+async def set_status(op_id: int, status: str):
     async with db_writer() as db:
         await db.execute(
             "UPDATE operation_queue SET status = ?, completed_at = ? WHERE id = ?",
-            (status, _now(), op_id),
+            (status, utc_now("auto"), op_id),
         )
 
 
-async def _execute(op_type: str, op_id: int, agent_id: int | None, params: dict):
+async def execute(op_type: str, op_id: int, agent_id: int | None, params: dict):
     """Dispatch to the handler for this operation type."""
-    handler = _HANDLERS.get(op_type)
+    handler = HANDLERS.get(op_type)
     if handler is None:
         raise ValueError(f"Unknown operation type: {op_type}")
     await handler(op_id, agent_id, params)
 
 
-async def _handle_scan_dir(op_id: int, agent_id: int | None, params: dict):
+async def handle_scan_dir(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.scan import run_scan
 
     await run_scan(op_id, agent_id, params)
 
 
-async def _handle_backfill_location(op_id: int, agent_id: int | None, params: dict):
+async def handle_backfill_location(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.hash_backfill import run_backfill
 
     location_id = params["location_id"]
@@ -566,17 +556,17 @@ async def _handle_backfill_location(op_id: int, agent_id: int | None, params: di
     await run_backfill(agent_id, location_id, location_name, scan_prefix)
 
 
-async def _handle_rehash_partial(op_id: int, agent_id: int | None, params: dict):
+async def handle_rehash_partial(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.rehash_partial import run_rehash_partial
 
     await run_rehash_partial(op_id, agent_id, params)
 
 
-async def _handle_hash_file(op_id: int, agent_id: int | None, params: dict):
+async def handle_hash_file(op_id: int, agent_id: int | None, params: dict):
     await run_hash_file(op_id, agent_id, params)
 
 
-async def _handle_batch_delete(op_id: int, agent_id: int | None, params: dict):
+async def handle_batch_delete(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.batch import batch_delete
 
     await batch_delete(
@@ -586,7 +576,7 @@ async def _handle_batch_delete(op_id: int, agent_id: int | None, params: dict):
     )
 
 
-async def _handle_merge(op_id: int, agent_id: int | None, params: dict):
+async def handle_merge(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.merge import run_merge
 
     await run_merge(
@@ -598,7 +588,7 @@ async def _handle_merge(op_id: int, agent_id: int | None, params: dict):
     )
 
 
-async def _handle_batch_consolidate(op_id: int, agent_id: int | None, params: dict):
+async def handle_batch_consolidate(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.consolidate import run_batch_consolidation
 
     await run_batch_consolidation(
@@ -611,13 +601,13 @@ async def _handle_batch_consolidate(op_id: int, agent_id: int | None, params: di
     )
 
 
-async def _handle_batch_rehash(op_id: int, agent_id: int | None, params: dict):
-    from file_hunter.routes.files import _run_batch_rehash
+async def handle_batch_rehash(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.routes.files import run_batch_rehash
 
-    await _run_batch_rehash(params["file_ids"])
+    await run_batch_rehash(params["file_ids"])
 
 
-async def _handle_batch_tag(op_id: int, agent_id: int | None, params: dict):
+async def handle_batch_tag(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.batch import batch_tag
 
     await batch_tag(
@@ -627,7 +617,7 @@ async def _handle_batch_tag(op_id: int, agent_id: int | None, params: dict):
     )
 
 
-async def _handle_reset_stale(op_id: int, agent_id: int | None, params: dict):
+async def handle_reset_stale(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.delete import reset_stale
 
     await reset_stale(
@@ -637,52 +627,52 @@ async def _handle_reset_stale(op_id: int, agent_id: int | None, params: dict):
     )
 
 
-async def _handle_transcode(op_id: int, agent_id: int | None, params: dict):
-    from file_hunter.services.transcode import run_transcode
+async def handle_transcode(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.conversions import transcode
 
-    await run_transcode(op_id, agent_id, params)
+    await transcode.run(op_id, agent_id, params)
 
 
-async def _handle_similarity_scan(op_id: int, agent_id: int | None, params: dict):
+async def handle_similarity_scan(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.similarity import run_similarity_scan
 
     await run_similarity_scan(op_id, agent_id, params)
 
 
-async def _handle_embed_file(op_id: int, agent_id: int | None, params: dict):
+async def handle_embed_file(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.similarity import run_embed_file
 
     await run_embed_file(op_id, agent_id, params)
 
 
-async def _handle_extract_markdown(op_id: int, agent_id: int | None, params: dict):
+async def handle_extract_markdown(op_id: int, agent_id: int | None, params: dict):
     from file_hunter.services.similarity import run_extract_markdown
 
     await run_extract_markdown(op_id, agent_id, params)
 
 
-async def _handle_raw_convert(op_id: int, agent_id: int | None, params: dict):
-    from file_hunter.services.rawconvert import run_raw_convert
+async def handle_raw_convert(op_id: int, agent_id: int | None, params: dict):
+    from file_hunter.services.conversions import raw_convert
 
-    await run_raw_convert(op_id, agent_id, params)
+    await raw_convert.run(op_id, agent_id, params)
 
 
-_HANDLERS = {
-    "scan_dir": _handle_scan_dir,
-    "backfill_location": _handle_backfill_location,
-    "rehash_partial": _handle_rehash_partial,
-    "hash_file": _handle_hash_file,
-    "batch_delete": _handle_batch_delete,
-    "merge": _handle_merge,
-    "batch_consolidate": _handle_batch_consolidate,
-    "batch_rehash": _handle_batch_rehash,
-    "batch_tag": _handle_batch_tag,
-    "reset_stale": _handle_reset_stale,
-    "transcode": _handle_transcode,
-    "similarity_scan": _handle_similarity_scan,
-    "embed_file": _handle_embed_file,
-    "extract_markdown": _handle_extract_markdown,
-    "raw_convert": _handle_raw_convert,
+HANDLERS = {
+    "scan_dir": handle_scan_dir,
+    "backfill_location": handle_backfill_location,
+    "rehash_partial": handle_rehash_partial,
+    "hash_file": handle_hash_file,
+    "batch_delete": handle_batch_delete,
+    "merge": handle_merge,
+    "batch_consolidate": handle_batch_consolidate,
+    "batch_rehash": handle_batch_rehash,
+    "batch_tag": handle_batch_tag,
+    "reset_stale": handle_reset_stale,
+    "transcode": handle_transcode,
+    "similarity_scan": handle_similarity_scan,
+    "embed_file": handle_embed_file,
+    "extract_markdown": handle_extract_markdown,
+    "raw_convert": handle_raw_convert,
 }
 
 
@@ -693,7 +683,7 @@ async def get_queue_status_for_broadcast() -> dict:
     # Split running ops by type so frontend can show correct badges.
     # Transcode is a file-level operation with its own progress UI —
     # it must not affect location tree badges.
-    _NO_TREE_BADGE = {"transcode", "raw_convert"}
+    NO_TREE_BADGE = {"transcode", "raw_convert"}
 
     scanning_ids = []
     backfilling_ids = []
@@ -705,7 +695,7 @@ async def get_queue_status_for_broadcast() -> dict:
         if not loc_id:
             continue
         op_type = item.get("type", "")
-        if op_type in _NO_TREE_BADGE:
+        if op_type in NO_TREE_BADGE:
             continue
         all_running_ids.append(loc_id)
         if op_type == "scan_dir":
@@ -722,7 +712,7 @@ async def get_queue_status_for_broadcast() -> dict:
             "queued_at": item.get("created_at", ""),
         }
         for item in status
-        if item.get("status") == "pending" and item.get("type", "") not in _NO_TREE_BADGE
+        if item.get("status") == "pending" and item.get("type", "") not in NO_TREE_BADGE
     ]
     return {
         "running_location_ids": all_running_ids,
@@ -733,11 +723,8 @@ async def get_queue_status_for_broadcast() -> dict:
     }
 
 
-async def _broadcast_queue_state():
+async def broadcast_queue_state():
     """Build and broadcast the current queue state to all connected browsers."""
     queue = await get_queue_status_for_broadcast()
     await broadcast({"type": "scan_queue_updated", "queue": queue})
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()

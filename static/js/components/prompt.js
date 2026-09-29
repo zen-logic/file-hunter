@@ -1,3 +1,4 @@
+import { wireModal } from './modal.js';
 const PromptModal = {
     overlayEl: null,
     titleEl: null,
@@ -13,21 +14,12 @@ const PromptModal = {
         this.inputEl = document.getElementById('prompt-modal-input');
         this.submitEl = document.getElementById('prompt-modal-submit');
 
-        document.getElementById('prompt-modal-cancel').addEventListener('click', () => this.complete(null));
-        this.submitEl.addEventListener('click', () => this.complete(this.inputEl.value.trim()));
-
-        this.inputEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.complete(this.inputEl.value.trim());
-        });
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.complete(null);
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this.complete(null);
-            }
+        wireModal(this.overlayEl, {
+            close: () => this.complete(null),
+            submit: () => this.complete(this.inputEl.value.trim()),
+            enterFrom: [this.inputEl],
+            cancelBtn: document.getElementById('prompt-modal-cancel'),
+            submitBtn: this.submitEl,
         });
     },
 

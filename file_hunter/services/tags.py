@@ -13,7 +13,7 @@ can compare stored names directly.
 import re
 import unicodedata
 
-_WHITESPACE = re.compile(r"\s+")
+WHITESPACE = re.compile(r"\s+")
 
 
 def normalise_tag(raw: str) -> str:
@@ -33,7 +33,7 @@ def normalise_tag(raw: str) -> str:
         return ""
     text = unicodedata.normalize("NFKC", str(raw))
     text = text.replace(",", " ")
-    text = _WHITESPACE.sub(" ", text).strip()
+    text = WHITESPACE.sub(" ", text).strip()
     return text.lower()
 
 
@@ -171,9 +171,6 @@ async def copy_file_tags(db, source_file_id: int, dest_file_id: int):
         db: Writable database connection (called inside a write context).
         source_file_id: File to copy tags from.
         dest_file_id: File to copy tags to.
-
-    Side effects:
-        Inserts into `file_tags`. Does not commit.
     """
     await db.execute(
         "INSERT OR IGNORE INTO file_tags (file_id, tag_id) "
@@ -190,10 +187,6 @@ async def set_file_tags(db, file_id: int, names: list[str], cache: dict = None):
         file_id: Numeric file ID.
         names: Already-normalised tag names. Empty clears all tags.
         cache: Optional name -> id dict shared across calls.
-
-    Side effects:
-        Deletes and inserts rows in `file_tags`, inserting into `tags` as
-        needed. Does not commit — the caller owns the transaction.
     """
     tag_ids = await get_or_create_tag_ids(db, names, cache)
     if tag_ids:
@@ -218,9 +211,6 @@ async def add_file_tags(db, file_id: int, names: list[str], cache: dict = None):
         file_id: Numeric file ID.
         names: Already-normalised tag names.
         cache: Optional name -> id dict shared across calls.
-
-    Side effects:
-        Inserts into `file_tags` (and `tags` as needed). Does not commit.
     """
     if not names:
         return
@@ -243,9 +233,6 @@ async def add_tags_to_files(db, file_ids, names: list[str], cache: dict = None):
         file_ids: Numeric file IDs.
         names: Already-normalised tag names.
         cache: Optional name -> id dict shared across calls.
-
-    Side effects:
-        Inserts into `file_tags` (and `tags` as needed). Does not commit.
     """
     file_ids = list(file_ids)
     if not file_ids or not names:
@@ -270,9 +257,6 @@ async def remove_file_tags(db, file_id: int, names: list[str]):
         db: Writable database connection (called inside a write context).
         file_id: Numeric file ID.
         names: Already-normalised tag names.
-
-    Side effects:
-        Deletes rows from `file_tags`. Does not commit.
     """
     if not names:
         return
@@ -295,10 +279,6 @@ async def get_or_create_tag_ids(db, names: list[str], cache: dict = None) -> lis
 
     Returns:
         Tag IDs in the same order as `names`.
-
-    Side effects:
-        Inserts rows into `tags` for names not already present. Does not
-        commit — the caller owns the transaction.
     """
     cache = cache if cache is not None else {}
     ids = []

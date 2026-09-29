@@ -14,18 +14,18 @@ import os
 import sqlite3
 import sys
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.chdir(_ROOT)
-sys.path.insert(0, _ROOT)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(ROOT)
+sys.path.insert(0, ROOT)
 
 import chromadb  # noqa: E402
 
 from file_hunter.services.similarity import SIMILARITY_DB_DIR  # noqa: E402
-from file_hunter.text_db import _SCHEMA, _text_db_path  # noqa: E402
+from file_hunter.text_db import SCHEMA, text_db_path  # noqa: E402
 
-text = sqlite3.connect(_text_db_path())
+text = sqlite3.connect(text_db_path())
 text.execute("PRAGMA journal_mode=WAL")
-text.executescript(_SCHEMA)
+text.executescript(SCHEMA)
 
 client = chromadb.PersistentClient(path=SIMILARITY_DB_DIR)
 try:

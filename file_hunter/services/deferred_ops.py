@@ -2,19 +2,17 @@
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from file_hunter.core import classify_file
 from file_hunter.db import db_writer, read_db
 from file_hunter.hashes_db import (
     get_file_hashes,
     hashes_writer,
-    remove_file_hashes,
     update_file_hash,
 )
-from file_hunter.helpers import parse_mtime, post_op_stats
+from file_hunter.helpers import parse_mtime, post_op_stats, utc_now
 from file_hunter.services import fs
-from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
+from file_hunter.stats_db import update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -27,7 +25,7 @@ async def queue_deferred_op(
 
     Must be called inside db_writer() — db is the write connection.
     """
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now = utc_now()
     await db.execute(
         "INSERT INTO pending_file_ops (op_type, file_id, location_id, params, status, date_created) "
         "VALUES (?, ?, ?, ?, 'pending', ?)",
@@ -56,11 +54,40 @@ async def cancel_pending_op(file_id: int):
     await broadcast({"type": "deferred_op_cancelled", "fileId": file_id})
 
 
+async def complete_op(db, op_id, now_iso):
+    """Mark a pending file op completed, on the caller's write connection."""
+    await db.execute(
+        "UPDATE pending_file_ops SET status = 'completed', "
+        "date_completed = ? WHERE id = ?",
+        (now_iso, op_id),
+    )
+
+
+async def deferred_destination(f, params, kind):
+    """(dst_full_path, dst_rel_path, dst_location_id, dst_folder_id,
+    dst_filename) for a deferred move or copy of f. ValueError if the params
+    have no destination, the source is gone from disk, or the destination
+    already exists."""
+    dst_full_path = params.get("dst_full_path")
+    dst_rel_path = params.get("dst_rel_path")
+    dst_location_id = params.get("dst_location_id", f["location_id"])
+    if not dst_full_path or not dst_rel_path:
+        raise ValueError(f"Missing destination path in deferred {kind} params")
+    if not await fs.file_exists(f["full_path"], f["location_id"]):
+        raise ValueError(f"Source file not found on disk: {f['full_path']}")
+    if await fs.path_exists(dst_full_path, dst_location_id):
+        raise ValueError(f"Destination already exists: {dst_full_path}")
+    return (
+        dst_full_path,
+        dst_rel_path,
+        dst_location_id,
+        params.get("dst_folder_id"),
+        params.get("dst_filename", f["filename"]),
+    )
+
+
 async def drain_pending_ops(location_id: int, root_path: str):
     """Execute pending file ops for a location that's now online.
-
-    Called from _sync_agent_locations when an agent reconnects.
-    Reads via read_db(), writes via db_writer().
     """
     async with read_db() as db:
         rows = await db.execute_fetchall(
@@ -74,7 +101,7 @@ async def drain_pending_ops(location_id: int, root_path: str):
 
     logger.info("Draining %d pending file ops for location #%d", len(rows), location_id)
 
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_iso = utc_now()
     completed = 0
     failed = 0
     affected_strong = set()
@@ -96,49 +123,35 @@ async def drain_pending_ops(location_id: int, root_path: str):
                     "modified_date, pending_op FROM files WHERE id = ?",
                     (file_id,),
                 )
-            if not file_row:
-                # File no longer exists — mark op completed
+            if not file_row or file_row[0]["pending_op"] != op_type:
+                # File gone, or op cancelled or changed: nothing to do
                 async with db_writer() as wdb:
-                    await wdb.execute(
-                        "UPDATE pending_file_ops SET status = 'completed', "
-                        "date_completed = ? WHERE id = ?",
-                        (now_iso, op_id),
-                    )
+                    await complete_op(wdb, op_id, now_iso)
                 completed += 1
                 continue
 
             f = file_row[0]
-            if f["pending_op"] != op_type:
-                # Op was cancelled or changed — skip
-                async with db_writer() as wdb:
-                    await wdb.execute(
-                        "UPDATE pending_file_ops SET status = 'completed', "
-                        "date_completed = ? WHERE id = ?",
-                        (now_iso, op_id),
-                    )
-                completed += 1
-                continue
 
             if op_type == "delete":
-                await _drain_delete(f, op_id, now_iso)
-                _h = (await get_file_hashes([file_id])).get(file_id, {})
-                if _h.get("hash_strong"):
-                    affected_strong.add(_h["hash_strong"])
-                elif _h.get("hash_fast"):
-                    affected_fast.add(_h["hash_fast"])
+                await drain_delete(f, op_id, now_iso)
+                h = (await get_file_hashes([file_id])).get(file_id, {})
+                if h.get("hash_strong"):
+                    affected_strong.add(h["hash_strong"])
+                elif h.get("hash_fast"):
+                    affected_fast.add(h["hash_fast"])
 
             elif op_type == "move":
-                dst_location_id = await _drain_move(f, params, op_id, now_iso)
+                dst_location_id = await drain_move(f, params, op_id, now_iso)
                 if dst_location_id and dst_location_id != location_id:
                     affected_location_ids.add(dst_location_id)
 
             elif op_type == "copy":
-                dst_location_id = await _drain_copy(f, params, op_id, now_iso)
+                dst_location_id = await drain_copy(f, params, op_id, now_iso)
                 if dst_location_id and dst_location_id != location_id:
                     affected_location_ids.add(dst_location_id)
 
             elif op_type == "verify":
-                result = await _drain_verify(f, op_id, now_iso)
+                result = await drain_verify(f, op_id, now_iso)
                 if result:
                     affected_strong.add(result["hash_strong"])
                     if result.get("old_hash_fast"):
@@ -187,7 +200,7 @@ async def drain_pending_ops(location_id: int, root_path: str):
     )
 
 
-async def _drain_delete(f, op_id: int, now_iso: str):
+async def drain_delete(f, op_id: int, now_iso: str):
     """Execute a deferred delete: remove from disk, then remove DB record."""
     file_id = f["id"]
     full_path = f["full_path"]
@@ -198,38 +211,15 @@ async def _drain_delete(f, op_id: int, now_iso: str):
 
     async with db_writer() as wdb:
         await wdb.execute("DELETE FROM files WHERE id = ?", (file_id,))
-        await wdb.execute(
-            "UPDATE pending_file_ops SET status = 'completed', "
-            "date_completed = ? WHERE id = ?",
-            (now_iso, op_id),
-        )
+        await complete_op(wdb, op_id, now_iso)
 
-    # Check dup status before removing hashes
-    _h = await get_file_hashes([file_id])
-    was_dup = (_h.get(file_id, {}).get("dup_count") or 0) > 0
+    # delete imports this module
+    from file_hunter.services.delete import settle_deleted_files
 
-    await remove_file_hashes([file_id])
-
-    if was_dup:
-        async with read_db() as rdb:
-            fp_rows = await rdb.execute_fetchall(
-                "SELECT id, parent_id FROM folders WHERE location_id = ?",
-                (location_id,),
-            )
-        folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
-        await apply_dup_deltas(
-            location_id, folder_parents, [(f["folder_id"], -1)]
-        )
-
-    await update_stats_for_files(
-        location_id,
-        removed=[
-            (f["folder_id"], f["file_size"] or 0, f["file_type_high"], f["hidden"])
-        ],
-    )
+    await settle_deleted_files([f])
 
 
-async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
+async def drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
     """Execute a deferred move: move on disk, update DB record.
 
     Returns destination location_id if different from source, else None.
@@ -237,23 +227,9 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
     file_id = f["id"]
     full_path = f["full_path"]
     location_id = f["location_id"]
-
-    dst_full_path = params.get("dst_full_path")
-    dst_rel_path = params.get("dst_rel_path")
-    dst_location_id = params.get("dst_location_id", location_id)
-    dst_folder_id = params.get("dst_folder_id")
-    dst_filename = params.get("dst_filename", f["filename"])
-
-    if not dst_full_path or not dst_rel_path:
-        raise ValueError("Missing destination path in deferred move params")
-
-    # Check source exists
-    if not await fs.file_exists(full_path, location_id):
-        raise ValueError(f"Source file not found on disk: {full_path}")
-
-    # Check destination doesn't already exist
-    if await fs.path_exists(dst_full_path, dst_location_id):
-        raise ValueError(f"Destination already exists: {dst_full_path}")
+    (
+        dst_full_path, dst_rel_path, dst_location_id, dst_folder_id, dst_filename
+    ) = await deferred_destination(f, params, "move")
 
     # Execute the move
     cross_location = dst_location_id != location_id
@@ -305,11 +281,7 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
                 file_id,
             ),
         )
-        await wdb.execute(
-            "UPDATE pending_file_ops SET status = 'completed', "
-            "date_completed = ? WHERE id = ?",
-            (now_iso, op_id),
-        )
+        await complete_op(wdb, op_id, now_iso)
 
     # Sync hashes.db location_id for cross-location moves
     if cross_location:
@@ -336,33 +308,20 @@ async def _drain_move(f, params: dict, op_id: int, now_iso: str) -> int | None:
     return dst_location_id if cross_location else None
 
 
-async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
+async def drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
     """Execute a deferred copy: copy file on disk, insert new DB record.
 
     Returns destination location_id if different from source, else None.
     Source file and catalog entry are left untouched.
     """
-    from file_hunter.core import classify_file
     from file_hunter.services.files import insert_file_copy
 
     file_id = f["id"]
     full_path = f["full_path"]
     location_id = f["location_id"]
-
-    dst_full_path = params.get("dst_full_path")
-    dst_rel_path = params.get("dst_rel_path")
-    dst_location_id = params.get("dst_location_id", location_id)
-    dst_folder_id = params.get("dst_folder_id")
-    dst_filename = params.get("dst_filename", f["filename"])
-
-    if not dst_full_path or not dst_rel_path:
-        raise ValueError("Missing destination path in deferred copy params")
-
-    if not await fs.file_exists(full_path, location_id):
-        raise ValueError(f"Source file not found on disk: {full_path}")
-
-    if await fs.path_exists(dst_full_path, dst_location_id):
-        raise ValueError(f"Destination already exists: {dst_full_path}")
+    (
+        dst_full_path, dst_rel_path, dst_location_id, dst_folder_id, dst_filename
+    ) = await deferred_destination(f, params, "copy")
 
     # Copy on disk
     await fs.copy_file(
@@ -397,11 +356,7 @@ async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
         await wdb.execute(
             "UPDATE files SET pending_op = NULL WHERE id = ?", (file_id,)
         )
-        await wdb.execute(
-            "UPDATE pending_file_ops SET status = 'completed', "
-            "date_completed = ? WHERE id = ?",
-            (now_iso, op_id),
-        )
+        await complete_op(wdb, op_id, now_iso)
 
     # Update destination folder stats
     new_type_high, _ = classify_file(dst_filename)
@@ -413,7 +368,7 @@ async def _drain_copy(f, params: dict, op_id: int, now_iso: str) -> int | None:
     return dst_location_id if dst_location_id != location_id else None
 
 
-async def _drain_verify(f, op_id: int, now_iso: str) -> dict | None:
+async def drain_verify(f, op_id: int, now_iso: str) -> dict | None:
     """Execute a deferred verify: compute SHA-256, update DB record.
 
     Returns {"hash_strong": ..., "old_hash_fast": ...} on success, None on skip.
@@ -422,20 +377,16 @@ async def _drain_verify(f, op_id: int, now_iso: str) -> dict | None:
     full_path = f["full_path"]
     location_id = f["location_id"]
 
-    _h = (await get_file_hashes([file_id])).get(file_id, {})
-    old_hash_fast = _h.get("hash_fast")
+    h = (await get_file_hashes([file_id])).get(file_id, {})
+    old_hash_fast = h.get("hash_fast")
 
-    if _h.get("hash_strong"):
+    if h.get("hash_strong"):
         # Already verified — just clear pending_op
         async with db_writer() as wdb:
             await wdb.execute(
                 "UPDATE files SET pending_op = NULL WHERE id = ?", (file_id,)
             )
-            await wdb.execute(
-                "UPDATE pending_file_ops SET status = 'completed', "
-                "date_completed = ? WHERE id = ?",
-                (now_iso, op_id),
-            )
+            await complete_op(wdb, op_id, now_iso)
         return None
 
     if not await fs.file_exists(full_path, location_id):
@@ -448,11 +399,7 @@ async def _drain_verify(f, op_id: int, now_iso: str) -> dict | None:
             "UPDATE files SET pending_op = NULL WHERE id = ?",
             (file_id,),
         )
-        await wdb.execute(
-            "UPDATE pending_file_ops SET status = 'completed', "
-            "date_completed = ? WHERE id = ?",
-            (now_iso, op_id),
-        )
+        await complete_op(wdb, op_id, now_iso)
 
     await update_file_hash(file_id, hash_fast=hash_fast, hash_strong=hash_strong)
 

@@ -2,7 +2,7 @@ import os
 
 from starlette.requests import Request
 
-from file_hunter.core import json_ok, json_error
+from file_hunter.core import json_error, json_ok, parse_node_id, parse_str, read_body
 from file_hunter.db import read_db
 from file_hunter.services import fs
 from file_hunter.services.merge import (
@@ -15,14 +15,11 @@ from file_hunter.services.queue_manager import enqueue
 
 async def merge(request: Request):
     """POST /api/merge — start a merge background task."""
-    body = await request.json()
+    body = await read_body(request)
 
-    source_id = body.get("source_id")
-    destination_id = body.get("destination_id")
-    mode = body.get("mode", "move")
-
-    if not source_id or not destination_id:
-        return json_error("source_id and destination_id are required.", 400)
+    source_id = parse_node_id(body.get("source_id"), "source_id")
+    destination_id = parse_node_id(body.get("destination_id"), "destination_id")
+    mode = parse_str(body.get("mode"), "mode", "move")
 
     if mode not in ("move", "copy"):
         return json_error("mode must be 'move' or 'copy'.", 400)

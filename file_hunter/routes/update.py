@@ -4,14 +4,14 @@ from pathlib import Path
 
 import httpx
 from starlette.requests import Request
-from file_hunter.core import json_ok, json_error
+from file_hunter.core import json_error, json_ok, parse_str, read_body
 from file_hunter.services import update as update_svc
 from file_hunter.services.restart import schedule_restart
 
 
 async def check_update(request: Request):
-    body = await request.json()
-    key = body.get("key", "").strip()
+    body = await read_body(request)
+    key = parse_str(body.get("key"), "key").strip()
     if not key:
         return json_error("License key is required")
     try:
@@ -28,8 +28,8 @@ async def check_update(request: Request):
 
 
 async def install_update(request: Request):
-    body = await request.json()
-    key = body.get("key", "").strip()
+    body = await read_body(request)
+    key = parse_str(body.get("key"), "key").strip()
     if not key:
         return json_error("License key is required")
     try:

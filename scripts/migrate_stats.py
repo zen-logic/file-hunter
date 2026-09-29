@@ -19,7 +19,7 @@ import sqlite3
 import sys
 import time
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def migrate(catalog_path: str, stats_path: str):
@@ -162,12 +162,12 @@ def main():
     )
     parser.add_argument(
         "--catalog",
-        default=os.path.join(_ROOT, "data", "file_hunter.db"),
+        default=os.path.join(ROOT, "data", "file_hunter.db"),
         help="Path to catalog DB",
     )
     parser.add_argument(
         "--stats",
-        default=os.path.join(_ROOT, "data", "stats.db"),
+        default=os.path.join(ROOT, "data", "stats.db"),
         help="Path to stats DB",
     )
     args = parser.parse_args()

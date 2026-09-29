@@ -3,6 +3,7 @@ import icons from '../icons.js';
 import Keyboard from '../keyboard.js';
 import Tree from './tree.js';
 import Triage from './triage.js';
+import { formatSize, formatDate, esc } from '../format.js';
 
 const PAGE_SIZE = 120;
 const GALLERY_MAX_CONCURRENT = 4;
@@ -50,22 +51,7 @@ function galleryImageIcon(cell) {
     cell.insertAdjacentHTML('afterbegin', icons.image || icons.file);
 }
 
-function formatSize(bytes) {
-    if (bytes === null || bytes === undefined) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    if (bytes < 1099511627776) return (bytes / 1073741824).toFixed(1) + ' GB';
-    if (bytes < 1125899906842624) return (bytes / 1099511627776).toFixed(1) + ' TB';
-    return (bytes / 1125899906842624).toFixed(1) + ' PB';
-}
 
-function formatDate(isoStr) {
-    if (!isoStr) return '';
-    const d = new Date(isoStr);
-    if (isNaN(d)) return isoStr;
-    return d.toLocaleDateString();
-}
 
 function fileIcon(file) {
     if (file.type === 'folder') return icons.folder;
@@ -410,22 +396,6 @@ const FileList = {
         this.render();
     },
 
-    // ── Compatibility: selectedFile getter for keyboard nav ──
-
-    get selectedFile() {
-        if (this.selectedItems.size === 1) {
-            return this.getSelection()[0].name;
-        }
-        return null;
-    },
-
-    set selectedFile(val) {
-        // Legacy setter — used by showFolder, showSingleFile etc. to clear
-        if (val === null) {
-            this.clearSelection();
-        }
-    },
-
     // ── Display items ──
 
     getDisplayItems() {
@@ -460,13 +430,18 @@ const FileList = {
 
         switch (key) {
             case 'ArrowDown':
+            case 'ArrowUp': {
                 e.preventDefault();
-                if (curIdx === items.length - 1 && this.currentPage < totalPages - 1) {
-                    this.goToPage(this.currentPage + 1, 'first', e.shiftKey);
+                const step = key === 'ArrowDown' ? 1 : -1;
+                const atEdge = step > 0 ? curIdx === items.length - 1 : curIdx === 0;
+                const nextPage = this.currentPage + step;
+                if (atEdge && nextPage >= 0 && nextPage < totalPages) {
+                    this.goToPage(nextPage, step > 0 ? 'first' : 'last', e.shiftKey);
                     return;
                 }
-                newIdx = curIdx < items.length - 1 ? curIdx + 1 : curIdx;
-                if (curIdx === -1) newIdx = 0;
+                newIdx = curIdx === -1
+                    ? 0
+                    : Math.max(0, Math.min(items.length - 1, curIdx + step));
 
                 if (e.shiftKey && this.cursorMode) {
                     this.selectAtCursor(items, newIdx);
@@ -485,31 +460,7 @@ const FileList = {
                     return;
                 }
                 break;
-            case 'ArrowUp':
-                e.preventDefault();
-                if (curIdx === 0 && this.currentPage > 0) {
-                    this.goToPage(this.currentPage - 1, 'last', e.shiftKey);
-                    return;
-                }
-                newIdx = curIdx > 0 ? curIdx - 1 : 0;
-                if (curIdx === -1) newIdx = 0;
-
-                if (e.shiftKey && this.cursorMode) {
-                    this.selectAtCursor(items, newIdx);
-                    return;
-                }
-                if (e.shiftKey) {
-                    const anchor = this.anchorIdx !== null ? this.anchorIdx : curIdx;
-                    this.selectedItems.clear();
-                    this.selectRange(anchor, newIdx);
-                    this.anchorIdx = anchor;
-                    this.cursorIdx = newIdx;
-                    this.fireSelectionChange();
-                    this.render();
-                    this.scrollSelectedIntoView(newIdx);
-                    return;
-                }
-                break;
+            }
             case 'Home':
                 e.preventDefault();
                 if (this.currentPage !== 0) {
@@ -902,14 +853,7 @@ const FileList = {
         this.currentFolder = folderId;
         this.clearSelection();
         this.searchId = null;
-        this.filterText = '';
-        this.filterEl.value = '';
-        this.sortKey = 'name';
-        this.sortDir = 1;
-        this.currentPage = 0;
-        this.searchMode = false;
-        this.searchParams = null;
-        this.dupGroupMode = false;
+        this.resetView();
         this.favouritesMode = false;
 
         await this.fetchFolder(focusFileId);
@@ -959,17 +903,22 @@ const FileList = {
         await this.fetchFolder(focusFileId);
     },
 
-    showSingleFile(file) {
-        this.currentFolder = null;
-        this.currentBreadcrumb = null;
+    /** Start a new listing: no filter, sorted by name, on the given page. */
+    resetView({ page = 0, search = false, searchParams = null, dupGroup = false } = {}) {
         this.filterText = '';
         this.filterEl.value = '';
         this.sortKey = 'name';
         this.sortDir = 1;
-        this.currentPage = 0;
-        this.searchMode = false;
-        this.searchParams = null;
-        this.dupGroupMode = false;
+        this.currentPage = page;
+        this.searchMode = search;
+        this.searchParams = searchParams;
+        this.dupGroupMode = dupGroup;
+    },
+
+    showSingleFile(file) {
+        this.currentFolder = null;
+        this.currentBreadcrumb = null;
+        this.resetView();
         this.currentItems = [file];
         this.currentFolders = null;
         this.totalFiles = 1;
@@ -983,14 +932,7 @@ const FileList = {
         this.currentBreadcrumb = null;
         this.clearSelection();
         this.searchId = null;
-        this.filterText = '';
-        this.filterEl.value = '';
-        this.sortKey = 'name';
-        this.sortDir = 1;
-        this.currentPage = 0;
-        this.searchMode = true;
-        this.searchParams = { hash };
-        this.dupGroupMode = true;
+        this.resetView({ search: true, searchParams: { hash }, dupGroup: true });
         this.dupGroupSourceId = sourceFileId || null;
 
         await this.fetchSearch();
@@ -1001,14 +943,7 @@ const FileList = {
         this.currentBreadcrumb = null;
         this.clearSelection();
         this.searchId = data.searchId || null;
-        this.filterText = '';
-        this.filterEl.value = '';
-        this.sortKey = 'name';
-        this.sortDir = 1;
-        this.currentPage = data.page;
-        this.searchMode = true;
-        this.searchParams = searchParams;
-        this.dupGroupMode = false;
+        this.resetView({ page: data.page, search: true, searchParams });
 
         this.currentItems = data.items;
         this.currentFolders = data.folders && data.folders.length ? data.folders : null;
@@ -1296,8 +1231,8 @@ const FileList = {
             const tempRow = document.createElement('tr');
             tempRow.innerHTML = `
                 <td class="col-icon">${fileIcon(file)}</td>
-                <td><span class="file-name">${file.name}${favHtml}${dupHtml}${staleHtml}${missingHtml}${pendingHtml}${triageHtml}</span>${locHtml}</td>
-                <td class="col-type">${file.typeLow || ''}</td>
+                <td><span class="file-name">${esc(file.name)}${favHtml}${dupHtml}${staleHtml}${missingHtml}${pendingHtml}${triageHtml}</span>${locHtml}</td>
+                <td class="col-type">${esc(file.typeLow || '')}</td>
                 <td class="col-size">${formatSize(file.size)}</td>
                 <td class="col-date">${formatDate(file.date)}</td>
             `;
@@ -1336,7 +1271,6 @@ const FileList = {
                     this.fireSelectionChange();
                     this.render();
                 } else if (e.ctrlKey || e.metaKey) {
-                    // Toggle item
                     this.toggleItem(file, idx);
                     this.fireSelectionChange();
                     this.render();
@@ -1406,9 +1340,7 @@ const FileList = {
                 const online = file.locationId ? Tree.isLocationOnline(file.locationId) : folderOnline;
                 if (online) {
                     const img = document.createElement('img');
-                    const token = localStorage.getItem('fh-token');
-                    let src = `/api/files/${file.id}/content`;
-                    if (token) src += `?token=${encodeURIComponent(token)}`;
+                    const src = API.authUrl(`/api/files/${file.id}/content`);
                     img.alt = file.name;
                     galleryLoader.enqueue(img, src, () => {
                         img.remove();

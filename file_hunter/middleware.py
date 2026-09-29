@@ -6,7 +6,7 @@ from file_hunter.services.applications import validate_app_token
 from file_hunter.extensions import get_public_paths, get_public_ws_paths
 
 # Paths that do not require authentication
-_PUBLIC_PATHS = {
+PUBLIC_PATHS = {
     "/api/auth/status",
     "/api/auth/setup",
     "/api/auth/login",
@@ -29,7 +29,7 @@ class AuthMiddleware:
                 return
 
             # Public auth endpoints
-            if path in _PUBLIC_PATHS or path in get_public_paths():
+            if path in PUBLIC_PATHS or path in get_public_paths():
                 await self.app(scope, receive, send)
                 return
 
@@ -80,13 +80,13 @@ class AuthMiddleware:
             token = params.get("token", [""])[0]
 
             if not token:
-                await self._reject_ws(scope, receive, send, 4001)
+                await self.reject_ws(scope, receive, send, 4001)
                 return
 
             async with read_db() as db:
                 user = await validate_session(db, token)
             if not user:
-                await self._reject_ws(scope, receive, send, 4001)
+                await self.reject_ws(scope, receive, send, 4001)
                 return
 
             scope["user"] = user
@@ -95,7 +95,7 @@ class AuthMiddleware:
         else:
             await self.app(scope, receive, send)
 
-    async def _reject_ws(self, scope, receive, send, code):
+    async def reject_ws(self, scope, receive, send, code):
         """Accept then immediately close the WebSocket with an error code."""
         await send({"type": "websocket.accept"})
         await send({"type": "websocket.close", "code": code})

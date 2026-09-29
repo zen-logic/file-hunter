@@ -11,7 +11,7 @@ import httpx
 from starlette.responses import StreamingResponse
 
 from file_hunter.db import read_db
-from file_hunter.services.agent_ops import _resolve_agent
+from file_hunter.services.agent_ops import location_agent, resolve_agent
 
 logger = logging.getLogger("file_hunter")
 
@@ -50,79 +50,38 @@ MIME_MAP = {
 }
 
 
-async def fetch_agent_bytes(full_path, location_id):
-    """Fetch raw file bytes from an agent.
-
-    Returns bytes if successful, None if not an agent location or offline.
-    """
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
-        )
-    if not row or not row[0]["agent_id"]:
-        return None
-
-    resolved = _resolve_agent(row[0]["agent_id"])
+async def fetch_agent_bytes(full_path, location_id, byte_range=None):
+    """Raw file bytes from the location's agent, or just (offset, length)
+    of them when byte_range is given. None if the agent is offline or the
+    fetch fails."""
+    resolved = await location_agent(location_id)
     if not resolved:
         return None
     host, port, token = resolved
+
+    headers = {"Authorization": f"Bearer {token}"}
+    ok_statuses = (200,)
+    label = "fetch_bytes"
+    if byte_range:
+        offset, length = byte_range
+        headers["Range"] = f"bytes={offset}-{offset + length - 1}"
+        ok_statuses = (200, 206)
+        label = "fetch_byte_range"
 
     url = f"http://{host}:{port}/files/content"
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.get(
-                url,
-                params={"path": full_path},
-                headers={"Authorization": f"Bearer {token}"},
+                url, params={"path": full_path}, headers=headers
             )
-        if response.status_code == 200:
+        if response.status_code in ok_statuses:
             return response.content
         logger.warning(
-            "Agent fetch_bytes failed for %s: %d", full_path, response.status_code
+            "Agent %s failed for %s: %d", label, full_path, response.status_code
         )
         return None
     except httpx.RequestError as e:
-        logger.warning("Agent fetch_bytes error for %s: %s", full_path, e)
-        return None
-
-
-async def fetch_agent_byte_range(full_path, location_id, offset, length):
-    """Fetch a byte range from an agent using HTTP Range header.
-
-    Returns bytes if successful, None if not an agent location or offline.
-    """
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
-        )
-    if not row or not row[0]["agent_id"]:
-        return None
-
-    resolved = _resolve_agent(row[0]["agent_id"])
-    if not resolved:
-        return None
-    host, port, token = resolved
-
-    url = f"http://{host}:{port}/files/content"
-    end = offset + length - 1
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(
-                url,
-                params={"path": full_path},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Range": f"bytes={offset}-{end}",
-                },
-            )
-        if response.status_code in (200, 206):
-            return response.content
-        logger.warning(
-            "Agent fetch_byte_range failed for %s: %d", full_path, response.status_code
-        )
-        return None
-    except httpx.RequestError as e:
-        logger.warning("Agent fetch_byte_range error for %s: %s", full_path, e)
+        logger.warning("Agent %s error for %s: %s", label, full_path, e)
         return None
 
 
@@ -143,7 +102,7 @@ async def proxy_agent_content(file_id, full_path, filename, request_headers=None
     if not row or not row[0]["agent_id"]:
         return None
 
-    resolved = _resolve_agent(row[0]["agent_id"])
+    resolved = resolve_agent(row[0]["agent_id"])
     if not resolved:
         return None
     host, port, token = resolved
@@ -217,15 +176,7 @@ async def stream_agent_file(full_path, location_id):
                 async for chunk in chunks:
                     ...
     """
-    async with read_db() as db:
-        row = await db.execute_fetchall(
-            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
-        )
-    if not row or not row[0]["agent_id"]:
-        yield None
-        return
-
-    resolved = _resolve_agent(row[0]["agent_id"])
+    resolved = await location_agent(location_id)
     if not resolved:
         yield None
         return

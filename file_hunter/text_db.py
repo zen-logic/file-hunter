@@ -8,18 +8,13 @@ ChromaDB's chunk id "{file_id}_chunk{i}" is built from.
 Own writer, own read connections — never contends with the catalog writer.
 """
 
-import asyncio
-from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiosqlite
 
-from file_hunter.config import load_config
+from file_hunter.sqlite_store import create_database, SqliteStore, catalog_path
 
-_write_db = None
-_write_lock = asyncio.Lock()
 
-_SCHEMA = """
+SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
     id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL,
@@ -50,62 +45,24 @@ END;
 """
 
 
-def _text_db_path() -> Path:
-    config = load_config()
-    catalog_path = Path(config.get("database", "data/file_hunter.db"))
-    if not catalog_path.is_absolute():
-        catalog_path = Path(__file__).resolve().parent.parent / catalog_path
-    return catalog_path.parent / "text.db"
+def text_db_path() -> Path:
+    return catalog_path("data/file_hunter.db").parent / "text.db"
+
+
+store = SqliteStore(
+    text_db_path,
+    read_pragmas=(),
+    write_pragmas=("PRAGMA journal_mode=WAL",),
+)
+text_writer = store.writer
+read_text = store.reader
+close_text_db = store.close
 
 
 async def init_text_db():
-    """Create text.db and schema if it doesn't exist. Called during app startup."""
-    db_path = _text_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = await aiosqlite.connect(db_path)
-    try:
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.executescript(_SCHEMA)
-        await conn.commit()
-    finally:
-        await conn.close()
-
-
-async def _get_write_db() -> aiosqlite.Connection:
-    """Lazy-init the single text write connection."""
-    global _write_db
-    if _write_db is None:
-        _write_db = await aiosqlite.connect(_text_db_path())
-        _write_db.row_factory = aiosqlite.Row
-        await _write_db.execute("PRAGMA journal_mode=WAL")
-    return _write_db
-
-
-@asynccontextmanager
-async def text_writer():
-    """Exclusive write access to the text database. Commits on clean exit."""
-    async with _write_lock:
-        db = await _get_write_db()
-        try:
-            yield db
-            await db.commit()
-        except BaseException:
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-            raise
-
-
-@asynccontextmanager
-async def read_text():
-    """Open a text read connection, yield it, close on exit."""
-    conn = await aiosqlite.connect(_text_db_path())
-    conn.row_factory = aiosqlite.Row
-    try:
-        yield conn
-    finally:
-        await conn.close()
+    """Create the database and its schema if they don't exist. Called
+    during app startup."""
+    await create_database(text_db_path(), SCHEMA)
 
 
 async def store_chunks(file_id: int, chunks: list[dict]):
@@ -127,11 +84,3 @@ async def delete_files(file_ids: list[int]):
             batch = file_ids[start:start + 500]
             ph = ",".join("?" for _ in batch)
             await db.execute(f"DELETE FROM chunks WHERE file_id IN ({ph})", batch)
-
-
-async def close_text_db():
-    """Close the text write connection. Called on shutdown."""
-    global _write_db
-    if _write_db is not None:
-        await _write_db.close()
-        _write_db = None

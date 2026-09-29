@@ -5,6 +5,7 @@ import logging
 import os
 from datetime import datetime
 
+from file_hunter.db import folder_tree_ids, FOLDER_TREE, folder_path
 from file_hunter.extensions import get_agent_location_ids, get_agent_label_prefixes
 from file_hunter.helpers import (
     parse_folder_id,
@@ -46,17 +47,17 @@ async def get_tree(db):
         folders_by_loc[loc_id].append(dict(f))
 
     # Check online status for all locations in a single thread call
-    online_flags = await asyncio.to_thread(_check_paths_exist, list(locations))
+    online_flags = await asyncio.to_thread(check_paths_exist, list(locations))
 
     # Build the tree in a thread — even with O(n) algorithm, large folder
     # counts can take non-trivial CPU time that would block the event loop.
     tree = await asyncio.to_thread(
-        _build_tree_sync, locations, folders_by_loc, online_flags
+        build_tree_sync, locations, folders_by_loc, online_flags
     )
     return tree
 
 
-def _build_tree_sync(locations, folders_by_loc, online_flags):
+def build_tree_sync(locations, folders_by_loc, online_flags):
     """Build the full navigation tree from pre-fetched data (runs in a worker thread).
 
     Args:
@@ -79,12 +80,64 @@ def _build_tree_sync(locations, folders_by_loc, online_flags):
             "type": "location",
             "label": loc["name"],
             "online": online,
-            "children": _build_folder_tree(
+            "children": build_folder_tree(
                 folders_by_loc.get(loc["id"], []), parent_id=None
             ),
         }
         tree.append(node)
     return tree
+
+
+async def tree_folders(db, where, params=()):
+    """Folder rows for tree nodes: where applies to folders f; hidden
+    folders are left out unless they're shown; ordered by name."""
+    show_hidden = await get_setting(db, "showHiddenFiles") == "1"
+    hidden_filter = "" if show_hidden else " AND f.hidden = 0"
+    child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
+    return await db.execute_fetchall(
+        f"""SELECT f.id, f.parent_id, f.location_id, f.name, f.hidden,
+                   f.dup_exclude, f.stale, f.is_favourite,
+                   EXISTS(SELECT 1 FROM folders c
+                          WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
+            FROM folders f
+            WHERE {where}{hidden_filter}
+            ORDER BY f.name COLLATE NOCASE""",
+        params,
+    )
+
+
+async def folder_sizes(folder_ids):
+    """{folder_id: total_size} from stats.db."""
+    if not folder_ids:
+        return {}
+    async with read_stats() as sdb:
+        ph = ",".join("?" for _ in folder_ids)
+        rows = await sdb.execute_fetchall(
+            f"SELECT folder_id, total_size FROM folder_stats WHERE folder_id IN ({ph})",
+            folder_ids,
+        )
+    return {r["folder_id"]: r["total_size"] or 0 for r in rows}
+
+
+def folder_node(f, total_size):
+    """A folder's tree node, children not loaded yet (None)."""
+    node = {
+        "id": f"fld-{f['id']}",
+        "type": "folder",
+        "label": f["name"],
+        "hasChildren": bool(f["has_children"]),
+        "totalSize": total_size,
+        "children": None,
+    }
+    for column, key in (
+        ("hidden", "hidden"),
+        ("dup_exclude", "dupExcluded"),
+        ("stale", "stale"),
+        ("is_favourite", "favourite"),
+    ):
+        if f[column]:
+            node[key] = True
+    return node
 
 
 async def get_shallow_tree(db):
@@ -93,10 +146,6 @@ async def get_shallow_tree(db):
     Each folder includes a hasChildren flag. children is set to null (None)
     to signal "not loaded yet" to the frontend.
     """
-    show_hidden = await get_setting(db, "showHiddenFiles") == "1"
-    hidden_filter = "" if show_hidden else " AND f.hidden = 0"
-    child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
-
     locations = await db.execute_fetchall(
         "SELECT l.id, l.name, l.root_path, l.date_added, l.date_last_scanned, l.is_favourite, "
         "a.name AS agent_name "
@@ -106,37 +155,23 @@ async def get_shallow_tree(db):
     )
 
     # Root-level folders (parent_id IS NULL) with has_children flag
-    root_folders = await db.execute_fetchall(
-        f"""SELECT f.id, f.location_id, f.name, f.hidden, f.dup_exclude, f.stale, f.is_favourite,
-                  EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
-           FROM folders f
-           WHERE f.parent_id IS NULL{hidden_filter}
-           ORDER BY f.name COLLATE NOCASE"""
-    )
+    root_folders = await tree_folders(db, "f.parent_id IS NULL")
 
     # Fetch sizes from stats.db
     loc_ids = [loc["id"] for loc in locations]
     folder_ids = [f["id"] for f in root_folders]
 
     loc_sizes: dict[int, int] = {}
-    folder_sizes: dict[int, int] = {}
-    async with read_stats() as sdb:
-        if loc_ids:
+    if loc_ids:
+        async with read_stats() as sdb:
             ph = ",".join("?" for _ in loc_ids)
             ls_rows = await sdb.execute_fetchall(
                 f"SELECT location_id, total_size FROM location_stats "
                 f"WHERE location_id IN ({ph})",
                 loc_ids,
             )
-            loc_sizes = {r["location_id"]: r["total_size"] or 0 for r in ls_rows}
-        if folder_ids:
-            ph = ",".join("?" for _ in folder_ids)
-            fs_rows = await sdb.execute_fetchall(
-                f"SELECT folder_id, total_size FROM folder_stats "
-                f"WHERE folder_id IN ({ph})",
-                folder_ids,
-            )
-            folder_sizes = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
+        loc_sizes = {r["location_id"]: r["total_size"] or 0 for r in ls_rows}
+    root_sizes = await folder_sizes(folder_ids)
 
     # Group root folders by location_id (no I/O, do before gather)
     roots_by_loc = {}
@@ -146,7 +181,7 @@ async def get_shallow_tree(db):
             roots_by_loc[loc_id] = []
         roots_by_loc[loc_id].append(f)
 
-    online_flags = await asyncio.to_thread(_check_paths_exist, list(locations))
+    online_flags = await asyncio.to_thread(check_paths_exist, list(locations))
 
     # Gather disk stats for online locations (concurrent)
     disk_stats_tasks = []
@@ -164,23 +199,7 @@ async def get_shallow_tree(db):
     for loc, online, ds in zip(locations, online_flags, disk_stats_results):
         children = []
         for f in roots_by_loc.get(loc["id"], []):
-            child_node = {
-                "id": f"fld-{f['id']}",
-                "type": "folder",
-                "label": f["name"],
-                "hasChildren": bool(f["has_children"]),
-                "totalSize": folder_sizes.get(f["id"], 0),
-                "children": None,  # not loaded sentinel
-            }
-            if f["hidden"]:
-                child_node["hidden"] = True
-            if f["dup_exclude"]:
-                child_node["dupExcluded"] = True
-            if f["stale"]:
-                child_node["stale"] = True
-            if f["is_favourite"]:
-                child_node["favourite"] = True
-            children.append(child_node)
+            children.append(folder_node(f, root_sizes.get(f["id"], 0)))
         label = loc["name"]
         agent_name = agent_prefixes.get(loc["id"])
         if agent_name:
@@ -215,55 +234,15 @@ async def get_children(db, folder_ids: list[int]):
     if not folder_ids:
         return {}
 
-    show_hidden = await get_setting(db, "showHiddenFiles") == "1"
-    hidden_filter = "" if show_hidden else " AND f.hidden = 0"
-    child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
-
     placeholders = ",".join("?" * len(folder_ids))
-    rows = await db.execute_fetchall(
-        f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude, f.stale, f.is_favourite,
-                   EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
-            FROM folders f
-            WHERE f.parent_id IN ({placeholders}){hidden_filter}
-            ORDER BY f.name COLLATE NOCASE""",
-        folder_ids,
-    )
-
-    # Fetch sizes from stats.db
-    child_ids = [r["id"] for r in rows]
-    child_sizes: dict[int, int] = {}
-    if child_ids:
-        async with read_stats() as sdb:
-            ph = ",".join("?" for _ in child_ids)
-            fs_rows = await sdb.execute_fetchall(
-                f"SELECT folder_id, total_size FROM folder_stats "
-                f"WHERE folder_id IN ({ph})",
-                child_ids,
-            )
-            child_sizes = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
+    rows = await tree_folders(db, f"f.parent_id IN ({placeholders})", folder_ids)
+    child_sizes = await folder_sizes([r["id"] for r in rows])
 
     result = {}
     for r in rows:
-        key = f"fld-{r['parent_id']}"
-        if key not in result:
-            result[key] = []
-        child_node = {
-            "id": f"fld-{r['id']}",
-            "type": "folder",
-            "label": r["name"],
-            "hasChildren": bool(r["has_children"]),
-            "totalSize": child_sizes.get(r["id"], 0),
-            "children": None,
-        }
-        if r["hidden"]:
-            child_node["hidden"] = True
-        if r["dup_exclude"]:
-            child_node["dupExcluded"] = True
-        if r["stale"]:
-            child_node["stale"] = True
-        if r["is_favourite"]:
-            child_node["favourite"] = True
-        result[key].append(child_node)
+        result.setdefault(f"fld-{r['parent_id']}", []).append(
+            folder_node(r, child_sizes.get(r["id"], 0))
+        )
 
     # Ensure every requested ID has an entry (empty list if no children)
     for fid in folder_ids:
@@ -281,19 +260,7 @@ async def get_expand_path(db, target_id: int):
     Returns {locationId, path, childrenByParent}.
     """
     # Recursive CTE to find ancestors from target to root
-    ancestors = await db.execute_fetchall(
-        """WITH RECURSIVE ancestors(id, parent_id, location_id, name, depth) AS (
-               SELECT id, parent_id, location_id, name, 0
-               FROM folders WHERE id = ?
-               UNION ALL
-               SELECT f.id, f.parent_id, f.location_id, f.name, a.depth + 1
-               FROM folders f
-               JOIN ancestors a ON f.id = a.parent_id
-           )
-           SELECT id, parent_id, location_id, name, depth FROM ancestors
-           ORDER BY depth DESC""",
-        (target_id,),
-    )
+    ancestors = await folder_path(db, target_id)
 
     if not ancestors:
         return None
@@ -302,110 +269,22 @@ async def get_expand_path(db, target_id: int):
     path = [f"fld-{a['id']}" for a in ancestors]
     location_id = ancestors[0]["location_id"]
 
-    # Collect parent IDs we need children for:
-    # - The location root (parent_id IS NULL) for root-level siblings
-    # - Each ancestor's parent_id for siblings at that level
-    # We need children of: the location (root level), and each ancestor folder
-    parent_ids_to_fetch = []
-    for a in ancestors:
-        parent_ids_to_fetch.append(a["id"])  # children of this ancestor
+    # Children of every folder on the path (only those that have any)
+    children_by_parent = {
+        key: nodes
+        for key, nodes in (await get_children(db, [a["id"] for a in ancestors])).items()
+        if nodes
+    }
 
-    # Fetch children for all ancestor folders (batch)
-    show_hidden = await get_setting(db, "showHiddenFiles") == "1"
-    hidden_filter = "" if show_hidden else " AND f.hidden = 0"
-    child_hidden_filter = "" if show_hidden else " AND c.hidden = 0"
-
-    children_by_parent = {}
-
-    if parent_ids_to_fetch:
-        placeholders = ",".join("?" * len(parent_ids_to_fetch))
-        rows = await db.execute_fetchall(
-            f"""SELECT f.id, f.parent_id, f.name, f.hidden, f.dup_exclude, f.stale, f.is_favourite,
-                       EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
-                FROM folders f
-                WHERE f.parent_id IN ({placeholders}){hidden_filter}
-                ORDER BY f.name COLLATE NOCASE""",
-            parent_ids_to_fetch,
-        )
-
-        # Fetch sizes from stats.db
-        all_ids = [r["id"] for r in rows]
-        sz_map: dict[int, int] = {}
-        if all_ids:
-            async with read_stats() as sdb:
-                ph = ",".join("?" for _ in all_ids)
-                fs_rows = await sdb.execute_fetchall(
-                    f"SELECT folder_id, total_size FROM folder_stats "
-                    f"WHERE folder_id IN ({ph})",
-                    all_ids,
-                )
-                sz_map = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
-
-        for r in rows:
-            key = f"fld-{r['parent_id']}"
-            if key not in children_by_parent:
-                children_by_parent[key] = []
-            child_node = {
-                "id": f"fld-{r['id']}",
-                "type": "folder",
-                "label": r["name"],
-                "hasChildren": bool(r["has_children"]),
-                "totalSize": sz_map.get(r["id"], 0),
-                "children": None,
-            }
-            if r["hidden"]:
-                child_node["hidden"] = True
-            if r["dup_exclude"]:
-                child_node["dupExcluded"] = True
-            if r["stale"]:
-                child_node["stale"] = True
-            if r["is_favourite"]:
-                child_node["favourite"] = True
-            children_by_parent[key].append(child_node)
-
-    # Also fetch root-level siblings (children of the location)
-    root_rows = await db.execute_fetchall(
-        f"""SELECT f.id, f.name, f.hidden, f.dup_exclude, f.stale, f.is_favourite,
-                  EXISTS(SELECT 1 FROM folders c WHERE c.parent_id = f.id{child_hidden_filter}) AS has_children
-           FROM folders f
-           WHERE f.location_id = ? AND f.parent_id IS NULL{hidden_filter}
-           ORDER BY f.name COLLATE NOCASE""",
-        (location_id,),
+    # And the location's root folders, the siblings at the top level
+    root_rows = await tree_folders(
+        db, "f.location_id = ? AND f.parent_id IS NULL", (location_id,)
     )
-
-    # Fetch root folder sizes from stats.db
-    root_ids = [r["id"] for r in root_rows]
-    root_sz: dict[int, int] = {}
-    if root_ids:
-        async with read_stats() as sdb:
-            ph = ",".join("?" for _ in root_ids)
-            fs_rows = await sdb.execute_fetchall(
-                f"SELECT folder_id, total_size FROM folder_stats "
-                f"WHERE folder_id IN ({ph})",
-                root_ids,
-            )
-            root_sz = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
-
+    root_sizes = await folder_sizes([r["id"] for r in root_rows])
     loc_key = f"loc-{location_id}"
-    children_by_parent[loc_key] = []
-    for r in root_rows:
-        child_node = {
-            "id": f"fld-{r['id']}",
-            "type": "folder",
-            "label": r["name"],
-            "hasChildren": bool(r["has_children"]),
-            "totalSize": root_sz.get(r["id"], 0),
-            "children": None,
-        }
-        if r["hidden"]:
-            child_node["hidden"] = True
-        if r["dup_exclude"]:
-            child_node["dupExcluded"] = True
-        if r["stale"]:
-            child_node["stale"] = True
-        if r["is_favourite"]:
-            child_node["favourite"] = True
-        children_by_parent[loc_key].append(child_node)
+    children_by_parent[loc_key] = [
+        folder_node(r, root_sizes.get(r["id"], 0)) for r in root_rows
+    ]
 
     return {
         "locationId": loc_key,
@@ -445,7 +324,6 @@ async def get_disk_stats(location_id: int, root_path: str) -> dict | None:
 
     Notes:
         Async — calls agent_disk_stats which makes an HTTP request to the agent.
-        Called by get_shallow_tree, get_location_stats, and get_folder_stats.
     """
     try:
         return await agent_disk_stats(location_id, root_path)
@@ -453,7 +331,7 @@ async def get_disk_stats(location_id: int, root_path: str) -> dict | None:
         return None
 
 
-def _check_paths_exist(locations: list) -> list[bool]:
+def check_paths_exist(locations: list) -> list[bool]:
     """Batch-check online status for multiple locations in a single thread call.
 
     Args:
@@ -465,12 +343,11 @@ def _check_paths_exist(locations: list) -> list[bool]:
 
     Notes:
         Runs in asyncio.to_thread. Delegates each check to agent_online_check().
-        Called by get_tree() and get_shallow_tree().
     """
     return [agent_online_check(loc) for loc in locations]
 
 
-def _build_folder_tree(folders, parent_id):
+def build_folder_tree(folders, parent_id):
     """Build a nested tree structure from a flat list of folder dicts in O(n).
 
     Args:
@@ -483,7 +360,7 @@ def _build_folder_tree(folders, parent_id):
 
     Notes:
         Pre-groups folders by parent_id for O(1) lookup per node. Called by
-        _build_tree_sync() for the full tree view.
+        build_tree_sync() for the full tree view.
     """
     # Pre-group folders by parent_id so each lookup is O(1)
     by_parent = {}
@@ -493,19 +370,19 @@ def _build_folder_tree(folders, parent_id):
             by_parent[pid] = []
         by_parent[pid].append(f)
 
-    def _build(pid):
+    def build(pid):
         children = []
         for f in by_parent.get(pid, []):
             node = {
                 "id": f"fld-{f['id']}",
                 "type": "folder",
                 "label": f["name"],
-                "children": _build(f["id"]),
+                "children": build(f["id"]),
             }
             children.append(node)
         return children
 
-    return _build(parent_id)
+    return build(parent_id)
 
 
 async def create_folder(db, parent_id: str, name: str) -> dict:
@@ -525,12 +402,7 @@ async def create_folder(db, parent_id: str, name: str) -> dict:
         ValueError: If parent not found, location offline, invalid name,
             or name collision on disk or in the catalog.
 
-    Side effects:
-        Creates the directory on disk via fs.dir_create. Inserts a row into
-        the folders table. Commits the transaction.
-
     Notes:
-        Called from the create-folder HTTP endpoint.
     """
     # Resolve parent to get location info and path
     if str(parent_id).startswith("loc-"):
@@ -620,12 +492,7 @@ async def create_location(db, name: str, root_path: str, agent_id: int = None) -
         dict: Tree node with id ("loc-N"), type, label, online flag, and
         empty children list.
 
-    Side effects:
-        Writes to locations table. Registers the agent-location mapping in
-        online_check state. Commits the transaction.
-
     Notes:
-        Called from the add-location HTTP endpoint and agent sync.
     """
     now = datetime.now().isoformat(timespec="seconds")
     cursor = await db.execute(
@@ -661,11 +528,7 @@ async def rename_location(db, loc_id: int, new_name: str) -> dict | None:
         dict | None: Updated node dict with id, label, online flag. None if
         the location does not exist.
 
-    Side effects:
-        Writes to locations table. Commits the transaction.
-
     Notes:
-        Called from the rename-location HTTP endpoint.
     """
     row = await db.execute_fetchall(
         "SELECT id, root_path FROM locations WHERE id = ?", (loc_id,)
@@ -692,12 +555,7 @@ async def update_schedule(db, loc_id: int, enabled: bool, days: list[int], time:
         days: List of weekday ints (0=Monday .. 6=Sunday).
         time: Time string in "HH:MM" format.
 
-    Side effects:
-        Writes scan_schedule_enabled, scan_schedule_days, scan_schedule_time
-        on the locations row. Commits the transaction.
-
     Notes:
-        Called from the schedule HTTP endpoint.
     """
     enabled_int = 1 if enabled else 0
     days_str = ",".join(str(d) for d in sorted(days))
@@ -789,31 +647,13 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
     # Build breadcrumb
     breadcrumb = [{"id": f"loc-{location_id}", "name": loc_name}]
     if parent_folder_id is not None:
-        ancestors = await db.execute_fetchall(
-            """WITH RECURSIVE anc(id, parent_id, name, depth) AS (
-                   SELECT id, parent_id, name, 0 FROM folders WHERE id = ?
-                   UNION ALL
-                   SELECT f.id, f.parent_id, f.name, a.depth + 1
-                   FROM folders f JOIN anc a ON f.id = a.parent_id
-               )
-               SELECT id, name FROM anc ORDER BY depth DESC""",
-            (parent_folder_id,),
-        )
+        ancestors = await folder_path(db, parent_folder_id)
         for a in ancestors:
             breadcrumb.append({"id": a["id"], "name": a["name"]})
 
     # Fetch sizes from stats.db for treemap children
     tm_ids = [r["id"] for r in children_rows]
-    tm_sizes: dict[int, int] = {}
-    if tm_ids:
-        async with read_stats() as sdb:
-            ph = ",".join("?" for _ in tm_ids)
-            fs_rows = await sdb.execute_fetchall(
-                f"SELECT folder_id, total_size FROM folder_stats "
-                f"WHERE folder_id IN ({ph})",
-                tm_ids,
-            )
-            tm_sizes = {r["folder_id"]: r["total_size"] or 0 for r in fs_rows}
+    tm_sizes = await folder_sizes(tm_ids)
 
     # Build children list
     children = []
@@ -853,7 +693,7 @@ async def get_treemap_children(db, location_id: int, parent_folder_id: int | Non
     }
 
 
-async def _cross_location_dir_transfer(
+async def cross_location_dir_transfer(
     db,
     fld,
     src_abs,
@@ -886,12 +726,6 @@ async def _cross_location_dir_transfer(
     Raises:
         Exception: Re-raised from fs operations after cleaning up the partial
             destination. Source is left untouched on failure.
-
-    Side effects:
-        Creates folders and copies files on the destination agent via fs.
-        Optionally deletes the source tree on the source agent.
-        Registers/unregisters activity and broadcasts batch_move_progress
-        events to the UI.
     """
     log = logging.getLogger(__name__)
     verb = "Moving" if delete_source else "Copying"
@@ -997,14 +831,8 @@ async def move_folder(
         ValueError: On invalid inputs, offline locations, collisions, or
             cycle detection (moving a folder into its own descendant).
 
-    Side effects:
-        Moves/copies files on disk via fs operations. Updates folders and files
-        tables (rel_path, full_path, location_id, parent_id). Commits the
-        transaction. Triggers post_op_stats for size recalculation and stats
-        cache invalidation.
-
     Notes:
-        Cross-location moves/copies are handled by _cross_location_dir_transfer
+        Cross-location moves/copies are handled by cross_location_dir_transfer
         (with rollback on failure). Called from the move-folder
         HTTP endpoint.
     """
@@ -1060,15 +888,7 @@ async def move_folder(
         # Cycle check: destination must not be the folder itself or any descendant
         if dest_fld_id == folder_id:
             raise ValueError("Cannot move a folder into itself.")
-        desc_rows = await db.execute_fetchall(
-            """WITH RECURSIVE desc(id) AS (
-                   SELECT ? UNION ALL
-                   SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
-               )
-               SELECT id FROM desc""",
-            (folder_id,),
-        )
-        desc_ids = {r["id"] for r in desc_rows}
+        desc_ids = set(await folder_tree_ids(db, folder_id))
         if dest_fld_id in desc_ids:
             raise ValueError("Cannot move a folder into one of its descendants.")
 
@@ -1125,19 +945,16 @@ async def move_folder(
     # Get all descendant folder IDs BEFORE disk operation (needed by both
     # cross-location copy and DB updates below)
     desc_folder_rows = await db.execute_fetchall(
-        """WITH RECURSIVE desc(id) AS (
-               SELECT f.id FROM folders f WHERE f.parent_id = ?
-               UNION ALL
-               SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
-           )
-           SELECT d.id, fo.rel_path, fo.name, fo.parent_id
-           FROM desc d JOIN folders fo ON fo.id = d.id""",
-        (folder_id,),
+        FOLDER_TREE
+        + """SELECT d.id, fo.rel_path, fo.name, fo.parent_id
+           FROM folder_tree d JOIN folders fo ON fo.id = d.id
+           WHERE d.id != ?""",
+        (folder_id, folder_id),
     )
 
     # Copy or move on disk
     if copy or cross_location:
-        await _cross_location_dir_transfer(
+        await cross_location_dir_transfer(
             db, fld, src_abs, dest_abs, src_loc_id, dest_loc_id,
             old_prefix, new_prefix, dest_root, desc_folder_rows,
             delete_source=not copy,

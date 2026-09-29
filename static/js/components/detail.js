@@ -5,6 +5,7 @@ import Toast from './toast.js';
 import Triage from './triage.js';
 import icons from '../icons.js';
 import { copyText } from '../clipboard.js';
+import { formatSize, formatDateTime, esc } from '../format.js';
 
 function isScanning(locId) {
     return Tree.scanningLocations.has('loc-' + locId);
@@ -17,34 +18,8 @@ function disabledIf(offline, scanning, missing) {
     return '';
 }
 
-function authUrl(url) {
-    const token = localStorage.getItem('fh-token');
-    return token ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : url;
-}
 
-function authHeaders() {
-    const h = {};
-    const token = localStorage.getItem('fh-token');
-    if (token) h['Authorization'] = `Bearer ${token}`;
-    return h;
-}
 
-function formatSize(bytes) {
-    if (bytes === null || bytes === undefined) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    if (bytes < 1099511627776) return (bytes / 1073741824).toFixed(1) + ' GB';
-    if (bytes < 1125899906842624) return (bytes / 1099511627776).toFixed(1) + ' TB';
-    return (bytes / 1125899906842624).toFixed(1) + ' PB';
-}
-
-function formatDate(isoStr) {
-    if (!isoStr) return '';
-    const d = new Date(isoStr);
-    if (isNaN(d)) return isoStr;
-    return d.toLocaleString();
-}
 
 const zoomIcon = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5.5"/><line x1="13" y1="13" x2="18" y2="18"/><line x1="8.5" y1="6" x2="8.5" y2="11"/><line x1="6" y1="8.5" x2="11" y2="8.5"/></svg>`;
 
@@ -106,12 +81,7 @@ const Detail = {
         }
         const gtb = this.el.querySelector('[data-stat="globalTypeBreakdown"]');
         if (gtb && msg.globalTypeBreakdown) {
-            gtb.innerHTML = '<h3>Files by Type</h3>' + msg.globalTypeBreakdown.map(t =>
-                `<div class="detail-field">
-                    <span class="label">${t.type || 'other'}</span>
-                    <span class="value">${t.count.toLocaleString()}</span>
-                </div>`
-            ).join('');
+            gtb.innerHTML = '<h3>Files by Type</h3>' + this.typeBreakdownHtml(msg.globalTypeBreakdown);
         }
 
         // Location / folder: update if viewing the scanning location
@@ -137,12 +107,7 @@ const Detail = {
         }
         const tb = this.el.querySelector('[data-stat="typeBreakdown"]');
         if (tb && msg.typeBreakdown) {
-            tb.innerHTML = '<h3>File Types</h3>' + msg.typeBreakdown.map(t =>
-                `<div class="detail-field">
-                    <span class="label">${t.type || 'other'}</span>
-                    <span class="value">${t.count.toLocaleString()}</span>
-                </div>`
-            ).join('');
+            tb.innerHTML = '<h3>File Types</h3>' + this.typeBreakdownHtml(msg.typeBreakdown);
         }
     },
 
@@ -164,12 +129,7 @@ const Detail = {
                 if (gdup) gdup.textContent = s.duplicateFiles.toLocaleString();
                 const gtb = this.el.querySelector('[data-stat="globalTypeBreakdown"]');
                 if (gtb && s.typeBreakdown) {
-                    gtb.innerHTML = '<h3>Files by Type</h3>' + s.typeBreakdown.map(t =>
-                        `<div class="detail-field">
-                            <span class="label">${t.type || 'other'}</span>
-                            <span class="value">${t.count.toLocaleString()}</span>
-                        </div>`
-                    ).join('');
+                    gtb.innerHTML = '<h3>Files by Type</h3>' + this.typeBreakdownHtml(s.typeBreakdown);
                 }
             }
             return;
@@ -215,12 +175,7 @@ const Detail = {
         if (ls) ls.textContent = s.dateLastScanned ? timeAgo(s.dateLastScanned) + (s.lastScanStatus && s.lastScanStatus !== 'completed' ? ' (' + s.lastScanStatus + ')' : '') : 'Never';
         const tb = this.el.querySelector('[data-stat="typeBreakdown"]');
         if (tb && s.typeBreakdown) {
-            tb.innerHTML = '<h3>File Types</h3>' + s.typeBreakdown.map(t =>
-                `<div class="detail-field">
-                    <span class="label">${t.type || 'other'}</span>
-                    <span class="value">${t.count.toLocaleString()}</span>
-                </div>`
-            ).join('');
+            tb.innerHTML = '<h3>File Types</h3>' + this.typeBreakdownHtml(s.typeBreakdown);
         }
         this.applyDupRecalcOverride();
     },
@@ -367,22 +322,22 @@ const Detail = {
         // asText: raw text in a <pre>, whatever the type (e.g. markdown source)
         const type = asText ? 'text' : (detail.typeHigh || '').toLowerCase();
         const typeLow = asText ? '' : (detail.typeLow || '').toLowerCase();
-        const url = authUrl(`/api/files/${detail.id}/content`);
+        const url = API.authUrl(`/api/files/${detail.id}/content`);
         m.title.textContent = detail.name;
         m.fileId = detail.id;
         m.fileName = detail.name;
 
         if (type === 'image') {
-            m.content.innerHTML = `<img src="${url}" alt="${detail.name}">`;
+            m.content.innerHTML = `<img src="${url}" alt="${esc(detail.name)}">`;
         } else if (type === 'video') {
             m.content.innerHTML = `<video src="${url}" controls autoplay></video>`;
         } else if (type === 'audio') {
             m.content.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
         } else if (type === 'document' && typeLow === 'pdf') {
-            m.content.innerHTML = `<iframe src="${url}" title="${detail.name}"></iframe>`;
+            m.content.innerHTML = `<iframe src="${url}" title="${esc(detail.name)}"></iframe>`;
         } else if (type === 'text' && typeLow === 'csv') {
             m.content.innerHTML = `<div id="modal-csv-preview" class="csv-preview selectable">Loading...</div>`;
-            fetch(url, { headers: authHeaders() }).then(r => r.ok ? r.text() : null).then(text => {
+            fetch(url, { headers: API.authHeaders() }).then(r => r.ok ? r.text() : null).then(text => {
                 const el = document.getElementById('modal-csv-preview');
                 if (!el || !text) { if (el) el.textContent = '(Preview not available)'; return; }
                 this.renderCsvTable(el, text);
@@ -392,7 +347,7 @@ const Detail = {
             });
         } else if (type === 'text' && typeLow === 'md') {
             m.content.innerHTML = `<div class="md-preview selectable">Loading...</div>`;
-            fetch(url, { headers: authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
+            fetch(url, { headers: API.authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
                 const el = m.content.querySelector('.md-preview');
                 if (el) el.innerHTML = marked.parse(text);
             }).catch(() => {
@@ -401,14 +356,14 @@ const Detail = {
             });
         } else if (type === 'text') {
             m.content.innerHTML = `<pre>Loading...</pre>`;
-            fetch(url, { headers: authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
+            fetch(url, { headers: API.authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
                 m.content.querySelector('pre').textContent = text;
             }).catch(() => {
                 m.content.querySelector('pre').textContent = '(Preview not available)';
             });
         } else {
             m.content.innerHTML = `<pre>Loading...</pre>`;
-            fetch(url, { headers: authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
+            fetch(url, { headers: API.authHeaders() }).then(r => r.ok ? r.text() : '(Preview not available)').then(text => {
                 m.content.querySelector('pre').textContent = text;
             }).catch(() => {
                 m.content.querySelector('pre').textContent = '(Preview not available)';
@@ -458,12 +413,7 @@ const Detail = {
     downloadPreviewFile() {
         const m = this.previewModal;
         if (!m.fileId) return;
-        const a = document.createElement('a');
-        a.href = authUrl(`/api/files/${m.fileId}/content?download=1`);
-        a.download = m.fileName || '';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        API.download(`/api/files/${m.fileId}/content?download=1`, m.fileName);
     },
 
     toggleFullscreen() {
@@ -573,13 +523,10 @@ const Detail = {
         await this.slideshowTransition(target, gen);
     },
 
-    async slideshowTransition(globalOffset, gen) {
-        const winIdx = globalOffset - this.slideshowWindowStart;
-        const fileId = this.slideshowWindow[winIdx];
-        if (!fileId) return;
-        const m = this.previewModal;
-
-        // Fetch detail (from cache or API)
+    /** The file at globalOffset and its details (cached), or null. */
+    async slideAt(globalOffset) {
+        const fileId = this.slideshowWindow[globalOffset - this.slideshowWindowStart];
+        if (!fileId) return null;
         let detail = this.slideshowCache[fileId];
         if (!detail) {
             try {
@@ -590,48 +537,74 @@ const Detail = {
                 }
             } catch { /* skip */ }
         }
-        if (!detail) return;
-        if (gen !== undefined && this.slideshowNavGen !== gen) return;
+        return detail ? { fileId, detail } : null;
+    },
 
-        const url = authUrl(`/api/files/${fileId}/content`);
+    /** Name the slide in the preview; returns its content URL. */
+    slideHeader(fileId, detail) {
+        const m = this.previewModal;
         m.title.textContent = detail.name;
         m.fileId = fileId;
         m.fileName = detail.name;
+        return API.authUrl(`/api/files/${fileId}/content`);
+    },
+
+    /** A playlist video that moves on when it ends or fails. */
+    playlistVideo(url) {
+        const myGen = this.slideshowNavGen;
+        const video = document.createElement('video');
+        video.src = url;
+        video.controls = true;
+        video.autoplay = true;
+        video.style.maxWidth = '100%';
+        video.style.maxHeight = '100%';
+        video.addEventListener('ended', () => {
+            if (this.slideshowNavGen === myGen) this.slideshowNav(1);
+        });
+        video.addEventListener('error', () => {
+            if (this.slideshowNavGen === myGen) this.slideshowNav(1);
+        });
+        return video;
+    },
+
+    /** A slideshow image (the buffered one if it's loaded); clicking it
+     *  closes the preview and goes to the file. */
+    slideImage(fileId, url, detail, className) {
+        const bufferedImg = this.slideshowCache[`_img_${fileId}`];
+        let img;
+        if (bufferedImg && bufferedImg.complete) {
+            img = bufferedImg;
+        } else {
+            img = new Image();
+            img.src = url;
+            img.alt = detail.name;
+        }
+        img.className = className;
+        img.addEventListener('click', () => {
+            this.closePreviewModal();
+            if (this.onNavigateToFile) this.onNavigateToFile(fileId);
+        });
+        return img;
+    },
+
+    async slideshowTransition(globalOffset, gen) {
+        const slide = await this.slideAt(globalOffset);
+        if (!slide) return;
+        if (gen !== undefined && this.slideshowNavGen !== gen) return;
+        const { fileId, detail } = slide;
+        const m = this.previewModal;
+        const url = this.slideHeader(fileId, detail);
 
         if (this.slideshowMode === 'playlist') {
             // Playlist: hard swap — kill old video (remove from DOM before clearing src to avoid error events)
             m.content.innerHTML = '';
-            const myGen = this.slideshowNavGen;
-            const video = document.createElement('video');
-            video.src = url;
-            video.controls = true;
-            video.autoplay = true;
-            video.style.maxWidth = '100%';
-            video.style.maxHeight = '100%';
-            video.addEventListener('ended', () => {
-                if (this.slideshowNavGen === myGen) this.slideshowNav(1);
-            });
-            video.addEventListener('error', () => {
-                if (this.slideshowNavGen === myGen) this.slideshowNav(1);
-            });
-            m.content.appendChild(video);
+            m.content.appendChild(this.playlistVideo(url));
         } else {
             // Slideshow: crossfade images
-            const bufferedImg = this.slideshowCache[`_img_${fileId}`];
-            let newImg;
-            if (bufferedImg && bufferedImg.complete) {
-                newImg = bufferedImg;
-            } else {
-                newImg = new Image();
-                newImg.src = url;
-                newImg.alt = detail.name;
-            }
-            newImg.className = 'slideshow-clickable slideshow-stacked slideshow-fade-out';
+            const newImg = this.slideImage(
+                fileId, url, detail, 'slideshow-clickable slideshow-stacked slideshow-fade-out'
+            );
             newImg.style.visibility = '';
-            newImg.addEventListener('click', () => {
-                this.closePreviewModal();
-                if (this.onNavigateToFile) this.onNavigateToFile(fileId);
-            });
 
             const oldImg = m.content.querySelector('img:not(.slideshow-fade-out)') || m.content.querySelector('img');
             if (oldImg) {
@@ -675,62 +648,16 @@ const Detail = {
     },
 
     async slideshowShow(globalOffset) {
-        const winIdx = globalOffset - this.slideshowWindowStart;
-        const fileId = this.slideshowWindow[winIdx];
-        if (!fileId) return;
+        const slide = await this.slideAt(globalOffset);
+        if (!slide) return;
+        const { fileId, detail } = slide;
         const m = this.previewModal;
-
-        let detail = this.slideshowCache[fileId];
-        if (!detail) {
-            try {
-                const res = await API.get(`/api/files/${fileId}`);
-                if (res.ok) {
-                    detail = res.data;
-                    this.slideshowCache[fileId] = detail;
-                }
-            } catch { /* skip */ }
-        }
-        if (!detail) return;
-
-        const url = authUrl(`/api/files/${fileId}/content`);
-        m.title.textContent = detail.name;
-        m.fileId = fileId;
-        m.fileName = detail.name;
+        const url = this.slideHeader(fileId, detail);
 
         m.content.innerHTML = '';
-
-        if (this.slideshowMode === 'playlist') {
-            const myGen = this.slideshowNavGen;
-            const video = document.createElement('video');
-            video.src = url;
-            video.controls = true;
-            video.autoplay = true;
-            video.style.maxWidth = '100%';
-            video.style.maxHeight = '100%';
-            video.addEventListener('ended', () => {
-                if (this.slideshowNavGen === myGen) this.slideshowNav(1);
-            });
-            video.addEventListener('error', () => {
-                if (this.slideshowNavGen === myGen) this.slideshowNav(1);
-            });
-            m.content.appendChild(video);
-        } else {
-            const bufferedImg = this.slideshowCache[`_img_${fileId}`];
-            let img;
-            if (bufferedImg && bufferedImg.complete) {
-                img = bufferedImg;
-            } else {
-                img = new Image();
-                img.src = url;
-                img.alt = detail.name;
-            }
-            img.className = 'slideshow-clickable';
-            m.content.appendChild(img);
-            img.addEventListener('click', () => {
-                this.closePreviewModal();
-                if (this.onNavigateToFile) this.onNavigateToFile(fileId);
-            });
-        }
+        m.content.appendChild(this.slideshowMode === 'playlist'
+            ? this.playlistVideo(url)
+            : this.slideImage(fileId, url, detail, 'slideshow-clickable'));
 
         m.downloadBtn.classList.remove('hidden');
         m.fullscreenBtn.classList.remove('hidden');
@@ -760,7 +687,7 @@ const Detail = {
         const fileId = this.slideshowWindow[globalOffset - this.slideshowWindowStart];
         if (!fileId || this.slideshowCache[`_img_${fileId}`]) return;
         const img = new Image();
-        img.src = authUrl(`/api/files/${fileId}/content`);
+        img.src = API.authUrl(`/api/files/${fileId}/content`);
         this.slideshowCache[`_img_${fileId}`] = img;
         if (!this.slideshowCache[fileId]) {
             API.get(`/api/files/${fileId}`).then(res => {
@@ -837,7 +764,7 @@ const Detail = {
             const label = (i === 0 && entry.nodeId)
                 ? (Tree.getLocationLabel(entry.nodeId) || entry.name)
                 : entry.name;
-            return `<span class="breadcrumb-segment${i === last ? ' breadcrumb-current' : ''}" data-node-id="${entry.nodeId}">${label}</span>`;
+            return `<span class="breadcrumb-segment${i === last ? ' breadcrumb-current' : ''}" data-node-id="${entry.nodeId}">${esc(label)}</span>`;
         });
         return `<div class="detail-breadcrumb">${segments.join('<span class="breadcrumb-sep">/</span>')}</div>`;
     },
@@ -872,21 +799,13 @@ const Detail = {
                 const suffix = scan.status && scan.status !== 'completed' ? ` (${scan.status})` : '';
                 const label = scan.agent ? `${scan.location} [${scan.agent}]` : scan.location;
                 return `<div class="detail-field">
-                    <span class="label">${label}</span>
+                    <span class="label">${esc(label)}</span>
                     <span class="value">${ago}${suffix}</span>
                 </div>`;
             }).join('');
         }
 
-        let typeHtml = '';
-        if (s.typeBreakdown && s.typeBreakdown.length > 0) {
-            typeHtml = s.typeBreakdown.map(t =>
-                `<div class="detail-field">
-                    <span class="label">${t.type || 'other'}</span>
-                    <span class="value">${t.count.toLocaleString()}</span>
-                </div>`
-            ).join('');
-        }
+        const typeHtml = this.typeBreakdownHtml(s.typeBreakdown);
 
         this.el.innerHTML = `
             <div class="dashboard-stats">
@@ -1004,18 +923,18 @@ const Detail = {
 
         let html = `
             <div class="detail-section">
-                <div class="detail-filename selectable">${detail.name}${detail.locationOnline === false ? '<span class="detail-offline-badge">offline</span>' : ''}${hasPendingOp ? `<span class="pending-indicator">pending ${detail.pendingOp}</span>` : ''}</div>
+                <div class="detail-filename selectable">${esc(detail.name)}${detail.locationOnline === false ? '<span class="detail-offline-badge">offline</span>' : ''}${hasPendingOp ? `<span class="pending-indicator">pending ${detail.pendingOp}</span>` : ''}</div>
                 ${staleBanner}
                 ${pendingBanner}
                 ${ignoredBannerPlaceholder}
-                ${detail.breadcrumb ? this.buildBreadcrumb(detail.breadcrumb) : `<div class="detail-path">${detail.path || ''}</div>`}
+                ${detail.breadcrumb ? this.buildBreadcrumb(detail.breadcrumb) : `<div class="detail-path">${esc(detail.path || '')}</div>`}
                 ${btnRow}
             </div>
             ${previewHtml}
             <div class="detail-section">
                 <h3>Tags</h3>
                 <div class="tag-list" id="detail-tags">
-                    ${tags.map(t => `<span class="tag">${t} <span class="tag-remove" data-tag="${t}">&times;</span></span>`).join('')}
+                    ${tags.map(t => `<span class="tag">${esc(t)} <span class="tag-remove" data-tag="${esc(t)}">&times;</span></span>`).join('')}
                 </div>
                 <div class="tag-add-row">
                     <input type="text" class="tag-input" id="detail-tag-input" placeholder="Add tag...">
@@ -1025,13 +944,13 @@ const Detail = {
             <div class="detail-section">
                 <h3>Description</h3>
                 <textarea class="detail-description-edit" id="detail-desc"
-                    placeholder="Add a description...">${detail.description || ''}</textarea>
+                    placeholder="Add a description...">${esc(detail.description || '')}</textarea>
             </div>
             <div class="detail-section">
                 <h3>Metadata</h3>
                 <div class="detail-field">
                     <span class="label">Type</span>
-                    <span class="value">${detail.typeHigh || ''} / ${detail.typeLow || ''}</span>
+                    <span class="value">${esc(detail.typeHigh || '')} / ${esc(detail.typeLow || '')}</span>
                 </div>
                 <div class="detail-field">
                     <span class="label">Size</span>
@@ -1043,15 +962,15 @@ const Detail = {
                 </div>
                 <div class="detail-field">
                     <span class="label">Modified</span>
-                    <span class="value">${formatDate(detail.date)}</span>
+                    <span class="value">${formatDateTime(detail.date)}</span>
                 </div>
                 <div class="detail-field">
                     <span class="label">Cataloged</span>
-                    <span class="value">${formatDate(detail.cataloged)}</span>
+                    <span class="value">${formatDateTime(detail.cataloged)}</span>
                 </div>
                 <div class="detail-field">
                     <span class="label">Last Seen</span>
-                    <span class="value">${formatDate(detail.lastSeen)}</span>
+                    <span class="value">${formatDateTime(detail.lastSeen)}</span>
                 </div>
             </div>
             <div class="detail-section">
@@ -1083,8 +1002,8 @@ const Detail = {
                     <h3>Duplicates (${dupTotal.toLocaleString()})</h3>
                     ${dups.map(d => `
                         <div class="dup-list-item dup-link" data-file-id="${d.fileId}">
-                            <span class="dup-location">${d.location}</span><br>
-                            ${d.path}
+                            <span class="dup-location">${esc(d.location)}</span><br>
+                            ${esc(d.path)}
                         </div>
                     `).join('')}
                     ${moreBtn}
@@ -1112,7 +1031,7 @@ const Detail = {
         if (hexPreviewBtn) hexPreviewBtn.addEventListener('click', () => this.openHexPreview(detail));
         const copyUrlBtn = document.getElementById('detail-preview-copy');
         if (copyUrlBtn) copyUrlBtn.addEventListener('click', () => {
-            copyText(location.origin + authUrl(`/api/files/${detail.id}/content`), copyUrlBtn);
+            copyText(location.origin + API.authUrl(`/api/files/${detail.id}/content`), copyUrlBtn);
         });
         this.checkIgnored(detail, gen);
 
@@ -1174,14 +1093,14 @@ const Detail = {
     buildPreview(detail) {
         if (!detail.id) return '';
         const type = (detail.typeHigh || '').toLowerCase();
-        const url = authUrl(`/api/files/${detail.id}/content`);
+        const url = API.authUrl(`/api/files/${detail.id}/content`);
         const zoom = `<button class="preview-zoom-btn" id="preview-zoom-btn" title="Enlarge">${zoomIcon}</button>`;
 
         const hexBtn = `<button class="btn btn-sm" id="detail-preview-hex">Preview as Hex</button>`;
         const copyBtn = `<button class="btn btn-sm" id="detail-preview-copy">Copy URL</button>`;
         const textBtn = `<button class="btn btn-sm" id="detail-preview-text">Preview as text</button>`;
         if (type === 'image') {
-            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${detail.name}"><div class="detail-dimensions" id="detail-img-dims"></div></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
+            return `<div class="detail-preview">${zoom}<img src="${url}" alt="${esc(detail.name)}"><div class="detail-dimensions" id="detail-img-dims"></div></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'video') {
             return `<div class="detail-preview">${zoom}<video src="${url}" controls></video></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
@@ -1190,7 +1109,7 @@ const Detail = {
             return `<div class="detail-preview">${zoom}<audio src="${url}" controls></audio></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'document' && (detail.typeLow || '').toLowerCase() === 'pdf') {
-            return `<div class="detail-preview detail-preview-pdf">${zoom}<iframe src="${url}" title="${detail.name}"></iframe></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
+            return `<div class="detail-preview detail-preview-pdf">${zoom}<iframe src="${url}" title="${esc(detail.name)}"></iframe></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
         }
         if (type === 'text' && (detail.typeLow || '').toLowerCase() === 'csv') {
             return `<div class="detail-preview">${zoom}<div id="detail-csv-preview" class="csv-preview selectable">Loading...</div></div><div class="detail-preview-btns">${hexBtn} ${copyBtn}</div>`;
@@ -1208,7 +1127,7 @@ const Detail = {
         const pre = document.getElementById('detail-text-preview');
         if (!pre || !detail.id) return;
         try {
-            const resp = await fetch(`/api/files/${detail.id}/content`, { headers: authHeaders() });
+            const resp = await fetch(`/api/files/${detail.id}/content`, { headers: API.authHeaders() });
             if (!resp.ok) {
                 pre.textContent = '(Preview not available)';
                 return;
@@ -1228,7 +1147,7 @@ const Detail = {
         const el = document.getElementById('detail-md-preview');
         if (!el || !detail.id) return;
         try {
-            const resp = await fetch(`/api/files/${detail.id}/content`, { headers: authHeaders() });
+            const resp = await fetch(`/api/files/${detail.id}/content`, { headers: API.authHeaders() });
             if (!resp.ok) {
                 el.textContent = '(Preview not available)';
                 return;
@@ -1292,7 +1211,7 @@ const Detail = {
         const el = document.getElementById('detail-csv-preview');
         if (!el || !detail.id) return;
         try {
-            const resp = await fetch(`/api/files/${detail.id}/content`, { headers: authHeaders() });
+            const resp = await fetch(`/api/files/${detail.id}/content`, { headers: API.authHeaders() });
             if (!resp.ok) { el.textContent = '(Preview not available)'; return; }
             const text = await resp.text();
             this.renderCsvTable(el, text);
@@ -1385,7 +1304,7 @@ const Detail = {
         try {
             const resp = await fetch(
                 `/api/files/${s.fileId}/bytes?offset=${offset}&limit=${this.hexPageSize}`,
-                { headers: authHeaders() }
+                { headers: API.authHeaders() }
             );
             if (!resp.ok) { pre.textContent = '(Preview not available)'; return; }
 
@@ -1451,7 +1370,7 @@ const Detail = {
                 const fetchSize = chunkSize + needle.length - 1;
                 const resp = await fetch(
                     `/api/files/${s.fileId}/bytes?offset=${pos}&limit=${fetchSize}`,
-                    { headers: authHeaders() }
+                    { headers: API.authHeaders() }
                 );
                 if (!resp.ok) { status.textContent = 'Search failed'; return; }
 
@@ -1581,16 +1500,10 @@ const Detail = {
             });
         }
 
-        // Download
         const dlBtn = document.getElementById('detail-download');
         if (dlBtn && detail.id) {
             dlBtn.addEventListener('click', () => {
-                const a = document.createElement('a');
-                a.href = authUrl(`/api/files/${detail.id}/content?download=1`);
-                a.download = detail.name || '';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
+                API.download(`/api/files/${detail.id}/content?download=1`, detail.name);
             });
         }
     },
@@ -1705,15 +1618,7 @@ const Detail = {
         const statusClass = s.online ? '' : ' offline';
         const statusLabel = s.online ? 'Online' : 'Offline';
 
-        let typeHtml = '';
-        if (s.typeBreakdown && s.typeBreakdown.length > 0) {
-            typeHtml = s.typeBreakdown.map(t =>
-                `<div class="detail-field">
-                    <span class="label">${t.type || 'other'}</span>
-                    <span class="value">${t.count.toLocaleString()}</span>
-                </div>`
-            ).join('');
-        }
+        const typeHtml = this.typeBreakdownHtml(s.typeBreakdown);
 
         const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         const schedDays = s.scheduleDays || [];
@@ -1723,12 +1628,12 @@ const Detail = {
 
         const dayCheckboxes = dayNames.map((name, i) => {
             const checked = schedDays.includes(i) ? ' checked' : '';
-            return `<label class="detail-schedule-day"><input type="checkbox" value="${i}"${checked}> ${name}</label>`;
+            return `<label class="detail-schedule-day"><input type="checkbox" value="${i}"${checked}> ${esc(name)}</label>`;
         }).join('');
 
         this.el.innerHTML = `
             <div class="detail-section">
-                <div class="detail-filename">${s.name}</div>
+                <div class="detail-filename">${esc(s.name)}</div>
                 <div class="detail-path">${s.rootPath}</div>
                 <div class="detail-btn-group" style="margin-top:0.4rem">
                     <button class="btn btn-sm${s.favourite ? ' btn-active' : ''}" id="detail-favourite" title="Toggle favourite"><span class="fav-icon">${s.favourite ? icons.heart : icons.heartOutline}</span></button>
@@ -1770,7 +1675,7 @@ const Detail = {
                 </div>` : ''}` : ''}
                 <div class="detail-field">
                     <span class="label">Added</span>
-                    <span class="value">${formatDate(s.dateAdded)}</span>
+                    <span class="value">${formatDateTime(s.dateAdded)}</span>
                 </div>
                 <div class="detail-field">
                     <span class="label">Last Scanned</span>
@@ -1797,15 +1702,38 @@ const Detail = {
                     </div>
                 </div>
             </div>` : ''}
-            <div class="detail-section">
+            ${this.contentsSection(s, 'Folders', s.folderCount)}
+            ${typeHtml ? `<div class="detail-section" data-stat="typeBreakdown"><h3>File Types</h3>${typeHtml}</div>` : ''}
+        `;
+
+        if (s.online) this.wireSchedule(locId);
+        this.applyDupRecalcOverride();
+        this.renderEmbeddingSection({ locationId: parseInt(locId) });
+
+        return { online: s.online };
+    },
+
+    /** A detail field per file type, from a stats typeBreakdown. */
+    typeBreakdownHtml(breakdown) {
+        return (breakdown || []).map(t =>
+            `<div class="detail-field">
+                    <span class="label">${esc(t.type || 'other')}</span>
+                    <span class="value">${t.count.toLocaleString()}</span>
+                </div>`
+        ).join('');
+    },
+
+    /** The Contents section of a location's or folder's details. */
+    contentsSection(s, folderLabel, folderCount) {
+        return `<div class="detail-section">
                 <h3>Contents</h3>
                 <div class="detail-field">
                     <span class="label">Files</span>
                     <span class="value" data-stat="fileCount">${s.fileCount.toLocaleString()}</span>
                 </div>
                 <div class="detail-field">
-                    <span class="label">Folders</span>
-                    <span class="value" data-stat="folderCount">${s.folderCount.toLocaleString()}</span>
+                    <span class="label">${folderLabel}</span>
+                    <span class="value" data-stat="folderCount">${folderCount.toLocaleString()}</span>
                 </div>
                 <div class="detail-field">
                     <span class="label">Total Size</span>
@@ -1819,15 +1747,7 @@ const Detail = {
                     <span class="label">Hidden</span>
                     <span class="value" data-stat="hiddenFiles">${(s.hiddenFiles || 0).toLocaleString()}</span>
                 </div>
-            </div>
-            ${typeHtml ? `<div class="detail-section" data-stat="typeBreakdown"><h3>File Types</h3>${typeHtml}</div>` : ''}
-        `;
-
-        if (s.online) this.wireSchedule(locId);
-        this.applyDupRecalcOverride();
-        this.renderEmbeddingSection({ locationId: parseInt(locId) });
-
-        return { online: s.online };
+            </div>`;
     },
 
     async renderFolder(folder) {
@@ -1849,7 +1769,7 @@ const Detail = {
         if (!res.ok) {
             this.el.innerHTML = `
                 <div class="detail-section">
-                    <div class="detail-filename">${folder.name}</div>
+                    <div class="detail-filename">${esc(folder.name)}</div>
                     <div class="detail-path">Folder</div>
                 </div>
             `;
@@ -1860,8 +1780,8 @@ const Detail = {
 
         this.el.innerHTML = `
             <div class="detail-section">
-                <div class="detail-filename">${s.name}</div>
-                ${s.breadcrumb ? this.buildBreadcrumb(s.breadcrumb) : `<div class="detail-path">${s.location} / ${s.relPath}</div>`}
+                <div class="detail-filename">${esc(s.name)}</div>
+                ${s.breadcrumb ? this.buildBreadcrumb(s.breadcrumb) : `<div class="detail-path">${esc(s.location)} / ${esc(s.relPath)}</div>`}
                 <label class="detail-dup-exclude">
                     <input type="checkbox" id="detail-dup-exclude-cb" ${s.dupExcluded ? 'checked' : ''}>
                     Exclude from duplicates
@@ -1881,29 +1801,7 @@ const Detail = {
                     `; })()}
                 </div>
             </div>
-            <div class="detail-section">
-                <h3>Contents</h3>
-                <div class="detail-field">
-                    <span class="label">Files</span>
-                    <span class="value" data-stat="fileCount">${s.fileCount.toLocaleString()}</span>
-                </div>
-                <div class="detail-field">
-                    <span class="label">Subfolders</span>
-                    <span class="value" data-stat="folderCount">${s.subfolderCount.toLocaleString()}</span>
-                </div>
-                <div class="detail-field">
-                    <span class="label">Total Size</span>
-                    <span class="value" data-stat="totalSize">${s.totalSizeFormatted}</span>
-                </div>
-                <div class="detail-field">
-                    <span class="label">Duplicates</span>
-                    <span class="value" data-stat="duplicates">${s.duplicateFiles.toLocaleString()}</span>
-                </div>
-                <div class="detail-field">
-                    <span class="label">Hidden</span>
-                    <span class="value" data-stat="hiddenFiles">${(s.hiddenFiles || 0).toLocaleString()}</span>
-                </div>
-            </div>
+            ${this.contentsSection(s, 'Subfolders', s.subfolderCount)}
         `;
         this.wireBreadcrumbs();
         this.applyDupRecalcOverride();
@@ -2059,43 +1957,42 @@ const Detail = {
             </div>
             ${mediaBtns}
         `;
+        // A search slideshow reads the cached results; without a cache, the
+        // images (or videos) listed
+        const slideshowParams = (mode, typeHigh) => {
+            const sp = this.getSortParams ? this.getSortParams() : { sort: 'name', sortDir: 'asc' };
+            const params = { type: 'search', mode, sort: sp.sort, sortDir: sp.sortDir };
+            if (data.searchId) {
+                params.searchId = data.searchId;
+            } else {
+                params.ids = (data.items || [])
+                    .filter(f => (f.typeHigh || '').toLowerCase() === typeHigh)
+                    .map(f => f.id);
+            }
+            return params;
+        };
         if (hasImages) {
-            document.getElementById('detail-slideshow').addEventListener('click', async () => {
-                const btn = document.getElementById('detail-slideshow');
-                btn.disabled = true;
-                btn.textContent = 'Loading\u2026';
-                const sp = this.getSortParams ? this.getSortParams() : { sort: 'name', sortDir: 'asc' };
-                const params = { type: 'search', mode: 'slideshow', sort: sp.sort, sortDir: sp.sortDir };
-                if (data.searchId) {
-                    params.searchId = data.searchId;
-                } else {
-                    params.ids = (data.items || []).filter(f => (f.typeHigh || '').toLowerCase() === 'image').map(f => f.id);
-                }
-                await this.startSlideshow(params);
-                if (this.slideshowTotal === 0) {
-                    btn.textContent = 'No images available';
-                    setTimeout(() => { btn.textContent = 'Slideshow'; btn.disabled = false; }, 2000);
-                }
-            });
+            const btn = document.getElementById('detail-slideshow');
+            btn.addEventListener('click', () => this.startFromButton(
+                btn, slideshowParams('slideshow', 'image'), 'No images available'));
         }
         if (hasVideo) {
-            document.getElementById('detail-playlist').addEventListener('click', async () => {
-                const btn = document.getElementById('detail-playlist');
-                btn.disabled = true;
-                btn.textContent = 'Loading\u2026';
-                const sp2 = this.getSortParams ? this.getSortParams() : { sort: 'name', sortDir: 'asc' };
-                const params2 = { type: 'search', mode: 'playlist', sort: sp2.sort, sortDir: sp2.sortDir };
-                if (data.searchId) {
-                    params2.searchId = data.searchId;
-                } else {
-                    params2.ids = (data.items || []).filter(f => (f.typeHigh || '').toLowerCase() === 'video').map(f => f.id);
-                }
-                await this.startSlideshow(params2);
-                if (this.slideshowTotal === 0) {
-                    btn.textContent = 'No videos available';
-                    setTimeout(() => { btn.textContent = 'Playlist'; btn.disabled = false; }, 2000);
-                }
-            });
+            const btn = document.getElementById('detail-playlist');
+            btn.addEventListener('click', () => this.startFromButton(
+                btn, slideshowParams('playlist', 'video'), 'No videos available'));
+        }
+    },
+
+    /** Start a slideshow or playlist from its button, which shows it's
+     *  loading and, if there turns out to be nothing to show, says so. */
+    async startFromButton(btn, params, emptyText) {
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Loading\u2026';
+        await this.startSlideshow(params);
+        if (this.slideshowTotal === 0) {
+            btn.textContent = emptyText;
+            setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2000);
         }
     },
 
@@ -2156,7 +2053,7 @@ const Detail = {
                 ? (folderSizes[item.id] ? formatSize(folderSizes[item.id]) : '')
                 : (item.size ? formatSize(item.size) : '');
             return `<div class="detail-field">
-                <span class="label">${icon} ${item.name}</span>
+                <span class="label">${icon} ${esc(item.name)}</span>
                 <span class="value">${size}</span>
             </div>`;
         }).join('');

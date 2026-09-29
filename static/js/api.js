@@ -1,11 +1,31 @@
 const API = {
     baseUrl: '',
 
-    headers() {
-        const h = { 'Content-Type': 'application/json' };
+    /** The Authorization header for the signed-in user, or none. */
+    authHeaders() {
         const token = localStorage.getItem('fh-token');
-        if (token) h['Authorization'] = `Bearer ${token}`;
-        return h;
+        return token ? { 'Authorization': `Bearer ${token}` } : {};
+    },
+
+    /** The URL with the token as a query parameter, for requests the browser
+     *  makes itself (img src, download links), which can't carry a header. */
+    authUrl(url) {
+        const token = localStorage.getItem('fh-token');
+        return token ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : url;
+    },
+
+    /** Download a URL as filename through a temporary link. */
+    download(url, filename) {
+        const a = document.createElement('a');
+        a.href = this.authUrl(url);
+        a.download = filename || '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    },
+
+    headers() {
+        return { 'Content-Type': 'application/json', ...this.authHeaders() };
     },
 
     checkAuth(res, path) {
@@ -57,8 +77,7 @@ const API = {
         return new Promise((resolve) => {
             const xhr = new XMLHttpRequest();
             xhr.open('POST', `${this.baseUrl}/api/upload`);
-            const token = localStorage.getItem('fh-token');
-            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            for (const [k, v] of Object.entries(this.authHeaders())) xhr.setRequestHeader(k, v);
             if (onProgress) {
                 xhr.upload.addEventListener('progress', (e) => {
                     if (e.lengthComputable) onProgress(e.loaded, e.total);

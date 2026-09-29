@@ -1,17 +1,15 @@
-import asyncio
 import os
 import sqlite3
 import time
-from contextlib import asynccontextmanager
 
 import aiosqlite
-from pathlib import Path
-from file_hunter.config import load_config
+from file_hunter.core import NotFound
+from file_hunter.sqlite_store import SqliteStore, catalog_path
 from file_hunter.seed import seed_db
+from file_hunter.services.settings import get_setting, set_setting
+from file_hunter.services.tags import get_or_create_tag_ids, parse_tags
 
-_db = None
-_write_db = None
-_write_lock = asyncio.Lock()
+shared_connection = None
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -187,7 +185,7 @@ CREATE TABLE IF NOT EXISTS saved_searches (
 """
 
 # Column migrations — ALTER TABLE wrapped in try/except for idempotency
-_MIGRATIONS = [
+MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN hash_partial TEXT",
     "ALTER TABLE files ADD COLUMN stale INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE scans ADD COLUMN files_skipped INTEGER DEFAULT 0",
@@ -227,7 +225,7 @@ _MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN embedded INTEGER NOT NULL DEFAULT 0",
 ]
 
-_OPERATION_QUEUE_SCHEMA = """
+OPERATION_QUEUE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS operation_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
@@ -245,20 +243,16 @@ CREATE INDEX IF NOT EXISTS idx_opqueue_agent_status ON operation_queue(agent_id,
 
 
 async def get_db() -> aiosqlite.Connection:
-    global _db
-    if _db is None:
-        config = load_config()
-        db_path = Path(config.get("database", "file_hunter.db"))
-        if not db_path.is_absolute():
-            db_path = Path(__file__).resolve().parent.parent / db_path
-        _db = await aiosqlite.connect(db_path)
-        _db.row_factory = aiosqlite.Row
-        await _db.execute("PRAGMA foreign_keys=ON")
-        await _db.execute("PRAGMA busy_timeout=30000")
-        fresh = await init_db(_db)
+    global shared_connection
+    if shared_connection is None:
+        shared_connection = await aiosqlite.connect(catalog_path("file_hunter.db"))
+        shared_connection.row_factory = aiosqlite.Row
+        await shared_connection.execute("PRAGMA foreign_keys=ON")
+        await shared_connection.execute("PRAGMA busy_timeout=30000")
+        fresh = await init_db(shared_connection)
         if fresh and os.environ.get("FILE_HUNTER_DEMO"):
-            await seed_db(_db)
-    return _db
+            await seed_db(shared_connection)
+    return shared_connection
 
 
 async def init_db(db: aiosqlite.Connection):
@@ -276,7 +270,7 @@ async def init_db(db: aiosqlite.Connection):
 
     # Run column migrations (idempotent — silently ignores "duplicate column")
     migrated = False
-    for sql in _MIGRATIONS:
+    for sql in MIGRATIONS:
         try:
             await db.execute(sql)
             if not migrated and sql.upper().startswith("ALTER"):
@@ -322,7 +316,7 @@ async def init_db(db: aiosqlite.Connection):
         await db.execute("PRAGMA foreign_keys=ON")
 
     # Operation queue table (idempotent via IF NOT EXISTS)
-    for stmt in _OPERATION_QUEUE_SCHEMA.split(";"):
+    for stmt in OPERATION_QUEUE_SCHEMA.split(";"):
         stmt = stmt.strip()
         if stmt:
             await db.execute(stmt)
@@ -390,12 +384,12 @@ async def init_db(db: aiosqlite.Connection):
     )
     await db.commit()
 
-    await _migrate_tags(db)
+    await migrate_tags(db)
 
     return not exists
 
 
-async def _migrate_tags(db: aiosqlite.Connection):
+async def migrate_tags(db: aiosqlite.Connection):
     """Backfill the tags/file_tags tables from the legacy files.tags column.
 
     Purely additive — the legacy column is left intact, matching every other
@@ -406,8 +400,6 @@ async def _migrate_tags(db: aiosqlite.Connection):
     interrupted run leaves the flag unset and restarts on the next boot,
     which is safe because every insert is INSERT OR IGNORE.
     """
-    from file_hunter.services.settings import get_setting, set_setting
-    from file_hunter.services.tags import get_or_create_tag_ids, parse_tags
 
     if await get_setting(db, "tags_migrated") == "1":
         return
@@ -489,79 +481,17 @@ async def _migrate_tags(db: aiosqlite.Connection):
     )
 
 
-async def open_connection() -> aiosqlite.Connection:
-    """Open a read-only database connection (caller must close it).
-
-    For long-lived read operations that need their own transaction
-    lifetime. All writes must go through db_writer().
-    """
-    config = load_config()
-    db_path = Path(config.get("database", "file_hunter.db"))
-    if not db_path.is_absolute():
-        db_path = Path(__file__).resolve().parent.parent / db_path
-    conn = await aiosqlite.connect(db_path)
-    conn.row_factory = aiosqlite.Row
-    await conn.execute("PRAGMA foreign_keys=ON")
-    await conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-
-@asynccontextmanager
-async def read_db():
-    """Open a read connection, yield it, close on exit.
-
-    Each caller gets its own connection and its own aiosqlite background
-    thread. WAL mode allows unlimited concurrent readers. Connection is
-    closed automatically when the context exits.
-
-    Usage:
-        async with read_db() as db:
-            rows = await db.execute_fetchall("SELECT ...")
-    """
-    conn = await open_connection()
-    try:
-        yield conn
-    finally:
-        await conn.close()
-
-
-async def _get_write_db() -> aiosqlite.Connection:
-    """Lazy-init the single write connection."""
-    global _write_db
-    if _write_db is None:
-        config = load_config()
-        db_path = Path(config.get("database", "file_hunter.db"))
-        if not db_path.is_absolute():
-            db_path = Path(__file__).resolve().parent.parent / db_path
-        _write_db = await aiosqlite.connect(db_path)
-        _write_db.row_factory = aiosqlite.Row
-        await _write_db.execute("PRAGMA foreign_keys=ON")
-        await _write_db.execute("PRAGMA journal_mode=WAL")
-    return _write_db
-
-
-@asynccontextmanager
-async def db_writer():
-    """Acquire exclusive write access to the database.
-
-    Returns the single write connection. Only one caller at a time
-    (asyncio serialization — no SQLite lock contention, no timeouts).
-    Auto-commits on clean exit; rolls back on exception.
-
-    Callers may commit intermediately; the exit commit is a no-op
-    if nothing is pending.
-    """
-    async with _write_lock:
-        db = await _get_write_db()
-        try:
-            yield db
-            await db.commit()
-        except BaseException:
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-            raise
+store = SqliteStore(
+    lambda: catalog_path("file_hunter.db"),
+    read_pragmas=("PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL"),
+    write_pragmas=("PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL"),
+)
+# A read connection the caller closes (long-lived reads with their own
+# transaction lifetime); a read connection closed on exit; exclusive use of
+# the single write connection. All writes go through db_writer.
+open_connection = store.open_reader
+read_db = store.reader
+db_writer = store.writer
 
 
 async def execute_write(func, *args, **kwargs):
@@ -574,11 +504,81 @@ async def execute_write(func, *args, **kwargs):
         return await func(db, *args, **kwargs)
 
 
+def id_batches(ids, size=500):
+    """Walk ids in lists of at most size (sqlite's variable limit), each
+    with its "?,?,..." placeholders: (batch, placeholders)."""
+    for i in range(0, len(ids), size):
+        batch = ids[i : i + size]
+        yield batch, ",".join("?" * len(batch))
+
+
+# A folder and every folder below it. Takes one parameter: the folder id.
+FOLDER_TREE = (
+    "WITH RECURSIVE folder_tree(id) AS ("
+    "SELECT ? UNION ALL "
+    "SELECT sub.id FROM folders sub JOIN folder_tree t ON sub.parent_id = t.id"
+    ") "
+)
+
+
+def in_folder_tree(column):
+    """SQL condition: column is the folder, or a folder below it. Takes one
+    parameter, the folder id, where the condition sits in the query."""
+    return f"{column} IN ({FOLDER_TREE}SELECT id FROM folder_tree)"
+
+
+async def folder_path(db, folder_id):
+    """The folder and the folders above it, root first: rows of id,
+    parent_id, location_id, name, depth (0 is the folder itself). Empty if
+    the folder doesn't exist."""
+    return await db.execute_fetchall(
+        "WITH RECURSIVE chain(id, parent_id, location_id, name, depth) AS ("
+        "SELECT id, parent_id, location_id, name, 0 FROM folders WHERE id = ? "
+        "UNION ALL "
+        "SELECT f.id, f.parent_id, f.location_id, f.name, c.depth + 1 "
+        "FROM folders f JOIN chain c ON f.id = c.parent_id"
+        ") SELECT id, parent_id, location_id, name, depth FROM chain "
+        "ORDER BY depth DESC",
+        (folder_id,),
+    )
+
+
+async def folder_tree_ids(db, folder_id):
+    """Ids of the folder and every folder below it."""
+    rows = await db.execute_fetchall(
+        FOLDER_TREE + "SELECT id FROM folder_tree", (folder_id,)
+    )
+    return [r["id"] for r in rows]
+
+
+async def catalog_row(table, label, row_id, columns):
+    async with read_db() as db:
+        rows = await db.execute_fetchall(
+            f"SELECT {columns} FROM {table} WHERE id = ?", (row_id,)
+        )
+    if not rows:
+        raise NotFound(f"{label} not found.")
+    return rows[0]
+
+
+async def file_row(file_id, columns):
+    """The file's catalog row with the given columns; NotFound if there's none."""
+    return await catalog_row("files", "File", file_id, columns)
+
+
+async def location_row(location_id, columns):
+    """The location's row with the given columns; NotFound if there's none."""
+    return await catalog_row("locations", "Location", location_id, columns)
+
+
+async def folder_row(folder_id, columns):
+    """The folder's row with the given columns; NotFound if there's none."""
+    return await catalog_row("folders", "Folder", folder_id, columns)
+
+
 async def close_db():
-    global _db, _write_db
-    if _db is not None:
-        await _db.close()
-        _db = None
-    if _write_db is not None:
-        await _write_db.close()
-        _write_db = None
+    global shared_connection
+    if shared_connection is not None:
+        await shared_connection.close()
+        shared_connection = None
+    await store.close()

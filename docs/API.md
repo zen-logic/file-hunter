@@ -7,6 +7,8 @@ All responses are JSON:
 {"ok": false, "error": "message"}
 ```
 
+Request input is checked before anything runs. A value of the wrong type or format returns 400 with an `error` saying which field: a JSON body that isn't an object, text where a number or `true`/`false` is expected, a location or folder id that isn't `loc-N` or `fld-N`, a list that isn't a list, or a negative `page`, `offset` or `limit`.
+
 All endpoints require session auth (cookie or `Authorization: Bearer <token>`) unless noted. Application tokens (from `/api/auth/apps`) also work as Bearer tokens.
 
 ---

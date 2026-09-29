@@ -14,23 +14,23 @@ from file_hunter.config import load_config
 
 log = logging.getLogger(__name__)
 
-_GITHUB_REPO = "zen-logic/file-hunter"
+GITHUB_REPO = "zen-logic/file-hunter"
 
 # Directories replaced during self-update (code only, never user data)
-_CODE_DIRS = ("file_hunter", "file_hunter_core", "file_hunter_agent", "static")
+CODE_DIRS = ("file_hunter", "file_hunter_core", "file_hunter_agent", "static")
 
 # Items that must never be overwritten by an update
-_PRESERVE = {"data", "config.json", "venv", "file-hunter-pro"}
+PRESERVE = {"data", "config.json", "venv", "file-hunter-pro"}
 
 
-_UPDATE_URL_FILE = Path(__file__).resolve().parent.parent.parent / "update_url"
+UPDATE_URL_FILE = Path(__file__).resolve().parent.parent.parent / "update_url"
 
 
-def _get_update_url():
+def get_update_url():
     config = load_config()
     url = config.get("update_url")
-    if not url and _UPDATE_URL_FILE.exists():
-        url = _UPDATE_URL_FILE.read_text().strip()
+    if not url and UPDATE_URL_FILE.exists():
+        url = UPDATE_URL_FILE.read_text().strip()
     if not url:
         raise ValueError("update_url not configured")
     return url.rstrip("/")
@@ -38,7 +38,7 @@ def _get_update_url():
 
 async def check_update(key: str) -> dict:
     """Call the reg service to check what version is available for this key."""
-    url = _get_update_url()
+    url = get_update_url()
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(f"{url}/api/validate", params={"key": key})
     return resp.json()
@@ -147,7 +147,7 @@ async def install_from_zip(zip_path: Path) -> dict:
 
 async def install_update(key: str) -> dict:
     """Download the pro zip from reg service and install."""
-    url = _get_update_url()
+    url = get_update_url()
 
     # Download the zip
     async with httpx.AsyncClient(timeout=60) as client:
@@ -173,19 +173,24 @@ async def install_update(key: str) -> dict:
     return await install_from_zip(zip_path)
 
 
-def _get_current_version() -> str:
+def get_current_version() -> str:
     version_file = Path(__file__).resolve().parent.parent.parent / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
     return "0.0.0"
 
 
+def version_tuple(version: str) -> tuple[int, ...]:
+    """1.4.13 -> (1, 4, 13), so versions compare as numbers."""
+    return tuple(int(p) if p.isdigit() else 0 for p in version.split("."))
+
+
 async def check_github_release() -> dict:
     """Check GitHub releases for the latest version."""
-    current = _get_current_version()
+    current = get_current_version()
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
-            f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest",
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
             headers={"Accept": "application/vnd.github.v3+json"},
         )
     if resp.status_code != 200:
@@ -197,7 +202,8 @@ async def check_github_release() -> dict:
         "current": current,
         "latest": latest,
         "tag": tag,
-        "update_available": latest != current,
+        # only a newer release; a dev build ahead of it isn't offered a downgrade
+        "update_available": version_tuple(latest) > version_tuple(current),
     }
 
 
@@ -217,7 +223,7 @@ async def apply_github_update() -> dict:
 
     # Download tar.gz
     archive_name = f"filehunter-{latest}.tar.gz"
-    url = f"https://github.com/{_GITHUB_REPO}/releases/download/{tag}/{archive_name}"
+    url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{archive_name}"
 
     log.info("Downloading %s", url)
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
@@ -252,7 +258,7 @@ async def apply_github_update() -> dict:
         raise RuntimeError("Archive missing required files")
 
     # Remove old code directories
-    for dirname in _CODE_DIRS:
+    for dirname in CODE_DIRS:
         target = install_dir / dirname
         if target.is_dir():
             shutil.rmtree(target)
@@ -260,7 +266,7 @@ async def apply_github_update() -> dict:
 
     # Copy new files, preserving user data
     for item in extracted.iterdir():
-        if item.name in _PRESERVE:
+        if item.name in PRESERVE:
             continue
         dest = install_dir / item.name
         if item.is_dir():

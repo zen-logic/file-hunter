@@ -5,13 +5,14 @@ from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import FileResponse
-from file_hunter.core import json_ok, json_error
+from file_hunter.core import json_error, json_ok, parse_bool, parse_str, read_body
 from file_hunter.db import db_writer, read_db, execute_write
 from file_hunter.services import settings as settings_svc
-from file_hunter.services.queue_manager import _running_ops, cancel
+from file_hunter.services.queue_manager import running_ops, cancel
 from file_hunter.services.similarity import ensure_chromadb
 from file_hunter.ws.scan import broadcast
 from file_hunter import __version__
+from importlib.metadata import version as pkg_version
 
 logger = logging.getLogger("file_hunter")
 
@@ -35,7 +36,6 @@ async def get_version(request: Request):
 async def get_pro_status(request: Request):
     try:
         from file_hunter_pro import get_features
-        from importlib.metadata import version as pkg_version
 
         try:
             pro_version = pkg_version("file-hunter-pro")
@@ -48,11 +48,11 @@ async def get_pro_status(request: Request):
         return json_ok({"active": False, "features": []})
 
 
-def _builtin_themes_dir():
+def builtin_themes_dir():
     return Path(__file__).resolve().parent.parent.parent / "static" / "css" / "themes"
 
 
-def _user_themes_dir():
+def user_themes_dir():
     d = Path(__file__).resolve().parent.parent.parent / "data" / "themes"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -60,8 +60,8 @@ def _user_themes_dir():
 
 async def list_themes(request: Request):
     """GET /api/themes — list available themes with built-in flag."""
-    builtin_dir = _builtin_themes_dir()
-    user_dir = _user_themes_dir()
+    builtin_dir = builtin_themes_dir()
+    user_dir = user_themes_dir()
 
     themes = [{"name": "default", "builtIn": True}]
     if builtin_dir.is_dir():
@@ -80,11 +80,11 @@ async def serve_theme_css(request: Request):
     if not re.match(r"^[a-z0-9-]+\.css$", name):
         return json_error("Invalid theme name.", 400)
 
-    user_path = _user_themes_dir() / name
+    user_path = user_themes_dir() / name
     if user_path.is_file():
         return FileResponse(str(user_path), media_type="text/css")
 
-    builtin_path = _builtin_themes_dir() / name
+    builtin_path = builtin_themes_dir() / name
     if builtin_path.is_file():
         return FileResponse(str(builtin_path), media_type="text/css")
 
@@ -93,9 +93,9 @@ async def serve_theme_css(request: Request):
 
 async def save_theme(request: Request):
     """POST /api/themes — save a user theme CSS file."""
-    body = await request.json()
-    name = body.get("name", "").strip()
-    css = body.get("css", "")
+    body = await read_body(request)
+    name = parse_str(body.get("name"), "name").strip()
+    css = parse_str(body.get("css"), "css")
 
     if not name or not css:
         return json_error("Name and css are required.", 400)
@@ -108,16 +108,16 @@ async def save_theme(request: Request):
     if name == "default":
         return json_error("Cannot overwrite the default theme.", 400)
 
-    builtin_path = _builtin_themes_dir() / f"{name}.css"
+    builtin_path = builtin_themes_dir() / f"{name}.css"
     if builtin_path.exists():
         return json_error(
             "Cannot overwrite a built-in theme. Use Save As with a new name.", 400
         )
 
-    user_dir = _user_themes_dir()
+    user_dir = user_themes_dir()
     theme_path = user_dir / f"{name}.css"
 
-    overwrite = body.get("overwrite", False)
+    overwrite = parse_bool(body.get("overwrite"), "overwrite")
     if theme_path.exists() and not overwrite:
         return json_error(f'Theme "{name}" already exists.', 409)
 
@@ -132,7 +132,7 @@ async def delete_theme(request: Request):
     if not name or name == "default":
         return json_error("Cannot delete this theme.", 400)
 
-    user_path = _user_themes_dir() / f"{name}.css"
+    user_path = user_themes_dir() / f"{name}.css"
     if not user_path.exists():
         return json_error("Cannot delete a built-in theme.", 400)
 
@@ -141,29 +141,28 @@ async def delete_theme(request: Request):
 
 
 async def update_settings(request: Request):
-    body = await request.json()
+    body = await read_body(request)
 
-    async def _update(conn, b):
-        if "serverName" in b:
-            await settings_svc.set_setting(conn, "serverName", b["serverName"])
-        if "license_key" in b:
-            await settings_svc.set_setting(conn, "license_key", b["license_key"])
-        if "showHiddenFiles" in b:
-            await settings_svc.set_setting(
-                conn, "showHiddenFiles", "1" if b["showHiddenFiles"] else "0"
-            )
-        if "similaritySearchEnabled" in b:
-            await settings_svc.set_setting(
-                conn, "similaritySearchEnabled", "1" if b["similaritySearchEnabled"] else "0"
-            )
-        if "similaritySearchUrl" in b:
-            await settings_svc.set_setting(
-                conn, "similaritySearchUrl", b["similaritySearchUrl"].strip()
-            )
+    # Only the settings present in the body are changed
+    values = {}
+    for key in ("serverName", "license_key"):
+        if key in body:
+            values[key] = parse_str(body[key], key)
+    for key in ("showHiddenFiles", "similaritySearchEnabled"):
+        if key in body:
+            values[key] = "1" if parse_bool(body[key], key) else "0"
+    if "similaritySearchUrl" in body:
+        values["similaritySearchUrl"] = parse_str(
+            body["similaritySearchUrl"], "similaritySearchUrl"
+        ).strip()
 
-    await execute_write(_update, body)
+    async def update(conn, v):
+        for key, value in v.items():
+            await settings_svc.set_setting(conn, key, value)
 
-    if body.get("similaritySearchEnabled"):
+    await execute_write(update, values)
+
+    if values.get("similaritySearchEnabled") == "1":
         await asyncio.to_thread(ensure_chromadb)
 
     async with read_db() as db:
@@ -176,7 +175,7 @@ async def reset_queues(request: Request):
     """POST /api/maintenance/reset-queues — cancel all ops, clear temp DBs, queues, pending hashes."""
     # Cancel all running operations
     cancelled = 0
-    for op_id in list(_running_ops.keys()):
+    for op_id in list(running_ops.keys()):
         await cancel(op_id)
         cancelled += 1
 

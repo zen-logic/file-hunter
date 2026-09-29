@@ -17,20 +17,20 @@ from file_hunter.services.queue_manager import enqueue, get_queue_status
 
 async def start_scheduler():
     """Start the scheduler loop. Call from on_startup."""
-    asyncio.create_task(_scheduler_loop())
+    asyncio.create_task(scheduler_loop())
 
 
-async def _scheduler_loop():
+async def scheduler_loop():
     """Wake every 60s, check if any location is due for a scheduled scan."""
     while True:
         await asyncio.sleep(60)
         try:
-            await _check_schedules()
+            await check_schedules()
         except Exception:
             pass  # don't crash the loop
 
 
-async def _check_schedules():
+async def check_schedules():
     now = datetime.now()
     current_day = now.weekday()  # 0=Mon
     current_time = now.strftime("%H:%M")
@@ -51,7 +51,7 @@ async def _check_schedules():
             continue
         if current_time < row["scan_schedule_time"]:
             continue
-        if _already_ran_today(row["scan_schedule_last_run"], now):
+        if already_ran_today(row["scan_schedule_last_run"], now):
             continue
 
         try:
@@ -77,12 +77,12 @@ async def _check_schedules():
                     "root_path": row["root_path"],
                 },
             )
-            await _update_last_run(row["id"], now)
+            await update_last_run(row["id"], now)
         except Exception:
             pass  # don't crash the loop
 
 
-def _already_ran_today(last_run_iso, now):
+def already_ran_today(last_run_iso, now):
     if not last_run_iso:
         return False
     try:
@@ -92,12 +92,12 @@ def _already_ran_today(last_run_iso, now):
         return False
 
 
-async def _update_last_run(location_id, now):
-    async def _write(conn, lid, ts):
+async def update_last_run(location_id, now):
+    async def write(conn, lid, ts):
         await conn.execute(
             "UPDATE locations SET scan_schedule_last_run = ? WHERE id = ?",
             (ts, lid),
         )
         await conn.commit()
 
-    await execute_write(_write, location_id, now.isoformat(timespec="seconds"))
+    await execute_write(write, location_id, now.isoformat(timespec="seconds"))

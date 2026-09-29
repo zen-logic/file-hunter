@@ -1,3 +1,4 @@
+import { wireModal, setDialogError } from './modal.js';
 const RenameFolderModal = {
     overlayEl: null,
     nameInput: null,
@@ -11,31 +12,19 @@ const RenameFolderModal = {
         this.errorEl = document.getElementById('rename-folder-error');
         this.onConfirm = onConfirm;
 
-        document.getElementById('rename-folder-cancel').addEventListener('click', () => this.close());
-        document.getElementById('rename-folder-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.overlayEl.classList.contains('hidden')) {
-                this.close();
-            }
-        });
-
-        this.nameInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.confirm();
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            enterFrom: [this.nameInput],
+            cancelBtn: document.getElementById('rename-folder-cancel'),
+            submitBtn: document.getElementById('rename-folder-submit'),
         });
     },
 
     open(folder) {
         this.folder = folder;
         this.nameInput.value = folder.label || folder.name || '';
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
         this.overlayEl.classList.remove('hidden');
         this.nameInput.focus();
         this.nameInput.select();
@@ -51,10 +40,7 @@ const RenameFolderModal = {
         if (!newName) return;
         if (!this.folder || !this.onConfirm) return;
 
-        if (this.errorEl) {
-            this.errorEl.textContent = '';
-            this.errorEl.classList.add('hidden');
-        }
+        setDialogError(this.errorEl, '');
 
         const folder = this.folder;
         this.close();
@@ -63,10 +49,7 @@ const RenameFolderModal = {
             // Re-open with error if the rename failed
             this.open(folder);
             this.nameInput.value = newName;
-            if (this.errorEl) {
-                this.errorEl.textContent = result.error;
-                this.errorEl.classList.remove('hidden');
-            }
+            setDialogError(this.errorEl, result.error);
         }
     },
 };

@@ -1,4 +1,5 @@
 import API from '../api.js';
+import { wireModal } from './modal.js';
 
 const DeleteFileModal = {
     overlayEl: null,
@@ -17,21 +18,12 @@ const DeleteFileModal = {
         this.dupsLabelEl = document.getElementById('delete-file-dups-label');
         this.onConfirm = onConfirm;
 
-        document.getElementById('delete-file-cancel').addEventListener('click', () => this.close());
-        document.getElementById('delete-file-submit').addEventListener('click', () => this.confirm());
-
-        this.overlayEl.addEventListener('click', (e) => {
-            if (e.target === this.overlayEl) this.close();
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (this.overlayEl.classList.contains('hidden')) return;
-            if (e.key === 'Escape') {
-                this.close();
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                this.confirm();
-            }
+        wireModal(this.overlayEl, {
+            close: () => this.close(),
+            submit: () => this.confirm(),
+            enterFrom: 'dialog',
+            cancelBtn: document.getElementById('delete-file-cancel'),
+            submitBtn: document.getElementById('delete-file-submit'),
         });
     },
 

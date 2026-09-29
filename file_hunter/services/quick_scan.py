@@ -9,11 +9,10 @@ Compares a single directory listing from the agent against the catalog:
 
 import logging
 import os
-from datetime import datetime, timezone
 
-from file_hunter.db import db_writer, read_db
-from file_hunter.hashes_db import hashes_writer, mark_hashes_stale
-from file_hunter.helpers import post_op_stats
+from file_hunter.db import db_writer, read_db, folder_tree_ids, in_folder_tree, id_batches
+from file_hunter.hashes_db import mark_hashes_stale, register_file_sizes
+from file_hunter.helpers import post_op_stats, utc_now
 from file_hunter.services.activity import (
     register,
     unregister,
@@ -21,7 +20,7 @@ from file_hunter.services.activity import (
 )
 from file_hunter.services.agent_ops import dispatch, hash_partial_batch
 from file_hunter.services.dup_counts import (
-    HASH_BATCH_BYTES,
+    batches_by_size,
     drain_pending_hashes,
     post_ingest_dup_processing,
     recover_missing_hash_partials,
@@ -36,7 +35,7 @@ from file_hunter_core.paths import norm_inode, safe_timestamp
 logger = logging.getLogger("file_hunter")
 
 
-async def _reconcile_missing_dir(
+async def reconcile_missing_dir(
     location_id: int, folder_id: int | None, label: str
 ):
     """The directory we were asked to scan is gone from disk.
@@ -50,18 +49,9 @@ async def _reconcile_missing_dir(
     # Collect the affected folder and file ids (the whole subtree).
     async with read_db() as db:
         if folder_id:
-            folder_rows = await db.execute_fetchall(
-                "WITH RECURSIVE descendants(id) AS ("
-                "  SELECT ? UNION ALL"
-                "  SELECT f.id FROM folders f JOIN descendants d ON f.parent_id = d.id"
-                ") SELECT id FROM descendants",
-                (folder_id,),
-            )
-            folder_ids = [r["id"] for r in folder_rows]
+            folder_ids = await folder_tree_ids(db, folder_id)
             file_ids: list[int] = []
-            for i in range(0, len(folder_ids), 500):
-                batch = folder_ids[i : i + 500]
-                ph = ",".join("?" for _ in batch)
+            for batch, ph in id_batches(folder_ids):
                 rows = await db.execute_fetchall(
                     f"SELECT id FROM files WHERE stale = 0 AND folder_id IN ({ph})",
                     batch,
@@ -82,14 +72,10 @@ async def _reconcile_missing_dir(
     # per batch rather than holding it across the whole loop — otherwise a large
     # reconcile (e.g. a whole location) would starve every other catalog write
     # for its full duration. Matches mark_hashes_stale()'s per-batch pattern.
-    for i in range(0, len(folder_ids), 500):
-        batch = folder_ids[i : i + 500]
-        ph = ",".join("?" for _ in batch)
+    for batch, ph in id_batches(folder_ids):
         async with db_writer() as wdb:
             await wdb.execute(f"UPDATE folders SET stale = 1 WHERE id IN ({ph})", batch)
-    for i in range(0, len(file_ids), 500):
-        batch = file_ids[i : i + 500]
-        ph = ",".join("?" for _ in batch)
+    for batch, ph in id_batches(file_ids):
         async with db_writer() as wdb:
             await wdb.execute(f"UPDATE files SET stale = 1 WHERE id IN ({ph})", batch)
     await mark_hashes_stale(file_ids)
@@ -162,7 +148,7 @@ async def run_quick_scan(
         # the catalog to reality — mark this folder/location and
         # everything under it stale — rather than leaving the catalog
         # claiming files that no longer exist.
-        await _reconcile_missing_dir(location_id, folder_id, label)
+        await reconcile_missing_dir(location_id, folder_id, label)
         return
     except ConnectionError:
         # The agent itself is unreachable, so we learned nothing about what
@@ -175,7 +161,7 @@ async def run_quick_scan(
     disk_folders = {f["name"]: f for f in listing["folders"]}
     disk_files = {f["name"]: f for f in listing["files"]}
 
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_iso = utc_now()
 
     # Get current catalog state for this folder
     async with read_db() as db:
@@ -287,21 +273,13 @@ async def run_quick_scan(
             for name, cat in cat_folder_names.items():
                 if name not in disk_folders and not cat["stale"]:
                     await db.execute(
-                        """WITH RECURSIVE desc(id) AS (
-                               SELECT ? UNION ALL
-                               SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
-                           )
-                           UPDATE folders SET stale = 1
-                           WHERE id IN (SELECT id FROM desc) AND stale = 0""",
+                        f"""UPDATE folders SET stale = 1
+                           WHERE {in_folder_tree("id")} AND stale = 0""",
                         (cat["id"],),
                     )
                     await db.execute(
-                        """WITH RECURSIVE desc(id) AS (
-                               SELECT ? UNION ALL
-                               SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
-                           )
-                           UPDATE files SET stale = 1
-                           WHERE folder_id IN (SELECT id FROM desc) AND stale = 0""",
+                        f"""UPDATE files SET stale = 1
+                           WHERE {in_folder_tree("folder_id")} AND stale = 0""",
                         (cat["id"],),
                     )
                     stale_folders += 1
@@ -435,7 +413,7 @@ async def run_quick_scan(
         # Register new files in hashes.db and get hash_partial from agent
         if new_file_ids:
             activity_update(act_name, progress=f"hashing {len(new_file_ids)} files")
-            await _hash_new_files_partial(
+            await hash_new_files_partial(
                 new_file_ids, location_id, agent_id, root_path
             )
 
@@ -463,7 +441,7 @@ async def run_quick_scan(
         # Re-hash changed files
         if changed_file_ids:
             activity_update(act_name, progress=f"hashing {len(changed_file_ids)} changed files")
-            await _hash_new_files_partial(
+            await hash_new_files_partial(
                 changed_file_ids, location_id, agent_id, root_path
             )
 
@@ -544,7 +522,7 @@ async def run_quick_scan(
         unregister(act_name)
 
 
-async def _hash_new_files_partial(
+async def hash_new_files_partial(
     file_ids: list[int], location_id: int, agent_id: int, root_path: str
 ):
     """Register new files in hashes.db and get hash_partial from agent.
@@ -564,15 +542,7 @@ async def _hash_new_files_partial(
         return
 
     # Register in hashes.db (no hash values yet)
-    h_batch = [(r["id"], location_id, r["file_size"], None, None, None) for r in rows]
-    async with hashes_writer() as hdb:
-        await hdb.executemany(
-            "INSERT INTO file_hashes "
-            "(file_id, location_id, file_size, hash_partial, hash_fast, hash_strong) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(file_id) DO UPDATE SET file_size=excluded.file_size",
-            h_batch,
-        )
+    await register_file_sizes(location_id, [(r["id"], r["file_size"]) for r in rows])
 
     # Get hash_partial from agent in batches
     paths_to_hash = [
@@ -581,19 +551,6 @@ async def _hash_new_files_partial(
     if not paths_to_hash:
         return
 
-    batch_paths: list[str] = []
-    batch_bytes = 0
-
-    for fid, full_path, fsize in paths_to_hash:
-        batch_paths.append(full_path)
-        batch_bytes += fsize
-
-        if batch_bytes >= HASH_BATCH_BYTES:
-            result = await hash_partial_batch(agent_id, batch_paths)
-            await write_hash_partials(result, location_id, root_path)
-            batch_paths = []
-            batch_bytes = 0
-
-    if batch_paths:
-        result = await hash_partial_batch(agent_id, batch_paths)
+    for batch in batches_by_size(paths_to_hash, lambda p: p[2]):
+        result = await hash_partial_batch(agent_id, [p[1] for p in batch])
         await write_hash_partials(result, location_id, root_path)

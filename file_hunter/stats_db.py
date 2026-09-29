@@ -9,21 +9,17 @@ The correction pass (recalculate_location_sizes) becomes a repair tool,
 not a required step in every scan.
 """
 
-import asyncio
 import json
-from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiosqlite
 
-from file_hunter.config import load_config
+from file_hunter.stats_rollup import FOLDERS_SQL
+from file_hunter.sqlite_store import create_database, SqliteStore, catalog_path
 from file_hunter.core import format_size
-from file_hunter.db import read_db
+from file_hunter.db import read_db, id_batches
 
-_write_db = None
-_write_lock = asyncio.Lock()
 
-_SCHEMA = """
+SCHEMA = """
 CREATE TABLE IF NOT EXISTS folder_stats (
     folder_id INTEGER PRIMARY KEY,
     location_id INTEGER NOT NULL,
@@ -48,87 +44,25 @@ CREATE INDEX IF NOT EXISTS idx_folder_stats_location
 """
 
 
-def _stats_db_path() -> Path:
-    config = load_config()
-    catalog_path = Path(config.get("database", "data/file_hunter.db"))
-    if not catalog_path.is_absolute():
-        catalog_path = Path(__file__).resolve().parent.parent / catalog_path
-    return catalog_path.parent / "stats.db"
+def stats_db_path() -> Path:
+    return catalog_path("data/file_hunter.db").parent / "stats.db"
+
+
+store = SqliteStore(
+    stats_db_path,
+    read_pragmas=("PRAGMA journal_mode=WAL",),
+    write_pragmas=("PRAGMA journal_mode=WAL",),
+)
+stats_writer = store.writer
+open_stats_connection = store.open_reader
+read_stats = store.reader
+close_stats_db = store.close
 
 
 async def init_stats_db():
-    """Create stats.db and schema if it doesn't exist.
-
-    Called during app startup. Fast — just CREATE TABLE IF NOT EXISTS.
-    No data migration.
-    """
-    db_path = _stats_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = await aiosqlite.connect(db_path)
-    try:
-        await conn.execute("PRAGMA journal_mode=WAL")
-        for stmt in _SCHEMA.split(";"):
-            stmt = stmt.strip()
-            if stmt:
-                await conn.execute(stmt)
-        await conn.commit()
-    finally:
-        await conn.close()
-
-
-async def _get_write_db() -> aiosqlite.Connection:
-    """Lazy-init the single stats write connection."""
-    global _write_db
-    if _write_db is None:
-        db_path = _stats_db_path()
-        _write_db = await aiosqlite.connect(db_path)
-        _write_db.row_factory = aiosqlite.Row
-        await _write_db.execute("PRAGMA journal_mode=WAL")
-    return _write_db
-
-
-@asynccontextmanager
-async def stats_writer():
-    """Acquire exclusive write access to the stats database.
-
-    Same pattern as catalog db_writer() — own lock, own connection.
-    Auto-commits on clean exit; rolls back on exception.
-    """
-    async with _write_lock:
-        db = await _get_write_db()
-        try:
-            yield db
-            await db.commit()
-        except BaseException:
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-            raise
-
-
-async def open_stats_connection() -> aiosqlite.Connection:
-    """Open a read-only stats DB connection (caller must close it)."""
-    db_path = _stats_db_path()
-    conn = await aiosqlite.connect(db_path)
-    conn.row_factory = aiosqlite.Row
-    await conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-
-@asynccontextmanager
-async def read_stats():
-    """Open a stats read connection, yield it, close on exit.
-
-    Usage:
-        async with read_stats() as db:
-            rows = await db.execute_fetchall("SELECT ...")
-    """
-    conn = await open_stats_connection()
-    try:
-        yield conn
-    finally:
-        await conn.close()
+    """Create the database and its schema if they don't exist. Called
+    during app startup."""
+    await create_database(stats_db_path(), SCHEMA)
 
 
 async def apply_file_deltas(
@@ -159,7 +93,7 @@ async def apply_file_deltas(
     direct: dict[int | None, list[int, int, int, dict]] = {}
     #                           count, size, hidden, {type: count}
 
-    def _apply(folder_id, file_size, file_type_high, is_hidden, sign):
+    def apply(folder_id, file_size, file_type_high, is_hidden, sign):
         if folder_id not in direct:
             direct[folder_id] = [0, 0, 0, {}]
         d = direct[folder_id]
@@ -171,9 +105,9 @@ async def apply_file_deltas(
             d[3][file_type_high] = d[3].get(file_type_high, 0) + sign
 
     for folder_id, file_size, file_type_high, is_hidden in added or []:
-        _apply(folder_id, file_size, file_type_high, is_hidden, 1)
+        apply(folder_id, file_size, file_type_high, is_hidden, 1)
     for folder_id, file_size, file_type_high, is_hidden in removed or []:
-        _apply(folder_id, file_size, file_type_high, is_hidden, -1)
+        apply(folder_id, file_size, file_type_high, is_hidden, -1)
 
     # Step 2: cascade — each folder's delta includes its own files plus
     # all descendant folders' deltas. Build cumulative per folder by walking
@@ -294,9 +228,9 @@ async def apply_file_deltas(
             )
 
     # Patch the stats cache so the API returns current values
-    from file_hunter.services.stats import _cache
+    from file_hunter.services.stats import stats_cache
 
-    loc_entry = _cache.get(f"loc:{location_id}")
+    loc_entry = stats_cache.get(f"loc:{location_id}")
     if loc_entry is not None:
         new_fc = (loc_row["file_count"] or 0) + loc_count if loc_row else loc_count
         new_ts = (loc_row["total_size"] or 0) + loc_size if loc_row else loc_size
@@ -326,13 +260,22 @@ async def update_stats_for_files(
     """
     if not added and not removed:
         return
+    await apply_file_deltas(
+        location_id, await load_folder_parents(location_id), added=added, removed=removed
+    )
+
+
+async def load_folder_parents(location_id):
+    """{folder_id: parent_id} for every folder in the location."""
     async with read_db() as rdb:
-        fp_rows = await rdb.execute_fetchall(
-            "SELECT id, parent_id FROM folders WHERE location_id = ?",
-            (location_id,),
-        )
-    folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
-    await apply_file_deltas(location_id, folder_parents, added=added, removed=removed)
+        fp_rows = await rdb.execute_fetchall(FOLDERS_SQL, (location_id,))
+    return {r["id"]: r["parent_id"] for r in fp_rows}
+
+
+async def update_dup_counts_for_files(location_id, deltas):
+    """apply_dup_deltas with the location's folder tree read from the
+    catalog. deltas: (folder_id, +1 or -1) per file."""
+    await apply_dup_deltas(location_id, await load_folder_parents(location_id), deltas)
 
 
 async def apply_dup_deltas(
@@ -392,15 +335,15 @@ async def apply_dup_deltas(
             )
 
     # Patch the stats cache
-    from file_hunter.services.stats import _cache
+    from file_hunter.services.stats import stats_cache
 
-    loc_entry = _cache.get(f"loc:{location_id}")
+    loc_entry = stats_cache.get(f"loc:{location_id}")
     if loc_entry is not None:
         loc_entry["duplicateFiles"] = max(
             0, loc_entry.get("duplicateFiles", 0) + loc_delta
         )
     for fid, delta in cumulative.items():
-        fld_entry = _cache.get(f"folder:{fid}")
+        fld_entry = stats_cache.get(f"folder:{fid}")
         if fld_entry is not None:
             fld_entry["duplicateFiles"] = max(
                 0, fld_entry.get("duplicateFiles", 0) + delta
@@ -411,9 +354,7 @@ async def remove_folder_stats(folder_ids: list[int]):
     """Remove folder_stats entries for deleted folders."""
     if not folder_ids:
         return
-    for i in range(0, len(folder_ids), 500):
-        batch = folder_ids[i : i + 500]
-        ph = ",".join("?" for _ in batch)
+    for batch, ph in id_batches(folder_ids):
         async with stats_writer() as sdb:
             await sdb.execute(
                 f"DELETE FROM folder_stats WHERE folder_id IN ({ph})",
@@ -430,11 +371,3 @@ async def remove_location_stats(location_id: int):
         await sdb.execute(
             "DELETE FROM location_stats WHERE location_id = ?", (location_id,)
         )
-
-
-async def close_stats_db():
-    """Close the stats write connection. Called on shutdown."""
-    global _write_db
-    if _write_db is not None:
-        await _write_db.close()
-        _write_db = None

@@ -6,6 +6,7 @@ import Toast from './toast.js';
 import Update from './update.js';
 import RepairCatalog from './repaircatalog.js';
 import { copyText } from '../clipboard.js';
+import { esc } from '../format.js';
 
 const Settings = {
     currentUser: null,
@@ -47,7 +48,7 @@ const Settings = {
                     <label class="modal-label" for="settings-server-name">Server Name</label>
                     <div class="settings-inline">
                         <input type="text" class="modal-input" id="settings-server-name"
-                               value="${this.esc(settings.serverName || '')}"
+                               value="${esc(settings.serverName || '')}"
                                placeholder="e.g. My Archive Server">
                         <button class="btn btn-sm" id="settings-save-name">Save</button>
                     </div>
@@ -88,7 +89,7 @@ const Settings = {
                     <label class="modal-label" for="settings-similarity-url">Embedding Service URL</label>
                     <div class="settings-inline">
                         <input type="text" class="modal-input" id="settings-similarity-url"
-                               value="${this.esc(settings.similaritySearchUrl || '')}"
+                               value="${esc(settings.similaritySearchUrl || '')}"
                                placeholder="e.g. http://hostname:8002">
                         <button class="btn btn-sm" id="settings-save-similarity">Save</button>
                     </div>
@@ -242,13 +243,11 @@ const Settings = {
         document.getElementById('settings-add-user').addEventListener('click', () => this.showAddUser());
         document.getElementById('settings-add-app').addEventListener('click', () => this.showAddApp());
 
-        // Repair catalog
         document.getElementById('settings-repair-catalog').addEventListener('click', () => {
             this.close();
             RepairCatalog.open();
         });
 
-        // Reset queues
         document.getElementById('settings-reset-queues').addEventListener('click', async () => {
             const ok = await ConfirmModal.open({
                 title: 'Reset Queues',
@@ -277,7 +276,6 @@ const Settings = {
             Update.open(settings.license_key || '', proActive);
         });
 
-        // Logout
         document.getElementById('settings-logout').addEventListener('click', async () => {
             await API.post('/api/auth/logout');
             localStorage.removeItem('fh-token');
@@ -293,8 +291,8 @@ const Settings = {
             const tr = document.createElement('tr');
             const isSelf = this.currentUser && this.currentUser.id === user.id;
             tr.innerHTML = `
-                <td>${this.esc(user.username)}${isSelf ? ' <em>(you)</em>' : ''}</td>
-                <td>${this.esc(user.displayName || '')}</td>
+                <td>${esc(user.username)}${isSelf ? ' <em>(you)</em>' : ''}</td>
+                <td>${esc(user.displayName || '')}</td>
                 <td class="settings-user-actions">
                     <button class="btn btn-sm settings-edit-user" data-id="${user.id}">Edit</button>
                     ${isSelf ? '' : `<button class="btn btn-sm btn-danger settings-delete-user" data-id="${user.id}">Delete</button>`}
@@ -393,8 +391,8 @@ const Settings = {
                 form.className = 'settings-user-form';
                 form.innerHTML = `
                     <div class="settings-user-form-fields">
-                        <input type="text" class="modal-input" id="edit-user-username" value="${this.esc(user.username)}" autocomplete="off">
-                        <input type="text" class="modal-input" id="edit-user-display" value="${this.esc(user.displayName || '')}" placeholder="Display Name" autocomplete="off">
+                        <input type="text" class="modal-input" id="edit-user-username" value="${esc(user.username)}" autocomplete="off">
+                        <input type="text" class="modal-input" id="edit-user-display" value="${esc(user.displayName || '')}" placeholder="Display Name" autocomplete="off">
                         <input type="password" class="modal-input modal-input-full" id="edit-user-password" placeholder="New password (leave blank to keep)" autocomplete="new-password">
                     </div>
                     <div class="settings-user-form-actions">
@@ -455,12 +453,12 @@ const Settings = {
         for (const app of apps) {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${this.esc(app.name)}</td>
-                <td><code class="settings-token">${this.esc(app.token)}</code></td>
+                <td>${esc(app.name)}</td>
+                <td><code class="settings-token">${esc(app.token)}</code></td>
                 <td class="settings-user-actions">
-                    <button class="btn btn-sm settings-copy-token" data-token="${this.esc(app.token)}">Copy</button>
-                    <button class="btn btn-sm settings-regen-app" data-id="${app.id}" data-name="${this.esc(app.name)}">Regenerate</button>
-                    <button class="btn btn-sm btn-danger settings-delete-app" data-id="${app.id}" data-name="${this.esc(app.name)}">Delete</button>
+                    <button class="btn btn-sm settings-copy-token" data-token="${esc(app.token)}">Copy</button>
+                    <button class="btn btn-sm settings-regen-app" data-id="${app.id}" data-name="${esc(app.name)}">Regenerate</button>
+                    <button class="btn btn-sm btn-danger settings-delete-app" data-id="${app.id}" data-name="${esc(app.name)}">Delete</button>
                 </td>
             `;
             tbody.appendChild(tr);
@@ -546,12 +544,6 @@ const Settings = {
                 errEl.classList.remove('hidden');
             }
         });
-    },
-
-    esc(s) {
-        const d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
     },
 };
 

@@ -1,4 +1,5 @@
 import API from '../api.js';
+import { esc } from '../format.js';
 
 const RepairCatalog = {
     overlayEl: null,
@@ -165,7 +166,7 @@ const RepairCatalog = {
         this.busy = false;
         const el = document.getElementById('repair-done-text');
         if (p.status === 'error') {
-            el.innerHTML = `<span style="color:var(--color-status-error)">Repair failed: ${p.error || 'Unknown error'}</span>`;
+            el.innerHTML = `<span style="color:var(--color-status-error)">Repair failed: ${esc(p.error || 'Unknown error')}</span>`;
         } else {
             const lines = ['Repair complete.'];
             if (p.partials_hashed > 0 || p.partials_stale > 0 || p.partials_skipped > 0 || p.partials_errors > 0) {
@@ -196,7 +197,7 @@ const RepairCatalog = {
             let errorHtml = '';
             if (errors.length > 0) {
                 const errorLines = errors.map(e =>
-                    `<div class="repair-error-line">${e.path}<br><span class="settings-hint">${e.error}</span></div>`
+                    `<div class="repair-error-line">${esc(e.path)}<br><span class="settings-hint">${esc(e.error)}</span></div>`
                 ).join('');
                 errorHtml = `<div class="repair-error-details hidden">${errorLines}</div>`;
             }

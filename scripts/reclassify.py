@@ -14,17 +14,17 @@ import asyncio
 import os
 import sys
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _ROOT)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 
-def _default_db() -> str:
+def default_db() -> str:
     """The catalogue the server uses: config.json "database", relative to the
     install root."""
     from file_hunter.config import load_config
 
     db_path = load_config().get("database", "file_hunter.db")
-    return db_path if os.path.isabs(db_path) else os.path.join(_ROOT, db_path)
+    return db_path if os.path.isabs(db_path) else os.path.join(ROOT, db_path)
 
 
 async def main(db_path: str):
@@ -92,4 +92,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    asyncio.run(main(args.db or _default_db()))
+    asyncio.run(main(args.db or default_db()))

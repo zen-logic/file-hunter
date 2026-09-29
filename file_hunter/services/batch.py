@@ -1,10 +1,9 @@
 """Batch operations — delete, move, tag, and download multiple items."""
 
 import logging
-import os
 
-from file_hunter.db import db_writer, read_db
-from file_hunter.hashes_db import get_file_hashes, read_hashes, remove_file_hashes
+from file_hunter.db import db_writer, read_db, folder_tree_ids, id_batches
+from file_hunter.hashes_db import get_file_hashes, read_hashes
 from file_hunter.helpers import (
     expand_to_duplicates,
     post_op_stats,
@@ -13,13 +12,11 @@ from file_hunter.helpers import (
 from file_hunter.services import fs
 from file_hunter.services.activity import register, unregister, update
 from file_hunter.services.deferred_ops import queue_deferred_op
-from file_hunter.services.delete import delete_folder
-from file_hunter.services.similarity import remove_embeddings
+from file_hunter.services.delete import delete_folder, settle_deleted_files
 from file_hunter.services.files import move_file
 from file_hunter.services.locations import move_folder
-from file_hunter.services.op_result_log import create_log
+from file_hunter.services.op_result_log import create_log, insert_written_file
 from file_hunter.services.tags import add_tags_to_files, parse_tags, remove_file_tags
-from file_hunter.stats_db import apply_dup_deltas, update_stats_for_files
 from file_hunter.ws.scan import broadcast
 
 logger = logging.getLogger("file_hunter")
@@ -127,7 +124,6 @@ async def batch_delete(
         # Check online once per location
         online_cache: dict[int, bool] = {}
         deleted_ids: list[int] = []
-        removed_by_loc: dict[int, list[tuple]] = {}
         affected_strong: set[str] = set()
         affected_fast: set[str] = set()
 
@@ -151,16 +147,6 @@ async def batch_delete(
                     pass  # file delete failed, still remove from catalog
                 deleted_ids.append(fid)
                 deleted_files += 1
-                if loc_id not in removed_by_loc:
-                    removed_by_loc[loc_id] = []
-                removed_by_loc[loc_id].append(
-                    (
-                        rec["folder_id"],
-                        rec["file_size"] or 0,
-                        rec["file_type_high"],
-                        rec["hidden"],
-                    )
-                )
             else:
                 async with db_writer() as db:
                     await queue_deferred_op(db, fid, loc_id, "delete")
@@ -185,39 +171,11 @@ async def batch_delete(
         # Bulk delete from catalog
         if deleted_ids:
             async with db_writer() as db:
-                for i in range(0, len(deleted_ids), 500):
-                    batch = deleted_ids[i : i + 500]
-                    bph = ",".join("?" for _ in batch)
+                for batch, bph in id_batches(deleted_ids):
                     await db.execute(f"DELETE FROM files WHERE id IN ({bph})", batch)
 
-            await remove_file_hashes(deleted_ids)
-            await remove_embeddings(deleted_ids)
-
-        # Update stats once per location
-        if removed_by_loc:
-            for loc_id, removed in removed_by_loc.items():
-                await update_stats_for_files(loc_id, removed=removed)
-
-        # Apply dup count deltas for deleted duplicates
-        dup_deltas_by_loc: dict[int, list[tuple[int | None, int]]] = {}
-        for rec in all_rows:
-            if rec["id"] not in deleted_ids:
-                continue
-            h = h_map.get(rec["id"], {})
-            if (h.get("dup_count") or 0) > 0:
-                loc_id = rec["location_id"]
-                if loc_id not in dup_deltas_by_loc:
-                    dup_deltas_by_loc[loc_id] = []
-                dup_deltas_by_loc[loc_id].append((rec["folder_id"], -1))
-        if dup_deltas_by_loc:
-            for loc_id, deltas in dup_deltas_by_loc.items():
-                async with read_db() as rdb:
-                    fp_rows = await rdb.execute_fetchall(
-                        "SELECT id, parent_id FROM folders WHERE location_id = ?",
-                        (loc_id,),
-                    )
-                folder_parents = {r["id"]: r["parent_id"] for r in fp_rows}
-                await apply_dup_deltas(loc_id, folder_parents, deltas)
+            deleted = set(deleted_ids)
+            await settle_deleted_files([r for r in all_rows if r["id"] in deleted])
 
         await post_op_stats(
             strong_hashes=affected_strong or None,
@@ -266,16 +224,6 @@ async def batch_move(
     Returns:
         dict with keys: moved_files (int), moved_folders (int),
         errors (list[str] — per-item error messages for failed operations).
-
-    Side effects:
-        Disk I/O — moves/copies files/folders via fs service.
-        DB write + commit — per-item catalog updates/inserts.
-        Registers/unregisters an activity entry for status bar progress.
-        Broadcasts batch_move_progress via WebSocket per item.
-        Broadcasts updated stats via post_op_stats() once at the end.
-
-    Called by:
-        Route handler batch_move_route (POST /api/batch/move) via execute_write.
     """
     total = len(file_ids) + len(folder_ids)
     verb = "Copying" if copy else "Moving"
@@ -384,32 +332,7 @@ async def batch_move(
 
     # Add shared CSV to catalog
     if csv_path and moved_files > 0:
-        from datetime import datetime, timezone
-
-        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        csv_filename = os.path.basename(csv_path)
-        csv_rel = os.path.relpath(csv_path, dest["root_path"])
-        st = await fs.file_stat(csv_path, csv_loc_id)
-        csv_size = st["size"] if st else 0
-        await db.execute(
-            """INSERT OR IGNORE INTO files
-               (filename, full_path, rel_path, location_id, folder_id,
-                file_type_high, file_type_low, file_size,
-                description, created_date, modified_date,
-                date_cataloged, date_last_seen)
-               VALUES (?, ?, ?, ?, ?, 'text', 'csv', ?,
-                       '', ?, ?, ?, ?)""",
-            (
-                csv_filename, csv_path, csv_rel, csv_loc_id,
-                csv_folder_id, csv_size,
-                now_iso, now_iso, now_iso, now_iso,
-            ),
-        )
-        await db.commit()
-        await update_stats_for_files(
-            csv_loc_id,
-            added=[(csv_folder_id, csv_size, "text", 0)],
-        )
+        await insert_written_file(db, csv_path, csv_loc_id, csv_folder_id)
 
     # Post-processing once — recalc all affected locations
     if dest_loc_id:
@@ -512,15 +435,7 @@ async def batch_collect_files(
         folder_rel = frow[0]["rel_path"]
         folder_loc_id = frow[0]["location_id"]
 
-        desc_rows = await db.execute_fetchall(
-            """WITH RECURSIVE desc(id) AS (
-                   SELECT ? UNION ALL
-                   SELECT f.id FROM folders f JOIN desc d ON f.parent_id = d.id
-               )
-               SELECT id FROM desc""",
-            (fid,),
-        )
-        desc_ids = [r["id"] for r in desc_rows]
+        desc_ids = await folder_tree_ids(db, fid)
 
         placeholders = ",".join("?" * len(desc_ids))
         files = await db.execute_fetchall(

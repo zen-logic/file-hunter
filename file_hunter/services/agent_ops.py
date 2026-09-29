@@ -16,13 +16,13 @@ from file_hunter_core.paths import norm_inode
 logger = logging.getLogger("file_hunter")
 
 # Cache location_id -> agent_id to avoid repeated DB lookups
-_loc_agent_cache: dict[int, int] = {}
+loc_agent_cache: dict[int, int] = {}
 
 # Persistent HTTP clients per agent — reuse TCP connections
-_agent_clients: dict[int, httpx.AsyncClient] = {}
+agent_clients: dict[int, httpx.AsyncClient] = {}
 
 
-def _resolve_agent(agent_id: int):
+def resolve_agent(agent_id: int):
     """Return (host, port, token) for an online agent, or None."""
     from file_hunter.ws.agent import (
         get_agent_info,
@@ -43,10 +43,27 @@ def _resolve_agent(agent_id: int):
     return host, port, token
 
 
-async def _get_agent_id(location_id: int) -> int:
+async def location_agent(location_id):
+    """(host, port, token) for the location's agent if it's online, else
+    None (also when the location has no agent)."""
+    async with read_db() as db:
+        row = await db.execute_fetchall(
+            "SELECT agent_id FROM locations WHERE id = ?", (location_id,)
+        )
+    if not row or not row[0]["agent_id"]:
+        return None
+    return resolve_agent(row[0]["agent_id"])
+
+
+# Installed Pro releases import this name (file_hunter_pro/routes/agents.py).
+# It has to stay for as long as those releases can run against this server.
+_resolve_agent = resolve_agent
+
+
+async def get_agent_id(location_id: int) -> int:
     """Look up the agent_id for a location, with caching."""
-    if location_id in _loc_agent_cache:
-        return _loc_agent_cache[location_id]
+    if location_id in loc_agent_cache:
+        return loc_agent_cache[location_id]
 
     async with read_db() as db:
         row = await db.execute_fetchall(
@@ -55,14 +72,14 @@ async def _get_agent_id(location_id: int) -> int:
     if not row or not row[0]["agent_id"]:
         raise ValueError(f"Location {location_id} has no agent_id")
     agent_id = row[0]["agent_id"]
-    _loc_agent_cache[location_id] = agent_id
+    loc_agent_cache[location_id] = agent_id
     return agent_id
 
 
 async def locations_same_agent(loc_a: int, loc_b: int) -> bool:
     """Return True if both locations are on the same agent."""
     try:
-        return await _get_agent_id(loc_a) == await _get_agent_id(loc_b)
+        return await get_agent_id(loc_a) == await get_agent_id(loc_b)
     except (ValueError, OSError):
         return False
 
@@ -72,7 +89,7 @@ async def location_agent_has_capability(location_id: int, capability: str) -> bo
     from file_hunter.ws.agent import get_agent_capabilities
 
     try:
-        agent_id = await _get_agent_id(location_id)
+        agent_id = await get_agent_id(location_id)
         return capability in get_agent_capabilities(agent_id)
     except (ValueError, OSError):
         return False
@@ -81,15 +98,15 @@ async def location_agent_has_capability(location_id: int, capability: str) -> bo
 def invalidate_loc_cache(location_id: int = None):
     """Clear the location->agent cache (e.g. when locations change)."""
     if location_id:
-        _loc_agent_cache.pop(location_id, None)
+        loc_agent_cache.pop(location_id, None)
     else:
-        _loc_agent_cache.clear()
+        loc_agent_cache.clear()
 
 
 async def open_agent_client(agent_id: int):
     """Create a persistent HTTP client for an agent. Call on agent connect."""
     await close_agent_client(agent_id)
-    _agent_clients[agent_id] = httpx.AsyncClient(
+    agent_clients[agent_id] = httpx.AsyncClient(
         # No read timeout. Agent operations (delete, move, scan) run as long as
         # they need; only connection establishment is bounded. A timeout on
         # operation *duration* is fragile — it fires on legitimately slow work
@@ -102,18 +119,18 @@ async def open_agent_client(agent_id: int):
 
 async def close_agent_client(agent_id: int):
     """Close the persistent HTTP client for an agent. Call on agent disconnect."""
-    client = _agent_clients.pop(agent_id, None)
+    client = agent_clients.pop(agent_id, None)
     if client:
         await client.aclose()
         logger.info("HTTP client closed for agent #%d", agent_id)
 
 
-def _get_client(agent_id: int) -> httpx.AsyncClient | None:
+def get_client(agent_id: int) -> httpx.AsyncClient | None:
     """Get the persistent client for an agent, or None."""
-    return _agent_clients.get(agent_id)
+    return agent_clients.get(agent_id)
 
 
-def _raise_agent_error(error_msg: str, status_code: int):
+def raise_agent_error(error_msg: str, status_code: int):
     """Raise a proper I/O exception from an agent error response."""
     if status_code == 404 or "not found" in error_msg.lower():
         raise FileNotFoundError(error_msg)
@@ -122,11 +139,11 @@ def _raise_agent_error(error_msg: str, status_code: int):
     raise OSError(error_msg)
 
 
-async def _post(host, port, token, path, body, timeout=None, agent_id=None):
+async def agent_post(host, port, token, path, body, timeout=None, agent_id=None):
     """POST JSON to agent and return the parsed data field."""
     url = f"http://{host}:{port}{path}"
     headers = {"Authorization": f"Bearer {token}"}
-    client = _get_client(agent_id) if agent_id else None
+    client = get_client(agent_id) if agent_id else None
     if client:
         if timeout is None:
             timeout = httpx.Timeout(None, connect=10.0)
@@ -138,17 +155,17 @@ async def _post(host, port, token, path, body, timeout=None, agent_id=None):
             resp = await c.post(url, json=body, headers=headers)
     result = resp.json()
     if not result.get("ok"):
-        _raise_agent_error(result.get("error", resp.text), resp.status_code)
+        raise_agent_error(result.get("error", resp.text), resp.status_code)
     return result.get("data", {})
 
 
-async def _get(host, port, token, path, timeout=None, agent_id=None):
+async def agent_get(host, port, token, path, timeout=None, agent_id=None):
     """GET from agent and return the parsed data field."""
     url = f"http://{host}:{port}{path}"
     headers = {"Authorization": f"Bearer {token}"}
     if timeout is None:
         timeout = httpx.Timeout(None, connect=10.0)
-    client = _get_client(agent_id) if agent_id else None
+    client = get_client(agent_id) if agent_id else None
     if client:
         resp = await client.get(url, headers=headers, timeout=timeout)
     else:
@@ -156,11 +173,11 @@ async def _get(host, port, token, path, timeout=None, agent_id=None):
             resp = await c.get(url, headers=headers)
     result = resp.json()
     if not result.get("ok"):
-        _raise_agent_error(result.get("error", resp.text), resp.status_code)
+        raise_agent_error(result.get("error", resp.text), resp.status_code)
     return result.get("data", {})
 
 
-async def _upload_multipart(
+async def upload_multipart(
     host, port, token, dest_dir, filename, file_obj, file_size, on_progress,
     mtime=None,
 ):
@@ -168,17 +185,17 @@ async def _upload_multipart(
     url = f"http://{host}:{port}/upload"
     total = file_size
 
-    class _TrackedReader(io.RawIOBase):
+    class TrackedReader(io.RawIOBase):
         def __init__(self, source, total_size):
-            self._source = source
-            self._total = total_size
+            self.source = source
+            self.total = total_size
             self.bytes_read = 0
 
         def readable(self):
             return True
 
         def readinto(self, b):
-            data = self._source.read(len(b))
+            data = self.source.read(len(b))
             if not data:
                 return 0
             n = len(data)
@@ -186,9 +203,9 @@ async def _upload_multipart(
             self.bytes_read += n
             return n
 
-    reader = _TrackedReader(file_obj, total)
+    reader = TrackedReader(file_obj, total)
 
-    async def _do_upload():
+    async def do_upload():
         form_data = {"dest_dir": dest_dir}
         if mtime is not None:
             form_data["mtime"] = str(mtime)
@@ -210,7 +227,7 @@ async def _upload_multipart(
 
     if on_progress:
         await on_progress(0, total)
-        upload_task = asyncio.create_task(_do_upload())
+        upload_task = asyncio.create_task(do_upload())
         while not upload_task.done():
             await asyncio.sleep(0.5)
             if not upload_task.done():
@@ -218,31 +235,31 @@ async def _upload_multipart(
         await upload_task
         await on_progress(total, total)
     else:
-        await _do_upload()
+        await do_upload()
 
 
 async def dispatch(operation: str, location_id: int, **kwargs):
     """Route a filesystem operation to the correct agent HTTP endpoint."""
-    agent_id = await _get_agent_id(location_id)
-    resolved = _resolve_agent(agent_id)
+    agent_id = await get_agent_id(location_id)
+    resolved = resolve_agent(agent_id)
     if not resolved:
         raise ConnectionError(f"Agent for location {location_id} is offline")
     host, port, token = resolved
 
     if operation == "file_exists":
-        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
+        data = await agent_post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
         return data.get("is_file", False)
 
     elif operation == "dir_exists":
-        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
+        data = await agent_post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
         return data.get("is_dir", False)
 
     elif operation == "path_exists":
-        data = await _post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
+        data = await agent_post(host, port, token, "/files/exists", {"path": kwargs["path"]}, agent_id=agent_id)
         return data.get("exists", False)
 
     elif operation == "file_delete":
-        await _post(host, port, token, "/files/delete", {"path": kwargs["path"]}, agent_id=agent_id)
+        await agent_post(host, port, token, "/files/delete", {"path": kwargs["path"]}, agent_id=agent_id)
 
     elif operation == "file_copy":
         body = {
@@ -251,10 +268,10 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         }
         if kwargs.get("mtime") is not None:
             body["mtime"] = kwargs["mtime"]
-        await _post(host, port, token, "/files/copy", body, timeout=None, agent_id=agent_id)
+        await agent_post(host, port, token, "/files/copy", body, timeout=None, agent_id=agent_id)
 
     elif operation == "file_move":
-        await _post(
+        await agent_post(
             host, port, token, "/files/move",
             {"path": kwargs["path"], "destination": kwargs["destination"]},
             agent_id=agent_id,
@@ -266,10 +283,10 @@ async def dispatch(operation: str, location_id: int, **kwargs):
             body["encoding"] = kwargs["encoding"]
         if kwargs.get("append"):
             body["append"] = True
-        await _post(host, port, token, "/files/write", body, agent_id=agent_id)
+        await agent_post(host, port, token, "/files/write", body, agent_id=agent_id)
 
     elif operation == "file_stat":
-        data = await _post(host, port, token, "/files/stat", {"path": kwargs["path"]}, agent_id=agent_id)
+        data = await agent_post(host, port, token, "/files/stat", {"path": kwargs["path"]}, agent_id=agent_id)
         if not data.get("exists"):
             return None
         return {"size": data["size"], "mtime": data["mtime"], "ctime": data["ctime"]}
@@ -278,49 +295,49 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         body = {"path": kwargs["path"]}
         if kwargs.get("strong"):
             body["strong"] = True
-        data = await _post(host, port, token, "/files/hash", body, timeout=None, agent_id=agent_id)
+        data = await agent_post(host, port, token, "/files/hash", body, timeout=None, agent_id=agent_id)
         result = {"hash_fast": data["hash_fast"]}
         if "hash_strong" in data:
             result["hash_strong"] = data["hash_strong"]
         return result
 
     elif operation == "dir_create":
-        await _post(host, port, token, "/folders/create", {"path": kwargs["path"]}, agent_id=agent_id)
+        await agent_post(host, port, token, "/folders/create", {"path": kwargs["path"]}, agent_id=agent_id)
 
     elif operation == "dir_delete":
-        await _post(host, port, token, "/folders/delete", {"path": kwargs["path"]}, agent_id=agent_id)
+        await agent_post(host, port, token, "/folders/delete", {"path": kwargs["path"]}, agent_id=agent_id)
 
     elif operation == "dir_move":
-        await _post(
+        await agent_post(
             host, port, token, "/folders/move",
             {"path": kwargs["path"], "destination": kwargs["destination"]},
             agent_id=agent_id,
         )
 
     elif operation == "dir_exists":
-        data = await _post(
+        data = await agent_post(
             host, port, token, "/folders/exists", {"path": kwargs["path"]},
             agent_id=agent_id,
         )
         return data.get("exists", False)
 
     elif operation == "agent_status":
-        return await _get(host, port, token, "/status", timeout=5.0, agent_id=agent_id)
+        return await agent_get(host, port, token, "/status", timeout=5.0, agent_id=agent_id)
 
     elif operation == "disk_stats":
-        return await _post(
+        return await agent_post(
             host, port, token, "/disk-stats", {"path": kwargs["path"]}, timeout=10.0,
             agent_id=agent_id,
         )
 
     elif operation == "list_dir":
-        return await _post(
+        return await agent_post(
             host, port, token, "/list-dir", {"path": kwargs["path"]}, timeout=30.0,
             agent_id=agent_id,
         )
 
     elif operation == "_upload_file":
-        await _upload_multipart(
+        await upload_multipart(
             host,
             port,
             token,
@@ -336,19 +353,19 @@ async def dispatch(operation: str, location_id: int, **kwargs):
         body = {"path": kwargs["path"]}
         if kwargs.get("quality"):
             body["quality"] = kwargs["quality"]
-        await _post(
+        await agent_post(
             host, port, token, "/transcode", body,
             agent_id=agent_id,
         )
 
     elif operation == "transcode_cancel":
-        await _post(
+        await agent_post(
             host, port, token, "/transcode/cancel", {},
             agent_id=agent_id,
         )
 
     elif operation == "raw_convert":
-        await _post(
+        await agent_post(
             host, port, token, "/rawconvert", {"path": kwargs["path"]},
             agent_id=agent_id,
         )
@@ -359,11 +376,11 @@ async def dispatch(operation: str, location_id: int, **kwargs):
 
 async def hash_partial_batch(agent_id: int, paths: list[str]) -> dict:
     """Call agent /files/hash-partial-batch for a list of file paths."""
-    resolved = _resolve_agent(agent_id)
+    resolved = resolve_agent(agent_id)
     if not resolved:
         raise ConnectionError(f"Agent {agent_id} is offline")
     host, port, token = resolved
-    return await _post(
+    return await agent_post(
         host, port, token, "/files/hash-partial-batch", {"paths": paths}, timeout=None
     )
 
@@ -374,11 +391,11 @@ async def hash_fast_batch(agent_id: int, paths: list[str]) -> dict:
     Returns {"results": [{"path": ..., "hash_fast": ...}], "errors": [...]}.
     Raises ConnectionError if agent is offline.
     """
-    resolved = _resolve_agent(agent_id)
+    resolved = resolve_agent(agent_id)
     if not resolved:
         raise ConnectionError(f"Agent {agent_id} is offline")
     host, port, token = resolved
-    return await _post(
+    return await agent_post(
         host, port, token, "/files/hash-batch", {"paths": paths}, timeout=None
     )
 
@@ -396,10 +413,10 @@ async def stream_copy(
     Pipes GET /files/content (source) -> POST /files/stream-write (dest)
     one chunk at a time. on_progress(bytes_sent, total_bytes) called per chunk.
     """
-    src_agent_id = await _get_agent_id(src_loc_id)
-    dst_agent_id = await _get_agent_id(dst_loc_id)
-    src_resolved = _resolve_agent(src_agent_id)
-    dst_resolved = _resolve_agent(dst_agent_id)
+    src_agent_id = await get_agent_id(src_loc_id)
+    dst_agent_id = await get_agent_id(dst_loc_id)
+    src_resolved = resolve_agent(src_agent_id)
+    dst_resolved = resolve_agent(dst_agent_id)
     if not src_resolved:
         raise ConnectionError(f"Source agent for location {src_loc_id} is offline")
     if not dst_resolved:
@@ -432,7 +449,7 @@ async def stream_copy(
         total_bytes = int(src_resp.headers.get("content-length", 0))
         bytes_sent = 0
 
-        async def _pipe_chunks():
+        async def pipe_chunks():
             nonlocal bytes_sent
             try:
                 async for chunk in src_resp.aiter_bytes(chunk_size=1048576):
@@ -452,7 +469,7 @@ async def stream_copy(
             resp = await dst_client.post(
                 dst_url,
                 params=dst_params,
-                content=_pipe_chunks(),
+                content=pipe_chunks(),
                 headers={
                     "Authorization": f"Bearer {d_token}",
                     "Content-Type": "application/octet-stream",
@@ -469,14 +486,14 @@ async def stream_copy(
 
 async def rename_agent_location(agent_id: int, root_path: str, new_name: str):
     """Tell an agent to rename a location in its config.json."""
-    resolved = _resolve_agent(agent_id)
+    resolved = resolve_agent(agent_id)
     if not resolved:
         logger.warning(
             "Agent %d offline — skipping location rename for %s", agent_id, root_path
         )
         return
     host, port, token = resolved
-    await _post(
+    await agent_post(
         host,
         port,
         token,
@@ -488,7 +505,7 @@ async def rename_agent_location(agent_id: int, root_path: str, new_name: str):
     )
 
 
-def _parse_tsv_line(line: str) -> dict | None:
+def parse_tsv_line(line: str) -> dict | None:
     """Parse a TSV tree line into a dict.
 
     Format:
@@ -548,7 +565,7 @@ async def stream_tree(
 
     metadata_only: if True, agent skips hash phase. Used for rescan.
     """
-    resolved = _resolve_agent(agent_id)
+    resolved = resolve_agent(agent_id)
     if not resolved:
         raise ConnectionError(f"Agent {agent_id} is offline")
     host, port, token = resolved
@@ -581,7 +598,7 @@ async def stream_tree(
                 line = line.strip()
                 if not line:
                     continue
-                parsed = _parse_tsv_line(line)
+                parsed = parse_tsv_line(line)
                 if parsed:
                     yield parsed
 
@@ -592,12 +609,12 @@ async def delete_agent_location(agent_id: int, root_path: str, location_id: int 
     Raises ConnectionError if the agent is offline so callers (e.g.
     queue_manager) can retry later.
     """
-    resolved = _resolve_agent(agent_id)
+    resolved = resolve_agent(agent_id)
     if not resolved:
         raise ConnectionError(
             f"Agent {agent_id} offline — cannot delete location {root_path}"
         )
     host, port, token = resolved
-    await _post(host, port, token, "/locations/delete", {"path": root_path})
+    await agent_post(host, port, token, "/locations/delete", {"path": root_path})
     if location_id:
         invalidate_loc_cache(location_id)
