@@ -154,6 +154,7 @@ function wireNodeBtns(isLocation, node, result) {
     wireTreemapBtn();
     wireResetStaleBtn();
     wireFavouriteBtn();
+    wireSlideshowBtn();
     if (isLocation) {
         wireDeleteLocationBtn();
         wireRenameLocationBtn();
@@ -184,7 +185,61 @@ async function showNode(isLocation, node, detailNode, folderId) {
         isLocation ? Detail.renderLocation(detailNode) : Detail.renderFolder(detailNode),
     ]);
     wireNodeBtns(isLocation, node, result);
-    wireSlideshowBtn();
+}
+
+function wireFileSlideshowBtn(file) {
+    const slot = document.getElementById('detail-file-slideshow-slot');
+    if (!slot) return;
+    if ((file.typeHigh || '').toLowerCase() !== 'image') return;
+    const folderId = FileList.currentFolder;
+    const searchId = FileList.searchId;
+    if (!folderId && !searchId) return;
+    slot.innerHTML = `<button class="btn btn-sm" id="detail-file-slideshow" style="margin-top:0.4rem">Slideshow</button>`;
+    const btn = document.getElementById('detail-file-slideshow');
+    btn.addEventListener('click', () => {
+        const params = {
+            mode: 'slideshow',
+            startAt: file.id,
+            sort: FileList.sortKey,
+            sortDir: FileList.sortDirStr(),
+        };
+        if (searchId) {
+            params.type = 'search';
+            params.searchId = searchId;
+        } else {
+            params.type = 'folder';
+            params.folderId = folderId;
+        }
+        Detail.startFromButton(btn, params, 'No images');
+    });
+}
+
+function wireSlideshowBtn() {
+    const slot = document.getElementById('detail-slideshow-slot');
+    if (!slot) return;
+    const items = FileList.currentItems || [];
+    const hasImages = items.some(f => (f.typeHigh || '').toLowerCase() === 'image');
+    const hasVideo = items.some(f => (f.typeHigh || '').toLowerCase() === 'video');
+    if (!hasImages && !hasVideo) return;
+    const folderId = FileList.currentFolder;
+    if (!folderId) return;
+    let html = '';
+    if (hasImages) html += `<button class="btn btn-sm" id="detail-slideshow">Slideshow</button>`;
+    if (hasVideo) html += `<button class="btn btn-sm" id="detail-playlist">Playlist</button>`;
+    slot.innerHTML = html;
+    const folderParams = (mode) => ({
+        type: 'folder', folderId, mode, sort: FileList.sortKey, sortDir: FileList.sortDirStr(),
+    });
+    if (hasImages) {
+        const btn = document.getElementById('detail-slideshow');
+        btn.addEventListener('click', () => Detail.startFromButton(
+            btn, folderParams('slideshow'), 'No images available'));
+    }
+    if (hasVideo) {
+        const btn = document.getElementById('detail-playlist');
+        btn.addEventListener('click', () => Detail.startFromButton(
+            btn, folderParams('playlist'), 'No videos available'));
+    }
 }
 
 /** Show one file (from the treemap or a link in the details panel) in its folder. */
@@ -967,61 +1022,6 @@ MoveFileModal.init(async (item, destinationFolderId, copy) => {
     await reloadAfterMove();
     return { ok: true };
 });
-
-function wireFileSlideshowBtn(file) {
-    const slot = document.getElementById('detail-file-slideshow-slot');
-    if (!slot) return;
-    if ((file.typeHigh || '').toLowerCase() !== 'image') return;
-    const folderId = FileList.currentFolder;
-    const searchId = FileList.searchId;
-    if (!folderId && !searchId) return;
-    slot.innerHTML = `<button class="btn btn-sm" id="detail-file-slideshow" style="margin-top:0.4rem">Slideshow</button>`;
-    const btn = document.getElementById('detail-file-slideshow');
-    btn.addEventListener('click', () => {
-        const params = {
-            mode: 'slideshow',
-            startAt: file.id,
-            sort: FileList.sortKey,
-            sortDir: FileList.sortDirStr(),
-        };
-        if (searchId) {
-            params.type = 'search';
-            params.searchId = searchId;
-        } else {
-            params.type = 'folder';
-            params.folderId = folderId;
-        }
-        Detail.startFromButton(btn, params, 'No images');
-    });
-}
-
-function wireSlideshowBtn() {
-    const slot = document.getElementById('detail-slideshow-slot');
-    if (!slot) return;
-    const items = FileList.currentItems || [];
-    const hasImages = items.some(f => (f.typeHigh || '').toLowerCase() === 'image');
-    const hasVideo = items.some(f => (f.typeHigh || '').toLowerCase() === 'video');
-    if (!hasImages && !hasVideo) return;
-    const folderId = FileList.currentFolder;
-    if (!folderId) return;
-    let html = '';
-    if (hasImages) html += `<button class="btn btn-sm" id="detail-slideshow">Slideshow</button>`;
-    if (hasVideo) html += `<button class="btn btn-sm" id="detail-playlist">Playlist</button>`;
-    slot.innerHTML = html;
-    const folderParams = (mode) => ({
-        type: 'folder', folderId, mode, sort: FileList.sortKey, sortDir: FileList.sortDirStr(),
-    });
-    if (hasImages) {
-        const btn = document.getElementById('detail-slideshow');
-        btn.addEventListener('click', () => Detail.startFromButton(
-            btn, folderParams('slideshow'), 'No images available'));
-    }
-    if (hasVideo) {
-        const btn = document.getElementById('detail-playlist');
-        btn.addEventListener('click', () => Detail.startFromButton(
-            btn, folderParams('playlist'), 'No videos available'));
-    }
-}
 
 // ── Location hash ──
 // The selected location or folder is the URL hash, as its catalogue path:
