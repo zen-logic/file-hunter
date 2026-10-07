@@ -2527,7 +2527,11 @@ WS.on('batch_moved', async (msg) => {
     Activity.completed('batch-move');
     selectedFile = null;
     selectedFileDups = [];
+    const keepScroll = Tree.dropMovesPending > 0;
+    if (keepScroll) Tree.dropMovesPending--;
+    const scrollTop = FileList.el.scrollTop;
     await reloadTreeAndFileList();
+    if (keepScroll) FileList.el.scrollTop = scrollTop;
     await StatusBar.loadStats();
     await refreshDetailPanel();
 });

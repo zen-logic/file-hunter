@@ -37,6 +37,7 @@ const Tree = {
     deletingLocations: new Set(),
     mergingLocations: new Map(),  // node id -> badge label
     paused: false,
+    dropMovesPending: 0,  // drag moves awaiting batch_moved, which keeps the file list's scroll for them
 
     init(onSelect, onDeselect) {
         this.el = document.getElementById('tree-content');
@@ -889,11 +890,16 @@ const Tree = {
             const count = fileIds.length + folderIds.length;
             if (count === 0) return;
 
+            // A failed move sends no batch_moved, so it gives its count back here
+            this.dropMovesPending++;
             API.post('/api/batch/move', {
                 file_ids: fileIds,
                 folder_ids: folderIds,
                 destination_folder_id: node.id,
-            });
+            }).then(
+                (res) => { if (!res.ok) this.dropMovesPending--; },
+                () => { this.dropMovesPending--; },
+            );
             Toast.info(`Moving ${count} item${count !== 1 ? 's' : ''} to ${node.label}`);
         });
 
