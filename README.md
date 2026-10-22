@@ -19,7 +19,7 @@ See [FEATURES.md](docs/FEATURES.md) for the full feature list.
 ## Installation
 
 ```bash
-curl -fsSL https://filehunter.zenlogic.uk/install | bash
+curl -fsSL https://raw.githubusercontent.com/zen-logic/file-hunter/main/install.sh | bash
 ```
 
 Downloads the latest release, extracts it, and you're ready to go. Works on macOS, Linux, and WSL.
